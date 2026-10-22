@@ -57,7 +57,9 @@ one Soniox couldn't transcribe stays for a later try. Notes kept by older
 firmware (16 kHz WAV) still go up as they are.
 
 Without Wi-Fi at switch-on they carry on offline (and keep looking for it)
-instead of opening the setup hotspot. Setup is a switch-on with the talk
+instead of opening the setup hotspot. They look first: when none of the
+saved networks is in reach, they're note takers within a couple of seconds
+instead of trying for 30. Setup is a switch-on with the talk
 button held, or Menu → *Wi-Fi & settings*.
 
 ## Talk from sleep

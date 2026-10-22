@@ -46,7 +46,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.12.6"
+#define FW_VERSION "0.12.7"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -2084,6 +2084,26 @@ static void keepWifi() {
 
 // ── setup / loop ─────────────────────────────────────────────────────
 
+// At start-up, one scan (~2 s): the strongest saved network in reach (its
+// index in settings.nets), -1 when none is, -2 when the scan failed.
+static int strongestSavedNetwork() {
+  const int n = WiFi.scanNetworks();
+  if (n < 0) return -2;
+  int best = -1, bestRssi = -1000;
+  for (int i = 0; i < n; ++i) {
+    for (int k = 0; k < settings.netCount; ++k) {
+      if (WiFi.SSID(i) == settings.nets[k].ssid && WiFi.RSSI(i) > bestRssi) {
+        best = k;
+        bestRssi = WiFi.RSSI(i);
+      }
+    }
+  }
+  WiFi.scanDelete();
+  Serial.printf("[claw] wi-fi scan: %d networks, %s\n", n,
+                best >= 0 ? settings.nets[best].ssid.c_str() : "none of the saved ones");
+  return best;
+}
+
 void setup() {
   auto cfg = M5.config();
   cfg.internal_mic = true;
@@ -2159,7 +2179,23 @@ void setup() {
   const bool goesOffline = board::kOfflineNotes && notes::ready();
   bool offline = false;
   uint32_t t0 = millis();
-  while (wifiMulti.run(5000) != WL_CONNECTED) {
+  // Look first: with none of the saved networks in reach, a device that
+  // keeps notes is a note taker at once (keepWifi() goes on looking) instead
+  // of trying for 30 s; with one, it joins the strongest straight away. (A
+  // fresh update on probation takes the slow way: it may need to roll back.)
+  if (!probation) {
+    const int net = strongestSavedNetwork();
+    if (net == -1 && goesOffline) {
+      offline = true;
+    } else if (net >= 0) {
+      WiFi.begin(settings.nets[net].ssid.c_str(), settings.nets[net].pass.c_str());
+      while (WiFi.status() != WL_CONNECTED && millis() - t0 < 12000) {
+        M5.update();
+        delay(50);
+      }
+    }
+  }
+  while (!offline && WiFi.status() != WL_CONNECTED && wifiMulti.run(5000) != WL_CONNECTED) {
     M5.update();
     // A fresh update that can't even reach Wi-Fi goes back to the old version
     // (which may well be fine) rather than into setup.
