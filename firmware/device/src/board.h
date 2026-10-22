@@ -91,8 +91,8 @@ constexpr const char* kNoun = "stick";
 constexpr const char* kIdPrefix = "stick";
 constexpr const char* kTalkButton = "front button";
 constexpr const char* kSideButton = "side button";
-constexpr const char* kTalkHint = "Hold the front button to talk";
-constexpr bool kTalkToggles = false;
+constexpr const char* kTalkHint = "Press the front button to talk";
+constexpr bool kTalkToggles = true;  // press to start, press again to send
 constexpr char kTalkM5 = 'A', kSideM5 = 'B', kBackM5 = 0;
 constexpr const char* kTalkKey = "A";
 constexpr const char* kSideKey = "B";

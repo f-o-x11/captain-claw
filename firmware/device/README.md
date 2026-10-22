@@ -1,6 +1,7 @@
 # Captain Claw · handheld voice client (M5Stack StickS3, StopWatch and PaperColor)
 
-Hold the talk button, talk, release. Flight Deck transcribes it, sends it to
+Press the talk button and talk; press it again, or just stop talking for
+2.5 s, to send (on the StopWatch: hold it, talk, let go). Flight Deck transcribes it, sends it to
 one of your agents, and the device shows the reply, reads it aloud, and shows
 any picture the agent made.
 
@@ -62,9 +63,9 @@ button held, or Menu → *Wi-Fi & settings*.
 
 Asleep, hold the talk button and start speaking at once. The device records
 while it wakes up and reconnects (a few seconds), then sends all of it as if
-you had spoken just now. A short press only wakes it. On the PaperColor,
-press the top button and talk, then press it again to send; a wake-up press
-that's followed by silence sends nothing. (On the StopWatch and PaperColor,
+you had spoken just now. A short press only wakes it. On the StickS3 and
+PaperColor, press the talk button and talk, then press it again (or stop
+talking) to send; a wake-up press that's followed by silence sends nothing. (On the StopWatch and PaperColor,
 a recording that can't reach Flight Deck is kept as an offline voice note.)
 
 ## PaperColor (colour e-paper)
@@ -167,12 +168,18 @@ press too short to send, gets no second blip.
 
 ## Buttons
 
+StickS3:
+
 | | Front (A) | Side (B) |
 |---|---|---|
-| hold | talk (release sends) | menu (hold again closes) |
-| tap / click | stop speaking · flip picture ↔ text | next page · back |
-| double-click (on an answer) | | hear the answer again |
+| click | talk, click again to send (or 2.5 s of quiet) · while it speaks: stop | next page · back (a picture: its text) |
+| hold | | menu (hold again closes) |
+| double-click | hear the last answer again | (on an answer) hear it again |
 | in the agent list | choose | move down |
+
+StopWatch: hold the yellow button to talk and let go to send; a tap stops
+speech or flips picture ↔ text; the other button works like the StickS3's
+side button.
 
 **Replay.** Double-click the side button on an answer (its text or its picture), or
 choose Menu → *Replay answer* (the first row, while there's an answer with sound), to

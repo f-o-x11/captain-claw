@@ -1,6 +1,7 @@
 // StickS3 screen: 240×135 landscape LCD. Text uses efont (trimmed efontJA, see
 // efont_subset.h), which has č ć š ž đ.
 #include "ui.h"
+#include "board.h"
 #include "efont_subset.h"
 
 #include <M5Unified.h>
@@ -284,7 +285,7 @@ void showListening(int level, uint32_t elapsedMs) {
   char t[16];
   snprintf(t, sizeof(t), "%lu.%lus", (unsigned long)(elapsedMs / 1000), (unsigned long)(elapsedMs / 100 % 10));
   canvas.drawString(t, 56, 88);
-  canvas.drawString("release to send", 120, 88);
+  canvas.drawString(board::kTalkToggles ? "press to send" : "release to send", 120, 88);
   int bar = (W - 2 * PAD) * min(level, 100) / 100;
   canvas.fillRect(PAD, H - 12, W - 2 * PAD, 6, 0x2104);
   canvas.fillRect(PAD, H - 12, bar, 6, level > 85 ? TFT_ORANGE : TFT_GREEN);
