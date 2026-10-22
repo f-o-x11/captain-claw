@@ -7,6 +7,8 @@
 namespace audio {
 
 static constexpr uint32_t kMicRate = 16000;
+// A mic block peaking at least this loud has a voice in it (quieter is room noise).
+static constexpr int kVoicePeak = 900;
 
 void begin(uint8_t volume, uint8_t boostDb);
 void setVolume(uint8_t volume);
@@ -28,6 +30,9 @@ int micPoll(void (*sink)(const int16_t* samples, size_t count));
 // Stops recording and flushes the blocks still in flight to `sink`.
 void micStop(void (*sink)(const int16_t* samples, size_t count));
 bool micActive();
+// When the mic last heard a voice (a block at kVoicePeak or louder, past its
+// first 0.3 s), in millis(); 0 = not since micStart().
+uint32_t micVoiceMs();
 
 // ── speaker (one stream at a time, PCM s16le mono) ──
 // The streams of one answer (its speech, then any sound the agent made) are
