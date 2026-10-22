@@ -32,31 +32,32 @@ battery?" or "is it warm in here?" just work. The agent doesn't recite them
 unless asked, or unless the battery is nearly empty. They are never stored as
 the user's words.
 
-## Offline voice notes (StopWatch, PaperColor)
+## Offline voice notes
 
-Out of Wi-Fi, or Flight Deck down? Hold the talk button and talk as usual:
+Out of Wi-Fi, or Flight Deck down? Talk as usual:
 the recording (up to 60 s) is kept as a voice note in the device's own flash.
 The screen says "Saved offline". Notes are kept at telephone quality —
 8 kHz, 4-bit IMA ADPCM (`src/adpcm.h`), 4 KB a second, an eighth of the
 16 kHz PCM the mic records — which is as low as speech goes and still
-transcribes well. The 3.4 MB flash partition holds about 13 minutes of
-notes (it held 1½ minutes as WAV). The status page shows how many are
-waiting and the room left.
+transcribes well. The StopWatch's and PaperColor's 3.4 MB flash partition
+holds about 13 minutes of notes (it held 1½ minutes as WAV), the StickS3's
+1.5 MB about 5½. The status page shows how many are waiting and the room
+left.
 
 Once the device is back online, it asks first. The deck says "There are
 saved voice notes. Would you like to send them to the agent?" and the screen
 shows the question. The talk button sends them; the side button (PaperColor:
 B) keeps them for later. A "later" holds until a new note is recorded or the
-device starts cold; on the StopWatch, Menu → *Send voice notes* sends them
-any time. Sent notes go to Flight Deck, which transcribes them (as 8 kHz PCM)
+device starts cold; on the StickS3 and StopWatch, Menu → *Send voice notes*
+sends them any time. Sent notes go to Flight Deck, which transcribes them (as 8 kHz PCM)
 and gives the agent all of them as one message, oldest first, each with when
 it was recorded, marked as recorded offline. The agent handles them and
 answers once. A note is deleted from the device only after the deck has it;
 one Soniox couldn't transcribe stays for a later try. Notes kept by older
 firmware (16 kHz WAV) still go up as they are.
 
-Without Wi-Fi at switch-on these two carry on offline (and keep looking for
-it) instead of opening the setup hotspot. Setup is a switch-on with the talk
+Without Wi-Fi at switch-on they carry on offline (and keep looking for it)
+instead of opening the setup hotspot. Setup is a switch-on with the talk
 button held, or Menu → *Wi-Fi & settings*.
 
 ## Talk from sleep
@@ -205,8 +206,9 @@ screen, notices, the menu and the status page (which then spans pages: B = next 
 the last one back to the main screen). The top bar stays compact.
 
 Hold the front button while switching on to reopen setup. With no Wi-Fi
-saved, or none in reach for 30 s, setup opens by itself. (Holding it to wake
-from sleep is talking, not setup. See *Talk from sleep*.)
+saved, setup opens by itself; with none in reach for 30 s, it carries on
+offline and keeps voice notes. (Pressing it to wake from sleep is talking,
+not setup. See *Talk from sleep*.)
 
 ## Setup
 
