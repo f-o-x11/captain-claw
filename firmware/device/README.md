@@ -79,9 +79,10 @@ at all. So it's voice-first and redraws when you put it down:
   stop, the paper draws the newest answer once. Waking up and falling asleep
   don't redraw when it already shows that answer. Pages, the status page and
   B (the home screen, with an answer still waiting) draw at once.
-- **Black and white, text only:** the black settles in the first seconds of a
-  redraw and the colours come last, so a black-and-white page reads as done
-  much sooner. Pictures are dithered to grey.
+- **Text only, in colour:** the six inks (black, white, red, yellow, blue,
+  green) for the text and marks, pictures dithered into them. A redraw takes
+  the same time in black and white, so the colours stay. (`kMono` in
+  `ui_paper.cpp` switches to black and white.)
 - **Status lights:** red blinking while it records you (brighter when you're
   louder); while the agent works, a blink for every step it takes — light
   blue for a tool, dark blue for narration and progress, purple for the model

@@ -45,12 +45,11 @@ namespace ui {
 
 // ── inks ───────────────────────────────────────────────────────────────
 
-// Black and white only. A Spectra 6 redraw always takes the same 15–30 s,
-// but the black settles within the first seconds and the colours come last:
-// a black-and-white page reads as done long before the redraw ends. Colours
-// in the drawing snap by lightness (blue, red, green text → black; yellow
-// fills → white), pictures are dithered to grey tones in black dots.
-static constexpr bool kMono = true;
+// All six inks. (True: black and white only — colours snap by lightness and
+// pictures dither to black dots. A Spectra 6 redraw takes the same 15–30 s
+// either way; black merely settles first. The paper redraws when put down,
+// so the colours are back.)
+static constexpr bool kMono = false;
 
 // The panel's six inks, as its driver (M5GFX Panel_ED2208) matches them.
 struct InkDef {
