@@ -10,11 +10,12 @@
 //   Back      (PaperColor B only)
 //             click = an answer: the home screen · home: the answer · else back
 //             hold = home screen
-//   PaperColor: its talk button isn't held — a press starts the recording
-//   and the next press sends it; a quick double press replays.
+//   StickS3 and PaperColor: the talk button isn't held — a press starts the
+//   recording and the next press (or 2.5 s of quiet) sends it; a quick double
+//   press replays.
 //   Hold the talk button while switching on (or no Wi-Fi saved) = setup hotspot
 //   Asleep: hold the talk button and talk at once — it records while it reconnects
-//   (PaperColor: press it and talk)
+//   (StickS3, PaperColor: press it and talk)
 //
 // Talks to Flight Deck's /device/ws (captain_claw/flight_deck/device_bridge.py):
 // 16 kHz PCM up, with the device's readings (telemetry.h) on each turn; reply
@@ -45,7 +46,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.12.4"
+#define FW_VERSION "0.12.5"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
