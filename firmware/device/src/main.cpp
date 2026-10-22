@@ -46,7 +46,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.12.5"
+#define FW_VERSION "0.12.6"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
