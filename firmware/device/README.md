@@ -74,7 +74,8 @@ partial refresh worth having), and the paper keeps its picture with no power
 at all. So it's voice-first and redraws when you put it down:
 
 - **While you use it, the paper doesn't change:** you talk (press the top
-  button, C, talk, press it again — no holding on), hear the answer, and the status lights show what's happening. About 30 s after you
+  button, C, talk, press it again — or just stop: 2.5 s of quiet sends it),
+  hear the answer, and the status lights show what's happening. About 30 s after you
   stop, the paper draws the newest answer once. Waking up and falling asleep
   don't redraw when it already shows that answer. Pages, the status page and
   B (the home screen, with an answer still waiting) draw at once.
@@ -138,6 +139,8 @@ button on the screen: under the name at home, under an answer or the
 character. Tap it and talk; the button turns into a stop square, and a second
 tap sends the recording (offline it's kept as a voice note). Holding the
 yellow button works as before, and its press also ends a tapped recording.
+A tapped recording also ends by itself after 2.5 s of quiet (and is sent);
+with nothing said at all it's dropped.
 Text uses Inter (`fonts/`, made by `tools/make_fonts.py`; SIL OFL, see
 `fonts/OFL.txt`), laid out to the circle.
 
