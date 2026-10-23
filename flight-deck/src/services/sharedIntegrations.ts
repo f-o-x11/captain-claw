@@ -85,9 +85,22 @@ export interface MyTelegram {
   bot_username: string
   link: TelegramLink | null
   agents: OwnAgent[]
+  // t.me/<bot>?startgroup=agent once connected: adds the bot (with the agent) to a group.
+  group_link?: string
+  // Telegram groups the user's agent answers in.
+  groups?: TelegramGroup[]
+}
+
+export interface TelegramGroup {
+  chat_id: string
+  title: string
+  added_at: string
 }
 
 export const getMyTelegram = () => fdFetch<MyTelegram>('/fd/telegram-shared')
+
+export const removeTelegramGroup = (chat_id: string) =>
+  fdFetch<MyTelegram>(`/fd/telegram-shared/groups/${encodeURIComponent(chat_id)}`, { method: 'DELETE' })
 
 export const requestTelegram = (agent_slug: string) =>
   fdFetch<MyTelegram>('/fd/telegram-shared/request', {
