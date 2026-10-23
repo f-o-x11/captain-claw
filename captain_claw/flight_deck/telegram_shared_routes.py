@@ -1,7 +1,8 @@
 """HTTP side of the deck's shared Telegram bot (engine: telegram_shared.py).
 
 * ``/fd/telegram-shared``        — a user's own link: request access with one of
-  their agents, change the agent, disconnect (Connections → Telegram).
+  their agents, change the agent, disconnect, and the Telegram groups they
+  brought that agent into (Connections → Telegram).
 * ``/fd/admin/telegram-shared``  — the bot token, the poller's health, and the
   access requests to approve / reject / remove (Admin → Integrations).
 * ``/fd/telegram-relay/…``       — what the user's agent talks to instead of
@@ -22,7 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-from captain_claw.flight_deck import telegram_inbox
+from captain_claw import telegram_groups
+from captain_claw.flight_deck import telegram_agent_groups, telegram_inbox
 from captain_claw.flight_deck import telegram_shared as ts
 from captain_claw.flight_deck.admin_routes import require_admin
 from captain_claw.flight_deck.agent_identity import require_agent_caller
@@ -106,6 +108,7 @@ async def _me(user: dict) -> dict[str, Any]:
     cfg = await ts.load_config(get_db())
     available = bool(auth and cfg["token"] and cfg["enabled"])
     link = await get_db().get_telegram_link(user["id"]) if auth else None
+    connected = bool(available and link and link.get("status") == "approved" and link.get("tg_user_id"))
     return {
         "auth_enabled": auth,
         "available": available,
@@ -113,6 +116,10 @@ async def _me(user: dict) -> dict[str, Any]:
         "bot_username": cfg["bot_username"] if available else "",
         "link": _link_view(link),
         "agents": own_agents(user["id"]) if auth else [],
+        # Groups: the add-to-group link once connected, and the groups the
+        # user's agent is in (telegram_agent_groups).
+        "group_link": telegram_groups.add_to_group_url(cfg["bot_username"]) if connected else "",
+        "groups": await telegram_agent_groups.groups_of(get_db(), user["id"]) if auth else [],
     }
 
 
@@ -180,6 +187,19 @@ async def request_access(body: RequestBody, user: dict = Depends(get_current_use
     return await _me(user)
 
 
+@router.delete("/fd/telegram-shared/groups/{chat_id}")
+async def remove_group(chat_id: str, user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """Take your agent out of a Telegram group."""
+    _require_auth_deck()
+    db = get_db()
+    if telegram_agent_groups.bound_to(chat_id) != user["id"]:
+        raise HTTPException(status_code=404, detail="Your agent isn't in that group")
+    _slug, name = telegram_agent_groups._agent_of(user["id"])
+    await telegram_agent_groups.release(
+        db, chat_id, say=telegram_agent_groups._REMOVED.format(agent=name or "This agent"))
+    return await _me(user)
+
+
 @router.delete("/fd/telegram-shared")
 async def disconnect(user: dict = Depends(get_current_user)) -> dict[str, Any]:
     """Withdraw the request / disconnect Telegram from your agent."""
@@ -187,6 +207,8 @@ async def disconnect(user: dict = Depends(get_current_user)) -> dict[str, Any]:
     db = get_db()
     link = await db.get_telegram_link(user["id"])
     if link:
+        # The agent leaves the user's groups; then the link goes.
+        await telegram_agent_groups.forget_user(db, user["id"])
         await db.delete_telegram_link(user["id"])
         await ts.reload_links(db)
         # The Telegram inbox rides on this link: it goes with it.
@@ -341,6 +363,7 @@ async def admin_approve(user_id: str, admin: dict = Depends(require_admin)) -> d
 
 @router.post("/fd/admin/telegram-shared/links/{user_id}/reject")
 async def admin_reject(user_id: str, admin: dict = Depends(require_admin)) -> dict[str, Any]:
+    await telegram_agent_groups.forget_user(get_db(), user_id)
     link = await _decide(user_id, "rejected", admin)
     await _forget_inbox(get_db(), user_id)
     if link.get("tg_user_id"):
@@ -358,6 +381,7 @@ async def admin_remove(user_id: str, _admin: dict = Depends(require_admin)) -> d
     db = get_db()
     link = await db.get_telegram_link(user_id)
     if link:
+        await telegram_agent_groups.forget_user(db, user_id)
         await db.delete_telegram_link(user_id)
         await ts.reload_links(db)
         await _forget_inbox(db, user_id)
@@ -442,6 +466,11 @@ async def relay(token: str, method: str, request: Request):
         ts.check_call(caller.slug, caller.owner, method, params)
     except ts.RelayRefused as exc:
         return _tg_error(403, f"Forbidden: {exc}")
+    if method == "leaveChat":
+        # The agent leaves one of its groups; the bot stays while someone keeps
+        # the group in their Telegram inbox.
+        await telegram_agent_groups.release(get_db(), str(params.get("chat_id")).strip())
+        return {"ok": True, "result": True}
 
     chats = sorted(ts.chats_for_slug(caller.slug, caller.owner))
     # Bot-wide settings are never the agent's to change: commands and the menu

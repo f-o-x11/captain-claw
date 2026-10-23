@@ -3,7 +3,8 @@
 * a linked, consenting user's Chat Automation connection hands Flight Deck both
   sides of their private chats — kept sealed, edits followed, deletions honoured;
 * groups are kept for the user who added the bot (or sent /inbox there); anyone
-  else adding the bot gets it leaving at once;
+  Flight Deck doesn't know adding the bot gets it leaving at once (a linked
+  person without an inbox brings their agent instead — test_telegram_agent_groups);
 * nothing of it ever reaches an agent's chat queue, and nothing is ever sent on
   the user's behalf;
 * consent is explicit, off (or disconnecting Telegram) deletes everything;
@@ -26,6 +27,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import captain_claw.flight_deck.telegram_agent_groups as tag
 import captain_claw.flight_deck.telegram_inbox as ti
 import captain_claw.flight_deck.telegram_inbox_routes as tir
 import captain_claw.flight_deck.telegram_shared as ts
@@ -68,6 +70,10 @@ async def db(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "_state", ts._State())
     monkeypatch.setattr(ti, "_unknown", {})
     monkeypatch.setattr(ti, "_last_purge", 0.0)
+    # An inbox user's join goes straight to the inbox (no waiting for the
+    # add-to-group link's /start cue — that's test_telegram_agent_groups').
+    monkeypatch.setattr(tag, "JOIN_WAIT", 0)
+    monkeypatch.setattr(tag, "_pending", {})
     try:
         yield d
     finally:
@@ -304,11 +310,12 @@ class TestGroups:
 
     async def test_anyone_else_adding_the_bot_makes_it_leave(self, db, tg):
         await _bot_on(db)
-        await _link(db, CAROL, TG_CAROL)  # linked, but no inbox
-        assert await ts.route_update(db, _added(TG_CAROL)) == "inbox:group-refused"
-        assert _sent(tg, "leaveChat")[-1]["body"]["chat_id"] == GROUP
+        await _link(db, CAROL, TG_CAROL)  # linked, but no inbox: her agent joins instead
+        assert await ts.route_update(db, _added(TG_CAROL)) == "group:joined"
+        assert not _sent(tg, "leaveChat")
         assert await ts.route_update(db, _added(TG_STRANGER, chat=-1009)) == "inbox:group-refused"
-        assert await ts.route_update(db, _group_msg(TG_CAROL, "x", mid=1)) == "ignored:group"
+        assert _sent(tg, "leaveChat")[-1]["body"]["chat_id"] == -1009
+        assert await ts.route_update(db, _group_msg(TG_CAROL, "x", mid=1, chat=-1009)) == "ignored:group"
 
     async def test_inbox_command_adds_and_removes_a_member(self, db, tg):
         await _bot_on(db)

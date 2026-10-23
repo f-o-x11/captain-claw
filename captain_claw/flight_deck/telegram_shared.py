@@ -24,6 +24,10 @@ user's chat, and conversations, sessions and files stay in the user's agent.
 Flight Deck relays the bytes and stores only the link (Telegram id ↔ user ↔
 agent).
 
+Groups: a user can bring their agent into a Telegram group
+(telegram_agent_groups); that group's messages then go to their agent too, and
+the agent may post there and leave it.
+
 Messages for an agent that isn't polling wait in memory (bounded, a few hours),
 so a restart of Flight Deck drops them; the sender is told the agent is offline.
 """
@@ -222,6 +226,31 @@ def update_sender(update: dict[str, Any]) -> str:
     return ""
 
 
+def update_group(update: dict[str, Any]) -> str:
+    """The group (chat id) an update belongs to; "" for a private chat. A
+    group's last message before it became a supergroup belongs to the new id."""
+    for key in ("message", "my_chat_member"):
+        part = update.get(key)
+        chat = part.get("chat") if isinstance(part, dict) else None
+        if isinstance(chat, dict):
+            if chat.get("type") not in ("group", "supergroup"):
+                return ""
+            return str(part.get("migrate_to_chat_id") or chat.get("id") or "")
+    return ""
+
+
+def _belongs(update: dict[str, Any], chats: set[str], groups: set[str]) -> bool:
+    """An update for the agent whose private chats and groups these are."""
+    group = update_group(update)
+    if not group:
+        return update_sender(update) in chats
+    member = update.get("my_chat_member")
+    if isinstance(member, dict) and str((member.get("new_chat_member") or {}).get("status") or "") \
+            in ("left", "kicked"):
+        return True  # the bot left a group it was in for this agent (no longer bound)
+    return group in groups
+
+
 # ── state ───────────────────────────────────────────────────────────
 
 
@@ -235,6 +264,10 @@ class _State:
     error: str = ""
     links_by_tg: dict[str, dict] = field(default_factory=dict)
     links_by_user: dict[str, dict] = field(default_factory=dict)
+    # Groups a user brought their agent into: chat id → Flight Deck user id
+    # (telegram_agent_groups; the user's link names the agent).
+    groups: dict[str, str] = field(default_factory=dict)
+    bot_id: str = ""
     boxes: dict[str, _Box] = field(default_factory=dict)
     notices: dict[tuple[str, str], float] = field(default_factory=dict)
     inbox: bool = True
@@ -290,6 +323,12 @@ async def refresh_flags(force: bool = False) -> None:
     if isinstance(me, dict):
         _state.can_business = bool(me.get("can_connect_to_business"))
         _state.reads_groups = bool(me.get("can_read_all_group_messages"))
+        _state.bot_id = str(me.get("id") or _state.bot_id)
+        _state.bot_username = str(me.get("username") or _state.bot_username)
+
+
+def bot_id() -> str:
+    return _state.bot_id
 
 
 def agent_online(slug: str) -> bool | None:
@@ -309,11 +348,16 @@ async def reload_links(db) -> None:
     # (access removed, or the user moved to another agent), and wake every
     # held poll so a new approval is picked up at once.
     for slug, box in _state.boxes.items():
-        keep = chats_for_slug(slug)
+        keep, groups = chats_for_slug(slug), groups_for_slug(slug)
         if box.queue:
             box.queue = deque(
-                ((t, u) for t, u in box.queue if update_sender(u) in keep), maxlen=_QUEUE_MAX)
+                ((t, u) for t, u in box.queue if _belongs(u, keep, groups)), maxlen=_QUEUE_MAX)
         box.event.set()
+
+
+async def reload_groups(db) -> None:
+    """Re-read which groups belong to whom (start, and every change)."""
+    _state.groups = {str(r["chat_id"]): str(r["user_id"]) for r in await db.list_tg_agent_groups()}
 
 
 def chats_for_slug(slug: str, owner: str | None = None) -> set[str]:
@@ -324,6 +368,18 @@ def chats_for_slug(slug: str, owner: str | None = None) -> set[str]:
         if link.get("status") == "approved" and link.get("agent_slug") == slug
         and (owner is None or link.get("user_id") == owner)
     }
+
+
+def groups_for_slug(slug: str, owner: str | None = None) -> set[str]:
+    """Groups whose messages go to ``slug``: brought in by a user whose
+    approved link names that agent (and who is ``owner``, when given)."""
+    out: set[str] = set()
+    for chat_id, user_id in _state.groups.items():
+        link = _state.links_by_user.get(user_id)
+        if link and link.get("status") == "approved" and link.get("agent_slug") == slug \
+                and (owner is None or user_id == owner):
+            out.add(chat_id)
+    return out
 
 
 def owner_chat(user_id: str) -> str:
@@ -345,11 +401,13 @@ async def start(db) -> None:
     cfg = await load_config(db)
     _state.token = cfg["token"] if cfg["enabled"] else ""
     _state.bot_username = cfg["bot_username"]
+    _state.bot_id = cfg["bot_id"]
     _state.inbox = cfg["inbox"]
     _state.can_business = _state.reads_groups = None
     _state.flags_at = 0.0
     _state.error = ""
     _state.last_ok_at = None
+    await reload_groups(db)
     await reload_links(db)
     if not _state.token:
         return
@@ -367,11 +425,12 @@ async def stop() -> None:
             pass
 
 
-_CHAT_UPDATES = ["message", "callback_query"]
+# Chats, and the bot joining / leaving groups (agents' groups and the inbox's).
+_CHAT_UPDATES = ["message", "callback_query", "my_chat_member"]
 # The Telegram inbox's: Chat Automation (business) connections and their
-# messages, group edits, and the bot joining / leaving groups.
+# messages, and group edits.
 _INBOX_UPDATES = [
-    "edited_message", "my_chat_member", "business_connection", "business_message",
+    "edited_message", "business_connection", "business_message",
     "edited_business_message", "deleted_business_messages",
 ]
 
@@ -470,10 +529,15 @@ async def _notice(chat_id: Any, tg_user: str, kind: str, text: str) -> None:
 
 async def route_update(db, update: dict[str, Any]) -> str:
     """Deliver one update; returns what happened (for logs and tests)."""
-    # The Telegram inbox first: Chat Automation traffic, group messages and the
-    # bot's own group membership are its, and never reach an agent's chat.
-    from captain_claw.flight_deck import telegram_inbox
+    # Groups first: the bot joining one, and the messages of a group a user
+    # brought their agent into (which the inbox may keep a copy of too).
+    from captain_claw.flight_deck import telegram_agent_groups, telegram_inbox
 
+    grouped = await telegram_agent_groups.handle(db, update)
+    if grouped is not None:
+        return grouped
+    # Then the Telegram inbox: Chat Automation traffic, other groups' messages
+    # and the bot's membership in them are its, and never reach an agent's chat.
     kept = await telegram_inbox.handle(db, update)
     if kept is not None:
         return kept
@@ -526,14 +590,7 @@ async def route_update(db, update: dict[str, Any]) -> str:
             return "over_limit"
 
     slug = str(link["agent_slug"])
-    box = _box(slug)
-    box.expire()
-    box.queue.append((time.monotonic(), update))
-    for fid in _file_ids(update, []):
-        _remember(box.files, fid)
-    if isinstance(cbq, dict):
-        _remember(box.callbacks, str(cbq.get("id") or ""))
-    box.event.set()
+    box = enqueue(slug, update)
     if not box.online():
         name = link.get("agent_name") or slug
         await _notice(chat_id, tg_user, "offline", (
@@ -541,6 +598,20 @@ async def route_update(db, update: dict[str, Any]) -> str:
             "messages wait here for a few hours and reach it once it's back."
         ))
     return "queued"
+
+
+def enqueue(slug: str, update: dict[str, Any]) -> _Box:
+    """Hand ``update`` to the agent ``slug`` (its next ``getUpdates``)."""
+    box = _box(slug)
+    box.expire()
+    box.queue.append((time.monotonic(), update))
+    for fid in _file_ids(update, []):
+        _remember(box.files, fid)
+    cbq = update.get("callback_query")
+    if isinstance(cbq, dict):
+        _remember(box.callbacks, str(cbq.get("id") or ""))
+    box.event.set()
+    return box
 
 
 async def _claim_code(db, code: str, sender: dict, chat_id: Any) -> bool:
@@ -595,8 +666,8 @@ async def relay_get_updates(
             box.ack(int(offset))
         while True:
             box.expire()
-            chats = chats_for_slug(slug, owner)
-            items = [u for _t, u in box.queue if update_sender(u) in chats] if chats else []
+            chats, groups = chats_for_slug(slug, owner), groups_for_slug(slug, owner)
+            items = [u for _t, u in box.queue if _belongs(u, chats, groups)] if chats or groups else []
             if items:
                 return items[:100]
             remaining = deadline - loop.time()
@@ -624,12 +695,18 @@ def check_call(slug: str, owner: str, method: str, params: dict[str, Any]) -> No
     """Raise `RelayRefused` unless ``method`` with ``params`` stays inside the
     calling agent's own chats, files and button presses."""
     box = _box(slug)
-    chats = chats_for_slug(slug, owner)
+    groups = groups_for_slug(slug, owner)
+    chats = chats_for_slug(slug, owner) | groups
     # Inline messages and business connections aren't tied to a chat the
     # relay can check — the shared bot uses neither.
     for key in ("inline_message_id", "business_connection_id"):
         if params.get(key):
             raise RelayRefused(f"{key} isn't available through the shared bot")
+    if method == "leaveChat":
+        # Only a group this agent was brought into (the relay route unbinds it).
+        if _int_or_str(params.get("chat_id", "")) not in groups:
+            raise RelayRefused("the shared bot only leaves this agent's own groups")
+        return
     if method in CHAT_METHODS:
         for key in ("chat_id", "from_chat_id"):
             if key in params and _int_or_str(params[key]) not in chats:

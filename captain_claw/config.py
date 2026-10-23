@@ -871,6 +871,12 @@ class TelegramConfig(BaseModel):
     # the deck's shared team bot once an admin approved that (Connections →
     # Telegram). Off: this agent never uses the shared bot.
     shared_bot: bool = True
+    # Telegram groups (web/telegram_group_chat.py): someone the bot answers
+    # privately can add it to a group, where it answers @mentions, replies and
+    # /ask from anyone there with the web only. Off: it leaves groups it's added to.
+    groups: bool = True
+    # Answers per group per hour, at most (anyone in a group can ask; 0 = no cap).
+    group_turns_per_hour: int = 30
 
 
 class WhatsAppConfig(BaseModel):

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Send, Loader2, Check, AlertCircle, ChevronDown, ExternalLink, Clock, RefreshCw } from 'lucide-react'
+import { Send, Loader2, Check, AlertCircle, ChevronDown, ExternalLink, Clock, RefreshCw, Users, X } from 'lucide-react'
 import { useAuthStore } from '../../stores/authStore'
 import { useUIStore } from '../../stores/uiStore'
 import {
   getMyTelegram,
   requestTelegram,
   disconnectTelegram,
+  removeTelegramGroup,
   type MyTelegram,
   ADMIN_TAB_KEY,
 } from '../../services/sharedIntegrations'
@@ -232,6 +233,51 @@ export default function TelegramConnection({ onStatus }: { onStatus?: (s: MyTele
                       {active.agent_name} hasn't checked in with the team bot yet. If it was created before
                       this feature, restart it once.
                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* Groups: bots can't use a group's invite link, so the bot's own
+                  add-to-group link brings the agent in (telegram_agent_groups.py). */}
+              {active?.status === 'approved' && active.linked && me.group_link && (
+                <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-3 space-y-2">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+                    <Users className="h-3.5 w-3.5" /> Telegram groups
+                  </div>
+                  <div className="text-xs text-zinc-400">
+                    Bots can't join through a group's invite link — someone in the group adds them. Open
+                    this link, pick the group, and {active.agent_name} joins it. There it answers when
+                    someone mentions it or replies to it, and only uses the web — nothing of yours.
+                  </div>
+                  <a
+                    href={me.group_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-sky-600 px-3 py-1.5 text-xs text-white hover:bg-sky-500"
+                  >
+                    <ExternalLink className="h-3 w-3" /> Add {active.agent_name} to a group
+                  </a>
+                  {(me.groups ?? []).length > 0 && (
+                    <ul className="divide-y divide-zinc-800 rounded-md border border-zinc-800">
+                      {(me.groups ?? []).map((g) => (
+                        <li key={g.chat_id} className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-zinc-300">
+                          <span className="flex-1 min-w-0 truncate">{g.title}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm(`Take ${active.agent_name} out of “${g.title}”?`)) {
+                                run(() => removeTelegramGroup(g.chat_id))
+                              }
+                            }}
+                            disabled={busy}
+                            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-zinc-500 hover:text-red-500 disabled:opacity-40"
+                            title="Remove from this group"
+                          >
+                            <X className="h-3 w-3" /> Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
               )}

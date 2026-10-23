@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from captain_claw import telegram_groups
+
 
 def _md_to_telegram_html(text: str) -> str:
     """Convert common Markdown formatting to Telegram-compatible HTML.
@@ -82,6 +84,37 @@ class TelegramMessage:
     media_duration: int = 0
     # Forwarded from someone else (a forwarded voice note isn't the user speaking).
     forwarded: bool = False
+    # "private", or "group" / "supergroup" (web/telegram_group_chat.py).
+    chat_type: str = "private"
+    chat_title: str = ""
+    # In a group: meant for this bot (telegram_groups.addressed) — an @mention,
+    # a reply to one of its messages, /ask or /command@bot.
+    addressed: bool = False
+    # The message this one replies to: its text and who wrote it.
+    reply_to_text: str = ""
+    reply_to_from: str = ""
+
+
+@dataclass
+class TelegramGroupEvent:
+    """The bot joined or left a group, or the group became a supergroup."""
+
+    update_id: int
+    kind: str  # "joined" | "left" | "migrated"
+    chat_id: int
+    chat_type: str = ""
+    chat_title: str = ""
+    # Who added or removed the bot (nobody for "migrated").
+    user_id: int = 0
+    username: str = ""
+    first_name: str = ""
+    # "migrated": the supergroup's new id.
+    new_chat_id: int = 0
+
+
+# A chat member's status: in the chat, or not.
+_PRESENT = ("member", "administrator", "creator", "restricted")
+_GONE = ("left", "kicked")
 
 
 # Telegram's own types for sound and moving pictures, in the order a message
@@ -103,6 +136,32 @@ class TelegramCallbackQuery:
     message_id: int = 0  # message the button was attached to
 
 
+def _group_membership(update_id: int, member: dict[str, Any]) -> TelegramGroupEvent | None:
+    """A ``my_chat_member`` update as a joined / left event (groups only;
+    promotions and other changes are None)."""
+    chat = member.get("chat") if isinstance(member.get("chat"), dict) else {}
+    if chat.get("type") not in telegram_groups.GROUP_KINDS:
+        return None
+    new = str((member.get("new_chat_member") or {}).get("status") or "")
+    old = str((member.get("old_chat_member") or {}).get("status") or "")
+    if new in _GONE:
+        kind = "left"
+    elif new in _PRESENT and (old in _GONE or not old):
+        kind = "joined"
+    else:
+        return None
+    actor = member.get("from") if isinstance(member.get("from"), dict) else {}
+    try:
+        return TelegramGroupEvent(
+            update_id=update_id, kind=kind, chat_id=int(chat.get("id", 0)),
+            chat_type=str(chat.get("type") or ""), chat_title=str(chat.get("title") or ""),
+            user_id=int(actor.get("id", 0) or 0), username=str(actor.get("username") or "").strip(),
+            first_name=str(actor.get("first_name") or "").strip(),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
 class TelegramBridge:
     """Telegram Bot API helper."""
 
@@ -118,10 +177,29 @@ class TelegramBridge:
         # ``headers``: Flight Deck's agent headers when this bridge talks to the
         # deck's shared-bot relay instead of Telegram (see web/telegram.py).
         self._client = httpx.AsyncClient(timeout=40.0, headers=headers or None)
+        self._me: dict[str, Any] | None = None
 
     @property
     def enabled(self) -> bool:
         return bool(self.token)
+
+    async def get_me(self) -> dict[str, Any]:
+        """The bot itself (``getMe``: id, username, can_read_all_group_messages);
+        ``{}`` while Telegram can't be asked. Kept once known."""
+        if self._me is None:
+            try:
+                response = await self._client.get(self._url("getMe"))
+                data = response.json()
+            except Exception:
+                return {}
+            if not isinstance(data, dict) or not isinstance(data.get("result"), dict):
+                return {}
+            self._me = data["result"]
+        return self._me
+
+    async def leave_chat(self, chat_id: int) -> None:
+        response = await self._client.post(self._url("leaveChat"), json={"chat_id": int(chat_id)})
+        response.raise_for_status()
 
     def _url(self, method: str) -> str:
         return f"{self.api_base_url}/bot{self.token}/{method}"
@@ -131,8 +209,9 @@ class TelegramBridge:
 
     async def get_updates(
         self, offset: int | None = None, timeout: int = 25,
-    ) -> list[TelegramMessage | TelegramCallbackQuery]:
-        """Poll Telegram updates and normalize messages and callback queries."""
+    ) -> list[TelegramMessage | TelegramCallbackQuery | TelegramGroupEvent]:
+        """Poll Telegram updates and normalize messages, callback queries and
+        the bot's own group membership."""
         params: dict[str, Any] = {"timeout": max(1, int(timeout))}
         if offset is not None:
             params["offset"] = int(offset)
@@ -145,11 +224,19 @@ class TelegramBridge:
         if not isinstance(results, list):
             return []
 
-        updates: list[TelegramMessage | TelegramCallbackQuery] = []
+        updates: list[TelegramMessage | TelegramCallbackQuery | TelegramGroupEvent] = []
         for item in results:
             if not isinstance(item, dict):
                 continue
             update_id = int(item.get("update_id", 0))
+
+            # The bot added to / removed from a group.
+            member = item.get("my_chat_member")
+            if isinstance(member, dict):
+                event = _group_membership(update_id, member)
+                if event is not None:
+                    updates.append(event)
+                continue
 
             # Handle callback queries (inline keyboard button presses).
             cbq = item.get("callback_query")
@@ -183,6 +270,19 @@ class TelegramBridge:
             if not isinstance(msg, dict):
                 msg = item.get("business_message")
             if not isinstance(msg, dict):
+                continue
+            chat = msg.get("chat") if isinstance(msg.get("chat"), dict) else {}
+            chat_type = str(chat.get("type") or "private")
+            if chat_type in telegram_groups.GROUP_KINDS and msg.get("migrate_to_chat_id"):
+                # The group became a supergroup, with a new id.
+                try:
+                    updates.append(TelegramGroupEvent(
+                        update_id=update_id, kind="migrated", chat_id=int(chat.get("id", 0)),
+                        chat_type=chat_type, chat_title=str(chat.get("title") or ""),
+                        new_chat_id=int(msg["migrate_to_chat_id"]),
+                    ))
+                except (TypeError, ValueError):
+                    pass
                 continue
             # Extract text, or caption + photo/document for media messages.
             text = str(msg.get("text", "")).strip()
@@ -245,13 +345,21 @@ class TelegramBridge:
                     and not media_file_id):
                 continue
             from_user = msg.get("from")
-            chat = msg.get("chat")
-            if not isinstance(from_user, dict) or not isinstance(chat, dict):
+            if not isinstance(from_user, dict) or not chat:
                 continue
             user_id = int(from_user.get("id", 0))
             chat_id = int(chat.get("id", 0))
             if user_id == 0 or chat_id == 0:
                 continue
+            is_group = chat_type in telegram_groups.GROUP_KINDS
+            if is_group and from_user.get("is_bot"):
+                continue  # another bot's message
+            addressed = False
+            if is_group:
+                me = await self.get_me()
+                addressed = telegram_groups.addressed(msg, me.get("id"), str(me.get("username") or ""))
+            reply = msg.get("reply_to_message") if isinstance(msg.get("reply_to_message"), dict) else {}
+            reply_text = str(reply.get("text") or reply.get("caption") or "").strip()
             updates.append(
                 TelegramMessage(
                     update_id=update_id,
@@ -276,6 +384,11 @@ class TelegramBridge:
                     media_size=media_size,
                     media_duration=media_duration,
                     forwarded=isinstance(msg.get("forward_origin"), dict),
+                    chat_type=chat_type,
+                    chat_title=str(chat.get("title") or "") if is_group else "",
+                    addressed=addressed,
+                    reply_to_text=reply_text,
+                    reply_to_from=telegram_groups.person(reply.get("from")) if reply_text else "",
                 )
             )
         return updates
