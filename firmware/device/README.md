@@ -194,6 +194,14 @@ early, or the link dropped), the device asks Flight Deck to send it again instea
 (`{"type":"replay"}`; the speech is synthesized afresh). Powering off forgets it.
 A single side click on an answer now waits 0.35 s to make sure it isn't a double-click.
 
+**A link that drops mid-turn** (weak Wi-Fi). The device stays on the working screen
+with *Connection lost — reconnecting…*, awake and retrying, for up to 2 minutes.
+Flight Deck keeps the turn and its answer (10 minutes): after the reconnect the answer
+comes as usual, or the device shows *Thinking…* again while the agent is still at it.
+If the link stays away, or Flight Deck no longer has the turn (it restarted), the
+device says *Answer lost* — ask again. The heartbeat allows three missed 10 s pong
+windows (it was two of 5 s) before it counts the link as gone.
+
 In the side-button list, *Volume* (25/50/75/100%) and *Boost* (off, +6, +10 dB —
 extra speech gain with a soft limiter) change with each front-button press and
 beep at the new level. Above 75% volume on battery the stick may restart on loud

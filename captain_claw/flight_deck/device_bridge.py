@@ -479,6 +479,7 @@ class _DeviceConn:
         self.agent: dict | None = None
         self.serial = next(_conn_serials)
         self.closed = False  # the link is gone; a turn still open keeps listening
+        self.opened_at = self.last_heard_at = time.monotonic()
         self._send_lock = asyncio.Lock()
         self.recording = False
         self.rec_rate = 16000
@@ -689,6 +690,7 @@ class _DeviceConn:
     def heard(self) -> None:
         """Something came from the device: the answer sent to it a moment
         before got there."""
+        self.last_heard_at = time.monotonic()
         turn = _turns.get(self.channel_id)
         if (turn and turn.get("answer") and turn["via"] == self.serial
                 and time.monotonic() - turn["sent_at"] >= HEARD_AFTER_S):
@@ -1078,6 +1080,7 @@ async def device_ws(ws: WebSocket) -> None:
     )
     conn.start_audio_worker()
     _live.add(conn)
+    code: Any = None
     try:
         conn.take_over()  # before bind: from here on, the running turn's answer is ours
         if await conn.bind(q.get("agent", "")):
@@ -1086,6 +1089,7 @@ async def device_ws(ws: WebSocket) -> None:
         while True:
             msg = await ws.receive()
             if msg.get("type") == "websocket.disconnect":
+                code = msg.get("code")
                 break
             conn.heard()
             data = msg.get("bytes")
@@ -1165,10 +1169,16 @@ async def device_ws(ws: WebSocket) -> None:
                 if isinstance(obj.get("t"), (int, float)):
                     pong["t"] = obj["t"]
                 await conn.send_json(pong)
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        code = exc.code
     except Exception as exc:
         log.warning("device ws error: %s", exc)
     finally:
         _live.discard(conn)
+        # How it ended and how long the device had been quiet before: tells a
+        # link that faded (weak Wi-Fi) from one closed on purpose.
+        now = time.monotonic()
+        log.info("device %s (%s %s) left after %.0fs: code %s, last heard %.0fs before%s",
+                 conn.device_id, conn.hw or "?", conn.fw or "?", now - conn.opened_at, code,
+                 now - conn.last_heard_at, ", mid-turn" if conn.pending else "")
         await conn.close()

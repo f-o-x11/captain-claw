@@ -46,7 +46,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.12.9"
+#define FW_VERSION "0.12.10"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -128,6 +128,12 @@ static std::vector<String> activity;  // what the agent is doing, oldest first
 static int toolSteps = 0;
 static uint32_t workStartMs = 0;
 static bool workDirty = false;
+// The link dropped while the agent was working: Waiting stays, as Flight Deck
+// keeps the turn and its answer for the reconnect — until kTurnHoldMs without
+// the link, or kResumeMs after a reconnect that doesn't pick the turn up.
+static constexpr uint32_t kTurnHoldMs = 120000;
+static constexpr uint32_t kResumeMs = 8000;
+static uint32_t turnDropMs = 0, turnRelinkMs = 0;  // 0 = no drop / not back yet
 static uint32_t recStartMs = 0, lastActivityMs = 0, lastDrawMs = 0, menuOpenedMs = 0;
 static bool dimmed = false, screenOff = false;
 static int menuSel = 0;
@@ -1461,6 +1467,7 @@ static void onText(const char* payload, size_t len) {
       leds::action(leds::Step::Model);  // speech to text
     } else if (st == "thinking") {
       statusLine = "Thinking…";
+      turnDropMs = turnRelinkMs = 0;  // (after a dropped link: the deck still has the turn)
       leds::action(leds::Step::Model);
       if (mode != Mode::Waiting && mode != Mode::Listening) {
         startWork();  // a typed or resent turn: no recording came first
@@ -1623,6 +1630,7 @@ static void onWs(WStype_t type, uint8_t* payload, size_t length) {
       Serial.println("[claw] flight deck connected");
       wsUp = true;
       rttMs = -1;
+      if (turnDropMs) turnRelinkMs = max<uint32_t>(millis(), 1);
       sendPrefs();
       redraw();
       break;
@@ -1643,7 +1651,12 @@ static void onWs(WStype_t type, uint8_t* payload, size_t length) {
         abortUpload(false);  // the notes go up again next time — asked first
         upAllowed = upAsked = false;
         if (!prerollOn) tapRec = false;  // a tapped recording that streamed: gone with the mic
-        if (mode == Mode::Listening || mode == Mode::Waiting || mode == Mode::Ask) {
+        if (mode == Mode::Waiting) {  // the deck keeps the answer: wait for the link (holdTurn)
+          if (!turnDropMs) turnDropMs = max<uint32_t>(millis(), 1);
+          turnRelinkMs = 0;
+          statusLine = "Connection lost — reconnecting…";
+          workDirty = true;
+        } else if (mode == Mode::Listening || mode == Mode::Ask) {
           mode = ui::hasReply() ? Mode::Reply : Mode::Idle;
         }
         redraw();
@@ -1699,7 +1712,9 @@ static void connectServer() {
   ws.setExtraHeaders("");
   ws.onEvent(onWs);
   ws.setReconnectInterval(3000);
-  ws.enableHeartbeat(15000, 5000, 2);
+  // Weak Wi-Fi holds a pong back for seconds (retransmits): three missed
+  // 10 s windows, not two of 5 s, before the link counts as gone.
+  ws.enableHeartbeat(15000, 10000, 3);
 }
 
 // ── over-the-air updates (docs/device-ota-plan.md) ───────────────────
@@ -2374,6 +2389,22 @@ static void pollTouch(bool dark) {
   if (wasSpeaking) sendType("stop");
 }
 
+// A turn the link dropped in the middle of (see turnDropMs): over when the
+// answer or "thinking" comes back, or lost when the link stays away too long
+// or comes back without the deck picking the turn up (it restarted, say).
+static void holdTurn() {
+  if (!turnDropMs) return;
+  if (mode != Mode::Waiting) {  // an answer, an error or a button ended it
+    turnDropMs = turnRelinkMs = 0;
+    return;
+  }
+  uint32_t now = millis();
+  if (turnRelinkMs ? now - turnRelinkMs < kResumeMs : now - turnDropMs < kTurnHoldMs) return;
+  turnDropMs = turnRelinkMs = 0;
+  touch();
+  notice("Answer lost", "The connection dropped while the agent was working. Ask again.", kOrange);
+}
+
 void loop() {
 #ifdef CLAW_PERF
   uint32_t loopT0 = micros();
@@ -2390,6 +2421,7 @@ void loop() {
     if (wsEvents == seen) break;
   }
   if (wsUp != wasUp) linkChangeMs = millis();
+  holdTurn();
   keepWifi();
   PERF_T(pfTelMax, telemetry::poll());
   pumpPreroll();
