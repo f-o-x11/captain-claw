@@ -487,6 +487,11 @@ class AgentGuardMixin:
                         self._set_runtime_status(f"⚡ {_llm_status}...")
                     _stream_cb(chunk)
 
+        # What this call is, for whoever shows the streamed text: the answer
+        # to the user ("conversation" / "user_turn") or one of the agent's own
+        # calls (a rephrase, a title, a tool-output rewrite…) that no device
+        # should read out as the answer.
+        self._stream_label = _label or "conversation"
         try:
             response = await self.provider.complete_with_callback(
                 messages=messages,

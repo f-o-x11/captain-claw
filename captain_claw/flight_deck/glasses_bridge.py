@@ -187,6 +187,8 @@ def _now_iso() -> str:
 # and forth between recently-opened decks before settling. These are live, fire-
 # once signals — only durable chat-like messages belong in the replay buffer.
 _NO_BACKFILL_TYPES = {"deck_open", "control", "deck_state", "narration", "media", "activity", "agent_delta"}
+# LLM calls whose streamed text is the answer to the user (Agent._stream_label).
+_ANSWER_LABELS = {"conversation", "user_turn"}
 
 
 async def _broadcast(ch: _ChannelState, payload: dict) -> None:
@@ -353,9 +355,12 @@ async def _forward_agent_msg(ch: "_ChannelState", data: dict) -> None:
             await _broadcast(ch, {"type": "media", "items": items, "ts": data.get("timestamp") or _now_iso()})
     elif mtype == "response_stream":
         # The answer's text as the model writes it (the web app's stream
-        # panel): the device bridge speaks it sentence by sentence. Live only.
+        # panel): the device bridge speaks it sentence by sentence. Live only,
+        # and only the answer to the user — the agent's own calls (a rephrase
+        # of the task, a session title, a tool-output rewrite…) stream too,
+        # labelled, and a device must not read those out.
         text = str(data.get("text", "") or "")
-        if text:
+        if text and str(data.get("label") or "conversation") in _ANSWER_LABELS:
             await _broadcast(ch, {"type": "agent_delta", "text": text})
     elif mtype == "thinking":
         # What the agent is doing right now — the web app's activity

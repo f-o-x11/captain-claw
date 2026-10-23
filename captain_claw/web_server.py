@@ -899,7 +899,8 @@ class WebServer:
             })
 
         def response_stream_cb(text: str) -> None:
-            send({"type": "response_stream", "text": text})
+            send({"type": "response_stream", "text": text,
+                  "label": str(getattr(agent, "_stream_label", "") or "")})
 
         def tool_output_cb(tool_name: str, arguments: dict, output: str) -> None:
             send({
@@ -1037,8 +1038,11 @@ class WebServer:
         })
 
     def _response_stream_callback(self, text: str) -> None:
-        """Broadcast LLM response content to the stream panel."""
-        self._broadcast({"type": "response_stream", "text": text})
+        """Broadcast LLM response content to the stream panel. "label" says
+        which call it is (see Agent._stream_label): the device bridge reads
+        only the answer to the user aloud."""
+        self._broadcast({"type": "response_stream", "text": text,
+                         "label": str(getattr(self.agent, "_stream_label", "") or "")})
 
     _THINKING_SILENT_TOOLS: set[str] = {
         "llm_trace", "pipeline_trace", "memory_select", "memory_semantic_select",
