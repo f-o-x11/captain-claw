@@ -104,6 +104,7 @@ static std::vector<ui::Item> menu() {
       card("Status", "", "Wi-Fi, deck, battery…", true, ui::Glyph::Info),
       card("Agent", "Captain Claw", "Captain Claw · change", true, ui::Glyph::Initials),
       card("Volume", "75%", "yellow = change"),
+      card("Settings", "", "voice, display, sounds, timers…", true, ui::Glyph::Gear),
       card("Speech boost", "off", "yellow = change", false),
       card("Voice", "female", "yellow = change"),
       card("Display", "text", "yellow = change"),
@@ -182,7 +183,7 @@ int main(int argc, char** argv) {
   ui::showPicker(items, 3, -1);
   save("08_menu_volume");
   ui::showPicker(items, 4, -1);
-  save("09_menu_boost_off");
+  save("09_menu_settings");
   ui::showPicker(items, 2, -1);
   save("10_menu_agent");
   ui::showPicker(items, 15, -1);
@@ -257,6 +258,10 @@ int main(int argc, char** argv) {
     ui::storeImage(buf, jpg.size());
     ui::showStoredImage();
     save("24_picture");
+    ui::toggleImageFit();  // a tap: all of it
+    ui::showStoredImage();
+    save("24b_picture_fit");
+    ui::toggleImageFit();
   }
 
   M5.Power.level = 14;

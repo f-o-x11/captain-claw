@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import math
 import time
 import wave
 
@@ -68,11 +67,15 @@ def test_fit_jpeg_stays_under_the_frame_limit():
 
 
 @pytest.mark.parametrize("aspect", [16 / 9, 4 / 3, 1.0, 3 / 4, 9 / 16])
-def test_round_fit_is_the_largest_picture_inside_the_circle(aspect):
-    w, h = db.round_fit(466, 466, aspect)
-    assert math.hypot(w / 2, h / 2) <= 233          # corners inside the circle
-    assert math.hypot(w / 2 + 1, h / 2 + 1) > 233   # and no room to spare
+def test_round_cover_fills_the_circle_with_the_shorter_side(aspect):
+    w, h = db.round_cover(466, 466, aspect)
+    assert min(w, h) == 466
     assert abs(w / h - aspect) < 0.02
+
+
+def test_round_cover_crops_a_panorama_to_twice_the_screen():
+    assert db.round_cover(466, 466, 4.0) == (932, 466)
+    assert db.round_cover(466, 466, 0.2) == (466, 932)
 
 
 def _picture(size, color=(255, 0, 0)) -> bytes:
@@ -83,17 +86,15 @@ def _picture(size, color=(255, 0, 0)) -> bytes:
     return src.getvalue()
 
 
-@pytest.mark.parametrize("size", [(400, 300), (300, 500), (200, 200)])
-def test_fit_jpeg_on_a_round_screen_keeps_the_corners_in_view(size):
+@pytest.mark.parametrize("size,shape", [((400, 300), (621, 466)), ((300, 500), (466, 777)), ((200, 200), (466, 466))])
+def test_fit_jpeg_on_a_round_screen_fills_the_circle(size, shape):
     from PIL import Image
 
     jpeg = db.fit_jpeg(_picture(size), 466, 466, max_bytes=db.MAX_CHUNKED_JPEG_BYTES, round_screen=True)
     im = Image.open(io.BytesIO(jpeg)).convert("RGB")
-    assert im.size == (466, 466)
-    x0, y0, x1, y1 = im.point(lambda v: 255 if v > 100 else 0).getbbox()
-    for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
-        assert math.hypot(x - 233, y - 233) <= 234   # the picture's corners show
-    assert abs((x1 - x0) / (y1 - y0) - size[0] / size[1]) < 0.03
+    assert im.size == shape                        # its own shape, the shorter side the screen's
+    assert im.getpixel((5, 5))[0] > 150            # no black letterbox: the picture reaches the edge
+    assert len(jpeg) <= db.MAX_CHUNKED_JPEG_BYTES
 
 
 def test_jpeg_frames_split_a_picture_into_parts():
@@ -152,7 +153,7 @@ async def test_a_big_picture_reaches_a_chunked_device_in_parts(monkeypatch):
     monkeypatch.setattr(conn, "_fetch_from_agent", _fetch)
     await conn._send_image({"path": "/w/a.png", "name": "a.png"})
     head, frames = conn.ws.sent[0], conn.ws.sent[1:]
-    assert head["type"] == "image" and (head["w"], head["h"]) == (466, 466)
+    assert head["type"] == "image" and (head["w"], head["h"]) == (621, 466)  # fills the circle
     assert db.MAX_JPEG_BYTES < head["size"] <= db.MAX_CHUNKED_JPEG_BYTES
     assert [f[0] for f in frames] == [db.BIN_JPEG_PART] * (len(frames) - 1) + [db.BIN_JPEG]
     assert all(len(f) <= db.MAX_JPEG_BYTES + 1 for f in frames)

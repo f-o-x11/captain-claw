@@ -127,6 +127,9 @@ void showCharPick(uint8_t kind, face::Pose pose, int level, int index);
 void storeImage(uint8_t* jpg, size_t len);
 bool hasImage();
 void showStoredImage();
+// A picture bigger than the round screen fills it; a tap shows all of it,
+// scaled down, and the next tap fills again.
+void toggleImageFit();
 // A picture behind every screen (the round one; the others ignore it): a JPEG
 // of the screen's size, drawn darkened under the screens. nullptr / 0 clears it.
 void setBackground(const uint8_t* jpg, size_t len);
@@ -138,7 +141,7 @@ void showBackdrop();
 // round screen shows a card: `badge` big in a glowing badge (a value like
 // "75%"), or a glyph — Initials turns `badge` (a name) into its initials —
 // with `title` under it, then `note`.
-enum class Glyph : uint8_t { None, Initials, Wifi, Back, Info, Replay };
+enum class Glyph : uint8_t { None, Initials, Wifi, Back, Info, Replay, Gear };
 struct Item {
   String label;
   String title;
@@ -161,5 +164,7 @@ enum class TapButton : uint8_t { Off, Talk, Stop, Pause, Play };
 void setTapButton(TapButton button);
 // A touch at (x, y) lands on the button on the screen now.
 bool tapButtonHit(int x, int y);
+// The yes/no pills of showAsk: 1 = yes, 0 = no, -1 = neither (or no ask showing).
+int askHit(int x, int y);
 
 }  // namespace ui

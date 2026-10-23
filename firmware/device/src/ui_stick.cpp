@@ -546,5 +546,7 @@ void showAsk(const char* title, const String& body, const char* yes, const char*
 
 void setTapButton(TapButton) {}  // no touch screen
 bool tapButtonHit(int, int) { return false; }
+int askHit(int, int) { return -1; }
+void toggleImageFit() {}
 
 }  // namespace ui

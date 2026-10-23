@@ -26,10 +26,9 @@ BEZEL = 26
 
 
 def sample_picture(path: Path) -> None:
-    """A landscape picture, fitted inside the circle as the deck sends it
-    with round=1 (the largest 4:3 rectangle that fits)."""
-    r = 4 / 3
-    w, h = round(D * r / math.hypot(1, r)), round(D / math.hypot(1, r))
+    """A landscape picture as the deck sends it with round=1: filling the
+    circle (its shorter side the screen's), 4:3 here."""
+    w, h = round(D * 4 / 3), D
     im = Image.new("RGB", (w, h))
     px = im.load()
     for y in range(h):
@@ -42,9 +41,7 @@ def sample_picture(path: Path) -> None:
                (w, h * 0.7), (w, h)], fill=(40, 40, 80))
     d.polygon([(0, h), (0, h * 0.8), (w * 0.35, h * 0.62), (w * 0.6, h * 0.82), (w, h * 0.74), (w, h)],
               fill=(20, 22, 45))
-    canvas = Image.new("RGB", (D, D))
-    canvas.paste(im, ((D - w) // 2, (D - h) // 2))
-    canvas.save(path, "JPEG", quality=85)
+    im.save(path, "JPEG", quality=85)
 
 
 def sample_background(path: Path) -> None:

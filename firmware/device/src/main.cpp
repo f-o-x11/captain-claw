@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.13.2"
+#define FW_VERSION "0.14.0"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -162,6 +162,12 @@ static uint8_t* bgPart = nullptr;
 static size_t bgPartLen = 0;
 static uint32_t talkTapMs = 0;      // when the talk button was last tapped (double-click = replay)
 static uint32_t buzzOffMs = 0;       // vibration motor runs until then (0 = off)
+// More pulses after the one running (a double tick, the error's three).
+static uint8_t buzzMore = 0;
+static uint16_t buzzOnMs = 0, buzzGapMs = 0;
+static uint32_t buzzAgainMs = 0;
+static uint32_t pendingTapMs = 0;    // a single tap on a picture acts once it can't become a double tap
+static constexpr uint16_t kHintTurns = 5;  // the home screen's "hold … to talk" goes after this many
 static uint32_t turnBusyMs = 0;      // last moment a turn was under way (Wi-Fi stays fully awake)
 static bool wifiAwake = false;
 static bool deckReplay = false;      // asked the deck to send the last answer again
@@ -253,7 +259,24 @@ static void buzz(uint16_t ms, uint8_t level = 200) {
   M5.Power.setVibration(level);
   buzzOffMs = millis() + ms;
   if (!buzzOffMs) buzzOffMs = 1;
+  buzzMore = 0;
+  buzzAgainMs = 0;
 }
+
+// The haptic vocabulary — one motor, so it's all timing: a tick for a step
+// or a page turn, a double tick at the end of a list, a longer one for a
+// choice, three for something that went wrong.
+static void buzzTicks(uint8_t n, uint16_t onMs, uint16_t gapMs) {
+  if (!board::kHasMotor || !n) return;
+  buzz(onMs);
+  buzzMore = n - 1;
+  buzzOnMs = onMs;
+  buzzGapMs = gapMs;
+}
+static void hapticTick() { buzzTicks(1, 20, 0); }
+static void hapticBump() { buzzTicks(2, 20, 70); }
+static void hapticConfirm() { buzzTicks(1, 45, 0); }
+static void hapticError() { buzzTicks(3, 30, 80); }
 
 static void sendJson(const JsonDocument& doc) {
   String out;
@@ -430,7 +453,7 @@ static void showIdle() {
   home.color = ok ? kGreen : kYellow;
   // Offline, a device that keeps notes still takes one.
   const bool keeps = board::kOfflineNotes && notes::ready();
-  home.hint = ok        ? String(board::kTalkHint)
+  home.hint = ok        ? (settings.talks < kHintTurns ? String(board::kTalkHint) : String(""))
               : !wifiOk ? (keeps ? String("Offline · talk to keep a note") : String("No Wi-Fi"))
               : !wsUp   ? String("Connecting to Flight Deck…")
                         : String("Waiting for the agent");
@@ -448,9 +471,22 @@ static void showIdle() {
 
 // ── menu ─────────────────────────────────────────────────────────────
 
-enum MenuRow { MReplay, MPin, MStatus, MNotes, MAgent, MVolume, MBoost, MVoice, MDisplay, MTapTalk, MTextSize,
-               MCharacter, MBeep, MTalkSnd, MFlash, MBuzz, MLead, MScreenOff, MPowerOff, MRotation, MLeds, MClicks,
-               MSayMenu, MAsleep, MPhone, MUpdate, MAutoUpdate, MSetup, MCount };
+enum MenuRow { MReplay, MPin, MStatus, MNotes, MAgent, MVolume, MBoost, MVoice, MDisplay, MTapTalk, MMore,
+               MTextSize, MCharacter, MBeep, MTalkSnd, MFlash, MBuzz, MLead, MScreenOff, MPowerOff, MRotation,
+               MLeds, MClicks, MSayMenu, MAsleep, MPhone, MUpdate, MAutoUpdate, MSetup, MBack, MCount };
+
+// Two levels (not the paper's): what you reach for in the moment at the
+// top, the rest under Settings. menuMore: the Settings level is open.
+static bool menuMore = false;
+static bool topRow(int row) {
+  switch (row) {
+    case MReplay: case MPin: case MStatus: case MNotes: case MAgent: case MVolume: case MTapTalk:
+    case MMore: case MUpdate: case MSetup:
+      return true;
+    default:
+      return false;
+  }
+}
 
 // The last answer can be heard again: from memory, or (part of it never
 // arrived) from the deck.
@@ -464,6 +500,9 @@ static bool rowShown(int row) {
   // code for the settings page on the phone, where everything else is set)
   // and the software update.
   if (board::kEpaper) return row == MPhone || row == MUpdate;
+  if (row == MMore) return !menuMore;
+  if (row == MBack) return menuMore;
+  if (menuMore == topRow(row)) return false;  // the other level's
   switch (row) {
     case MReplay: return canReplay();
     case MPin: return ui::canPin();
@@ -501,6 +540,8 @@ static constexpr uint8_t kBoostSteps[] = {0, 6, 10};
 static String menuLabel(int row) {
   switch (row) {
     case MReplay: return "Replay answer";
+    case MMore: return "Settings »";
+    case MBack: return "Back";
     case MPin: return ui::pinned() ? "Unpin answer" : "Pin answer to home";
     case MStatus: return "Status";
     case MNotes: return "Send voice notes (" + String(notes::count()) + ")";
@@ -544,6 +585,8 @@ static ui::Item menuItem(int row) {
   it.note = "yellow = change";
   switch (row) {
     case MReplay: it.title = "Replay answer"; it.glyph = ui::Glyph::Replay; it.note = "yellow = hear it again"; break;
+    case MMore: it.title = "Settings"; it.glyph = ui::Glyph::Gear; it.note = "voice, display, sounds, timers…"; break;
+    case MBack: it.title = "Back"; it.glyph = ui::Glyph::Back; it.note = "to the menu"; break;
     case MPin:
       it.title = ui::pinned() ? "Unpin answer" : "Pin answer";
       it.badge = ui::pinned() ? "pinned" : "";
@@ -805,6 +848,7 @@ static void leaveBackdrop() {
 }
 
 static void openMenu() {
+  menuMore = false;
   menuSel = board::kEpaper ? MPhone : canReplay() ? MReplay : MStatus;
   menuOpenedMs = millis();
   mode = Mode::Menu;
@@ -847,6 +891,14 @@ static void chooseMenuRow() {
     case MReplay:
       backToMain();
       replayAnswer();
+      return;
+    case MMore:
+    case MBack:
+      menuMore = menuSel == MMore;
+      menuSel = menuMore ? 0 : MMore;
+      while (!rowShown(menuSel)) ++menuSel;  // the level's first row
+      redraw();
+      sayRow();
       return;
     case MStatus:
       statusPage = 0;
@@ -1004,6 +1056,10 @@ static void startTalking() {
 // Wi-Fi, motion, room climate, clock): the agent gets them as context.
 static void sendRecEnd() {
   JsonDocument d;
+  if (settings.talks < kHintTurns) {  // the home screen's hint has done its job after a few
+    ++settings.talks;
+    settings.save();
+  }
   d["type"] = "rec_end";
   telemetry::fill(d["ctx"].to<JsonObject>());
   sendJson(d);
@@ -1614,7 +1670,7 @@ static void onText(const char* payload, size_t len) {
     if (!bgIncomingSize) setBackground(nullptr, 0, "");  // cleared: back to black
   } else if (type == "error") {
     touch();
-    buzz(250);
+    hapticError();
     leds::alert();
     notice("Hmm", doc["text"] | "Something went wrong.", kOrange);
   }
@@ -2412,6 +2468,7 @@ static void stopOnSilence() {
   }
   cancelTapRecording();
   leds::alert();
+  hapticError();
   if (!board::kEpaper) notice("Nothing heard", "It stopped after 2.5 s of quiet. Tap and talk again.", kOrange);
 }
 
@@ -2427,10 +2484,19 @@ static void swipeAnswer(bool forward) {
     return;
   }
   if (forward) {
-    if (!ui::onLastPage()) ui::nextPage();
-  } else if (!ui::prevPage() && ui::hasImage()) {  // before the first page: the picture
+    if (ui::onLastPage()) hapticBump();  // nothing after this
+    else {
+      ui::nextPage();
+      hapticTick();
+    }
+  } else if (ui::prevPage()) {
+    hapticTick();
+  } else if (ui::hasImage()) {  // before the first page: the picture
     mode = Mode::Image;
     redraw();
+    hapticTick();
+  } else {
+    hapticBump();
   }
 }
 
@@ -2449,6 +2515,21 @@ static void goHome() {
     mode = Mode::Home;
     redraw();
   }
+  hapticTick();
+}
+
+// The talk button in a picker: this row, agent or character.
+static void pickCharacter() {
+  settings.character = charSel;
+  settings.save();
+  mode = Mode::Menu;
+  menuOpenedMs = millis();
+  redraw();
+}
+static void chooseHere() {
+  if (mode == Mode::Menu) chooseMenuRow();
+  else if (mode == Mode::Agents) chooseAgent();
+  else if (mode == Mode::CharPick) pickCharacter();
 }
 
 // The touch screen (StopWatch). Swipes page an answer: left or up goes on,
@@ -2467,24 +2548,60 @@ static void pollTouch(bool dark) {
   if (!t.wasReleased() || woke) return;
   const int dx = t.distanceX(), dy = t.distanceY();
   const int dist = max(abs(dx), abs(dy));
+  const bool picker = mode == Mode::Menu || mode == Mode::Agents || mode == Mode::CharPick;
   if (dist >= 45) {
+    const bool sideways = abs(dx) > abs(dy);
     if (mode == Mode::Reply || mode == Mode::Image) {
-      swipeAnswer(abs(dx) > abs(dy) ? dx < 0 : dy < 0);
+      swipeAnswer(sideways ? dx < 0 : dy < 0);
     } else if ((mode == Mode::Home || mode == Mode::Backdrop) && ui::hasReply()) {
       backToMain();  // home → the answer again
+    } else if ((picker || mode == Mode::Status) && sideways) {
+      hapticTick();  // left: the next row or page; right: the one before
+      if (dx < 0) sideClick();
+      else backClick();
     }
     return;
   }
   if (dist > 25) return;
+  const int x = t.base_x, y = t.base_y;
+  if (picker) {  // the chevrons, and the badge between them to choose
+    if (x < board::kScreenW / 3) {
+      hapticTick();
+      backClick();
+    } else if (x > 2 * board::kScreenW / 3) {
+      hapticTick();
+      sideClick();
+    } else {
+      hapticConfirm();
+      chooseHere();
+    }
+    return;
+  }
+  if (mode == Mode::Status) {
+    hapticTick();
+    if (x < board::kScreenW / 2) backClick();
+    else sideClick();
+    return;
+  }
+  if (mode == Mode::Ask) {
+    const int hit = ui::askHit(x, y);
+    if (hit < 0) return;
+    if (hit) hapticConfirm();
+    else hapticTick();
+    answerAsk(hit == 1);
+    return;
+  }
   const ui::TapButton button = tapButtonKind();
-  if (button == ui::TapButton::Off || !ui::tapButtonHit(t.base_x, t.base_y)) {
+  if (button == ui::TapButton::Off || !ui::tapButtonHit(x, y)) {
     static uint32_t lastTapMs = 0;  // taps on the button act at once, so only these count
     if (lastTapMs && millis() - lastTapMs < kDoubleMs + 100) {
       lastTapMs = 0;
+      pendingTapMs = 0;
       goHome();
     } else {
       lastTapMs = millis();
       if (!lastTapMs) lastTapMs = 1;
+      if (mode == Mode::Image) pendingTapMs = lastTapMs;  // a single tap, unless a second follows
     }
     return;
   }
@@ -2571,16 +2688,8 @@ void loop() {
     touch();
     if (dark && inMenu) {
       // woken only
-    } else if (mode == Mode::Menu) {
-      chooseMenuRow();
-    } else if (mode == Mode::Agents) {
-      chooseAgent();
-    } else if (mode == Mode::CharPick) {
-      settings.character = charSel;
-      settings.save();
-      mode = Mode::Menu;
-      menuOpenedMs = millis();
-      redraw();
+    } else if (mode == Mode::Menu || mode == Mode::Agents || mode == Mode::CharPick) {
+      chooseHere();
     } else if (mode == Mode::Status) {
       openMenu();
     } else if (mode == Mode::Link) {
@@ -2726,6 +2835,23 @@ void loop() {
   if (buzzOffMs && (int32_t)(millis() - buzzOffMs) >= 0) {
     M5.Power.setVibration(0);
     buzzOffMs = 0;
+    if (buzzMore) {  // the next pulse of a pattern, after its gap
+      buzzAgainMs = millis() + buzzGapMs;
+      if (!buzzAgainMs) buzzAgainMs = 1;
+    }
+  }
+  if (buzzAgainMs && (int32_t)(millis() - buzzAgainMs) >= 0) {
+    const uint8_t more = buzzMore - 1;
+    buzz(buzzOnMs);  // (clears the pattern: set it again)
+    buzzMore = more;
+  }
+  if (pendingTapMs && millis() - pendingTapMs > kDoubleMs + 100) {
+    pendingTapMs = 0;
+    if (mode == Mode::Image) {  // a single tap on a picture: all of it, or the middle again
+      ui::toggleImageFit();
+      hapticTick();
+      redraw();
+    }
   }
   // Wi-Fi power saving holds incoming packets until the radio's next wake-up
   // (100–300 ms), which stalls the speech stream: during a turn — from the

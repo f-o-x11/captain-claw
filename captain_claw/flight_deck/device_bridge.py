@@ -239,11 +239,15 @@ def cue_alone(text: str) -> bool:
         return False
 
 
-def round_fit(width: int, height: int, aspect: float) -> tuple[int, int]:
-    """The largest picture of *aspect* (w/h) that fits inside the circle a
-    round width×height screen shows (its diameter is the shorter side)."""
+def round_cover(width: int, height: int, aspect: float) -> tuple[int, int]:
+    """A picture of *aspect* (w/h) that fills the circle a round width×height
+    screen shows: its shorter side the diameter, the longer one at most
+    twice that (a panorama is cropped to that). The device shows the middle,
+    or all of it scaled down on a tap."""
     d = min(width, height)
-    return max(1, int(d * aspect / math.hypot(1, aspect))), max(1, int(d / math.hypot(1, aspect)))
+    if aspect >= 1:
+        return min(2 * d, max(1, round(d * aspect))), d
+    return d, min(2 * d, max(1, round(d / aspect)))
 
 
 def fit_jpeg(blob: bytes, width: int, height: int, quality: int = 85,
@@ -252,9 +256,10 @@ def fit_jpeg(blob: bytes, width: int, height: int, quality: int = 85,
     """Any picture as a baseline JPEG of exactly width×height (letterboxed on
     black) — what the device's decoder takes — no larger than *max_bytes*
     (the device's WebSocket frame limit; quality steps down to fit). On a
-    round screen the picture fits inside the circle, corners and all. For
-    e-paper (*paper*) it keeps its own shape within width×height, on white,
-    and the device lays it out with the text."""
+    round screen it fills the circle instead (round_cover): the device shows
+    the middle, or all of it on a tap. For e-paper (*paper*) it keeps its own
+    shape within width×height, on white, and the device lays it out with the
+    text."""
     from PIL import Image, ImageOps
 
     bg_rgb = (255, 255, 255) if paper else (0, 0, 0)
@@ -265,11 +270,12 @@ def fit_jpeg(blob: bytes, width: int, height: int, quality: int = 85,
         bg = Image.new("RGBA", im.size, bg_rgb + (255,))
         im = Image.alpha_composite(bg, im)
     im = im.convert("RGB")
-    box = round_fit(width, height, im.width / im.height) if round_screen else (width, height)
-    im = ImageOps.contain(im, box, Image.LANCZOS)
-    if paper:
-        canvas = im
+    if round_screen:
+        canvas = ImageOps.fit(im, round_cover(width, height, im.width / im.height), Image.LANCZOS)
+    elif paper:
+        canvas = ImageOps.contain(im, (width, height), Image.LANCZOS)
     else:
+        im = ImageOps.contain(im, (width, height), Image.LANCZOS)
         canvas = Image.new("RGB", (width, height), bg_rgb)
         canvas.paste(im, ((width - im.width) // 2, (height - im.height) // 2))
     while True:
@@ -902,7 +908,7 @@ class _DeviceConn:
             jpeg = await asyncio.to_thread(fit_jpeg, blob, w, h, max_bytes=max_bytes,
                                            round_screen=self.round_screen, paper=self.paper)
             frames = jpeg_frames(jpeg) if self.chunked else [(BIN_JPEG, jpeg)]
-            if self.paper:  # its own shape: say which
+            if self.paper or self.round_screen:  # its own shape: say which
                 from PIL import Image
 
                 w, h = Image.open(io.BytesIO(jpeg)).size
