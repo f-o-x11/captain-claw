@@ -49,9 +49,8 @@ def sample_picture(path: Path) -> None:
 
 def sample_background(path: Path) -> None:
     """A picture made the way Flight Deck makes a background
-    (flight_deck/device_backgrounds.prepare): filling the circle, darkened."""
-    from PIL import ImageEnhance
-
+    (flight_deck/device_backgrounds.prepare): filling the circle (the watch
+    darkens it behind its screens itself)."""
     w = h = D
     im = Image.new("RGB", (w, h))
     px = im.load()
@@ -65,7 +64,7 @@ def sample_background(path: Path) -> None:
                (w, h * 0.58), (w, h)], fill=(60, 50, 110))
     d.polygon([(0, h), (0, h * 0.78), (w * 0.4, h * 0.64), (w * 0.7, h * 0.8), (w, h * 0.72), (w, h)],
               fill=(25, 30, 60))
-    ImageEnhance.Brightness(im).enhance(0.42).save(path, "JPEG", quality=88)
+    im.save(path, "JPEG", quality=88)
 
 
 def framed(ppm: Path) -> Image.Image:

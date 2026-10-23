@@ -2,10 +2,11 @@
 
 The owner sends a picture to their agent ("make this my watch background");
 the agent's ``watch_background`` tool hands it to Flight Deck, which crops it
-to fill the circle, darkens it so the screens' text stays readable and keeps it
-per user and device kind. The device bridge sends it to the watch — now if it's
-connected, else when it next connects: the watch names the background it has in
-its "prefs", and only firmware that does gets one.
+to fill the circle and keeps it per user and device kind. The device bridge
+sends it to the watch — now if it's connected, else when it next connects: the
+watch names the background it has in its "prefs", and only firmware that does
+gets one. From 0.13.1 the watch darkens it itself behind the screens (and shows
+it as it is on its own); 0.13.0 gets it darkened here.
 
     POST /fd/device/agent/background   agent: {"image_b64", "filename"} or {"clear": true}
 
@@ -31,7 +32,8 @@ router = APIRouter()
 
 HW = "stopwatch"                 # the one device kind with a round screen
 SIZE = 466                       # its screen, square
-DIM = 0.42                       # brightness kept: white text stays readable on it
+DIM = 0.42                       # brightness kept behind text: white text stays readable
+DIMS_ITSELF = (0, 13, 1)         # firmware from here darkens it on the watch
 MAX_BYTES = 120_000              # one chunked picture (device_bridge.MAX_CHUNKED_JPEG_BYTES)
 MAX_UPLOAD = 20 * 1024 * 1024    # what the agent may send (a phone photo is a few MB)
 _ID_RE = re.compile(r"[^A-Za-z0-9_-]")
@@ -49,10 +51,10 @@ def _path(user_id: str, hw: str) -> Path:
     return root() / user / f"{kind}.jpg"
 
 
-def prepare(blob: bytes, size: int = SIZE, dim: float = DIM, max_bytes: int = MAX_BYTES) -> bytes:
+def prepare(blob: bytes, size: int = SIZE, max_bytes: int = MAX_BYTES) -> bytes:
     """Any picture → a size×size baseline JPEG that fills the round screen
-    (centre crop, turned the way the camera held it), darkened by *dim*."""
-    from PIL import Image, ImageEnhance, ImageOps, UnidentifiedImageError
+    (centre crop, turned the way the camera held it)."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
 
     try:
         im = Image.open(io.BytesIO(blob))
@@ -64,14 +66,38 @@ def prepare(blob: bytes, size: int = SIZE, dim: float = DIM, max_bytes: int = MA
         flat = Image.new("RGBA", im.size, (0, 0, 0, 255))
         flat.alpha_composite(im)
         im = flat
-    im = ImageOps.fit(im.convert("RGB"), (size, size), Image.Resampling.LANCZOS)
-    im = ImageEnhance.Brightness(im).enhance(dim)
+    return _encode(ImageOps.fit(im.convert("RGB"), (size, size), Image.Resampling.LANCZOS), max_bytes)
+
+
+def darken(jpeg: bytes, dim: float = DIM, max_bytes: int = MAX_BYTES) -> bytes:
+    """A prepared background darkened by *dim*, for firmware that doesn't."""
+    from PIL import Image, ImageEnhance
+
+    return _encode(ImageEnhance.Brightness(Image.open(io.BytesIO(jpeg)).convert("RGB")).enhance(dim), max_bytes)
+
+
+def _encode(im, max_bytes: int) -> bytes:
+    """Baseline JPEG (the device's decoder takes nothing else), as good as fits."""
     for quality in (88, 80, 72, 64, 56, 48, 40):
         out = io.BytesIO()
         im.save(out, "JPEG", quality=quality, optimize=True, progressive=False)
         if out.tell() <= max_bytes:
             return out.getvalue()
     raise ValueError("the picture doesn't fit the device even at low quality")
+
+
+def dims_itself(fw: str) -> bool:
+    from captain_claw.flight_deck.device_firmware import version_key
+
+    return version_key(fw) >= DIMS_ITSELF
+
+
+def for_device(jpeg: bytes, fw: str) -> tuple[str, bytes | None]:
+    """(id, bytes) of the background as a device running *fw* takes it; the
+    bytes are made only when it's sent (None until then is fine for comparing)."""
+    if dims_itself(fw):
+        return picture_id(jpeg), jpeg
+    return hashlib.sha256(jpeg + b"darkened").hexdigest()[:16], None
 
 
 def picture_id(jpeg: bytes) -> str:

@@ -864,12 +864,14 @@ class _DeviceConn:
         from captain_claw.flight_deck import device_backgrounds
 
         have = device_backgrounds.current(self.user_id, self.hw)
-        want = have[0] if have else ""
+        want, jpeg = device_backgrounds.for_device(have[1], self.fw) if have else ("", b"")
         if want == self.bg_id:
             return 0
+        if jpeg is None:  # firmware that shows it as it comes: darkened here
+            jpeg = await asyncio.to_thread(device_backgrounds.darken, have[1])
         async with self._image_lock:  # never between an answer's picture parts
-            await self.send_json({"type": "background", "id": want, "size": len(have[1]) if have else 0})
-            for kind, part in (jpeg_frames(have[1]) if have else []):
+            await self.send_json({"type": "background", "id": want, "size": len(jpeg)})
+            for kind, part in (jpeg_frames(jpeg) if jpeg else []):
                 await self.send_bin(BIN_BG if kind == BIN_JPEG else BIN_BG_PART, part)
         self.bg_id = want
         return 1

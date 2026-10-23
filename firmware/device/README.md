@@ -138,7 +138,9 @@ Swipe an answer to page it: left or up for the next page, right or down for
 the one before — and from the first page back to its picture, when it came
 with one. Swipes stop at either end. A double tap (off the record button)
 goes to the home screen from an answer, a picture, the menu or a notice; a
-swipe there brings the answer back.
+swipe there brings the answer back. With a background picture set, a double
+tap on the home screen shows the picture alone, nothing over it; a double tap
+there (or the other button) goes back home, a swipe to the answer.
 
 *Tap to talk* (Menu, or the settings page; off by default) puts a record
 button on the screen: under the name at home, under an answer or the
@@ -152,13 +154,16 @@ Text uses Inter (`fonts/`, made by `tools/make_fonts.py`; SIL OFL, see
 
 **Background picture** (0.13.0). Send your agent a picture and ask for it as the
 watch background: its `watch_background` tool hands it to Flight Deck
-(`flight_deck/device_backgrounds.py`), which crops it to fill the circle,
-darkens it so the text stays readable and keeps it. Every screen is drawn on it
-instead of black — except a picture the agent shows, which stays on black. The
-watch keeps it in flash (`/background.jpg`), names it in `prefs` (`"bg": id`), and
-Flight Deck sends the owner's (`{"type":"background","id","size"}`, then 0x04
-parts and a 0x05 last part) whenever it's another one; size 0 clears it. Ask the
-agent to clear it to go back to black.
+(`flight_deck/device_backgrounds.py`), which crops it to fill the circle and
+keeps it. Every screen is drawn on it, darkened so the text stays readable,
+instead of black — except a picture the agent shows, which stays on black. A
+double tap on the home screen shows the picture alone, as it is (0.13.1); a
+double tap there goes back home. The watch keeps it in flash (`/background.jpg`),
+names it in `prefs` (`"bg": id`), and Flight Deck sends the owner's
+(`{"type":"background","id","size"}`, then 0x04 parts and a 0x05 last part)
+whenever it's another one; size 0 clears it. 0.13.0 darkens nothing itself, so it
+gets the picture darkened by Flight Deck. Ask the agent to clear it to go back to
+black.
 
 To see every screen without the watch (Mac, SDL2 from Homebrew):
 
