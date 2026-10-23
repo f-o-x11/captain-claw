@@ -196,6 +196,14 @@ background behind text screens is **frosted** — a light blur, then darkened �
 so a busy photo doesn't fight the words; the picture-only screen keeps it
 sharp.
 
+0.16.0: an answer's page dots sit under the clock and its text starts lower,
+clear of the buttons; the clock face shows the agent's character (small,
+alive) over its name instead of an initials badge; the status is three
+pages of gauges — the ring as the Wi-Fi signal with the deck and agent under
+it, the ring as the battery with uptime and use, then the firmware, voice,
+memory and notes; a replay, or play after a pause, goes to the page the
+voice is on and follows it again.
+
 *Tap to talk* (Menu, or the settings page; off by default) puts a record
 button on the screen: under the name at home, under an answer or the
 character. Tap it and talk; the button turns into a stop square, and a second

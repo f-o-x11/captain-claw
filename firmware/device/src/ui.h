@@ -75,6 +75,73 @@ struct Row {
 // count. The title shows on the first page only.
 int showPanel(const char* title, uint16_t titleColor, const std::vector<Row>& rows, int page = 0);
 
+// What the status screens show. The round screen draws it as gauges over
+// three pages; the others as rows (statusRows).
+struct Status {
+  bool wifi = false;
+  String ssid, ip;
+  int rssi = 0;
+  bool deck = false;
+  String deckHost;
+  int rttMs = -1;
+  String agent;
+  bool agentLinked = false;
+  int batteryPct = -1, batteryMv = 0;
+  bool charging = false, usb = false;
+  String uptime;
+  int turns = 0, lastAnswerMin = -1;
+  bool climate = false;
+  float tempC = 0, humidity = 0;
+  String voice;
+  int volumePct = 0, boostDb = 0;
+  bool speak = true;
+  uint8_t textSize = 0;
+  String deviceId, fw;
+  uint32_t freeKb = 0;
+  int notes = 0, notesRoomMin = 0;
+  String notesLength;
+  bool notesSending = false;
+  String update;  // a newer version on offer ("" none)
+};
+int showStatus(const Status& s, int page);  // returns the page count
+
+inline std::vector<Row> statusRows(const Status& s) {
+  const uint16_t green = rgb(40, 200, 90), yellow = rgb(250, 200, 40), red = rgb(230, 50, 50),
+                 text = rgb(230, 230, 230), cyan = rgb(60, 210, 240);
+  std::vector<Row> rows;
+  rows.push_back({"Wi-Fi", s.wifi ? s.ssid + "  " + String(s.rssi) + " dBm" : String("not connected"),
+                  s.wifi ? (s.rssi < -80 ? yellow : green) : red});
+  rows.push_back({"IP", s.wifi ? s.ip : String("-"), text});
+  rows.push_back({"Deck", s.deckHost + (s.deck ? (s.rttMs >= 0 ? "  " + String(s.rttMs) + " ms" : String("  ok")) : String("  offline")),
+                  s.deck ? green : red});
+  rows.push_back({"Agent", (s.agent.length() ? s.agent : String("none")) + (s.agentLinked ? "" : "  (waiting)"),
+                  s.agentLinked ? green : (s.deck ? yellow : red)});
+  char volts[16];
+  snprintf(volts, sizeof(volts), "%.2f V", s.batteryMv / 1000.0f);
+  rows.push_back({"Battery", String(s.batteryPct) + "%  " + volts + (s.charging ? "  charging" : ""),
+                  s.batteryPct >= 40 ? green : s.batteryPct >= 20 ? yellow : red});
+  if (s.climate) {
+    char room[32];
+    snprintf(room, sizeof(room), "%.1f °C  %d%% humidity", s.tempC, (int)(s.humidity + 0.5f));
+    rows.push_back({"Room", room, text});
+  }
+  rows.push_back({"Voice", s.voice + "  vol " + String(s.volumePct) + "%" +
+                               (s.boostDb ? "  +" + String(s.boostDb) + " dB" : String("")) + (s.speak ? "" : "  muted"),
+                  text});
+  rows.push_back({"Usage", String(s.turns) + " turn" + (s.turns == 1 ? "" : "s") +
+                               (s.lastAnswerMin >= 0 ? "  last " + String(s.lastAnswerMin) + "m ago" : String("")) +
+                               "  up " + s.uptime,
+                  text});
+  rows.push_back({"Device", s.deviceId + "  fw " + s.fw + "  " + String(s.freeKb) + "k free", text});
+  if (s.notes) {
+    rows.push_back({"Offline notes", String(s.notes) + " waiting  " + s.notesLength + "  room " + String(s.notesRoomMin) +
+                                         " min" + (s.notesSending ? "  sending…" : ""),
+                    yellow});
+  }
+  if (s.update.length()) rows.push_back({"Update", s.update + " available (menu → Software update)", cyan});
+  return rows;
+}
+
 // The main screen when nothing is going on (text mode). The stick shows the
 // title and rows as a panel; the round screen shows the agent's badge with
 // the hint under it.
@@ -117,6 +184,9 @@ bool onFirstPage();
 // user paged by hand. True when the screen needs drawing again (the
 // sentence or the page changed).
 bool setSpoken(int at);
+// The page turns with the voice again, from where it is now (a replay, or
+// play after a pause and paging by hand).
+void followVoice(int at);
 // More of the answer (it streams in): the text so far, keeping the page and
 // the voice's place.
 void growReply(const String& t);
