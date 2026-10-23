@@ -35,6 +35,7 @@ static constexpr int kTitleY = 322, kNoteY = 360, kDotsY = 402, kBatteryY = 438;
 // Tap to talk's button: under the name (home, listening), or lower and a
 // little smaller under an answer or a character, whose text then ends higher.
 static constexpr int kTapY = 386, kTapR = 30, kTapLowY = 414, kTapLowR = 26, kTapReplyBottom = 352;
+static constexpr int kAskY = 396;          // the yes/no pills' middle
 
 static constexpr uint16_t kBlack = 0x0000, kWhite = 0xFFFF;
 static constexpr uint16_t kText = rgb(236, 238, 244), kDim = rgb(140, 146, 160), kFaint = rgb(78, 82, 94);
@@ -66,6 +67,8 @@ static int replyPage = 0;
 static bool replyCentred = false;  // one short page: the block sits mid-screen
 static uint8_t* imgBuf = nullptr;
 static size_t imgLen = 0;
+static bool imgFit = false;        // the whole picture scaled down (a tap), else it fills the circle
+static bool askShown = false;      // the yes/no pills are on the screen (askHit)
 static M5Canvas backdrop;          // the background picture as it is (setBackground), PSRAM
 static M5Canvas backdropDim;       // the same darkened: what the screens draw on
 static bool hasBackdrop = false;
@@ -112,6 +115,7 @@ static void beginFrame(bool plain = false) {
   if (hasBackdrop && !plain) backdropDim.pushSprite(&canvas, 0, 0);
   else canvas.fillScreen(kBlack);
   tapR = 0;
+  askShown = false;
 }
 
 static void push() {
@@ -535,6 +539,13 @@ static void drawGlyph(Glyph g, int cx, int cy) {
       canvas.fillTriangle(cx - 13, cy - 28, cx + 3, cy - 40, cx + 3, cy - 16, c);
       canvas.fillTriangle(cx - 7, cy - 12, cx - 7, cy + 12, cx + 13, cy, c);
       break;
+    case Glyph::Gear:  // a ring with eight teeth
+      for (int i = 0; i < 8; ++i) {
+        const float a = i * 45 * 3.14159f / 180;
+        canvas.drawWideLine(cx + 20 * cosf(a), cy + 20 * sinf(a), cx + 31 * cosf(a), cy + 31 * sinf(a), 9.0f, c);
+      }
+      canvas.fillArc(cx, cy, 12, 24, 0, 360, c);
+      break;
     default:
       break;
   }
@@ -721,15 +732,16 @@ void showSleeping(const String& hint, uint8_t) { showMessage("Sleeping", hint, T
 
 // Notices: a round alert mark, the title, then the text — and for a
 // question, which button says what under it (two short lines: `foot`, `foot2`).
+// With *yes* and *no*: two pills to tap instead of the foot lines (showAsk).
 static void drawNotice(const char* title, const String& body, uint16_t color, const String& foot,
-                       const String& foot2 = "") {
+                       const String& foot2 = "", const char* yes = nullptr, const char* no = nullptr) {
   beginFrame();
   drawChrome();
   // Warnings (red, orange…) get "!", everything else (white, grey, green) "i".
   const bool warn = !(color == kWhite || color == TFT_DARKGREY || color == rgb(40, 200, 90));
   uint16_t mark = color == kWhite ? kBlue : color;
   canvas.fillSmoothCircle(CX, 128, 30, mark);
-  if (foot.length()) {
+  if (foot.length() || yes) {
     font(vlw::Title);
     text("?", CX, 130, kBlack);
   } else if (warn) {
@@ -743,9 +755,18 @@ static void drawNotice(const char* title, const String& body, uint16_t color, co
   text(fit(title, lineRoom(170, 210)), CX, 190, color == kWhite ? kText : color);
   font(ts().body);
   int first = 0;
-  auto lines = wrapCentred(body, 222, foot.length() ? 362 : kBottom + 20, ts().line, 6, &first);
+  auto lines = wrapCentred(body, 222, foot.length() || yes ? 362 : kBottom + 20, ts().line, 6, &first);
   drawLines(lines, first, ts().line, kDim);
-  if (foot.length()) {
+  if (yes) {
+    const int y = kAskY, h = 44, w = 140, gap = 16;
+    canvas.fillSmoothRoundRect(CX - gap / 2 - w, y - h / 2, w, h, h / 2, rgb(40, 200, 90));
+    canvas.fillSmoothRoundRect(CX + gap / 2, y - h / 2, w, h, h / 2, mix(kBlack, kText, 0.85f));
+    canvas.fillSmoothRoundRect(CX + gap / 2 + 2, y - h / 2 + 2, w - 4, h - 4, h / 2 - 2, kBlack);
+    font(vlw::BodyS);
+    text(yes, CX - gap / 2 - w / 2, y + 1, kBlack);
+    text(no, CX + gap / 2 + w / 2, y + 1, kText);
+    askShown = true;
+  } else if (foot.length()) {
     font(vlw::Small);
     text(fit(foot, lineRoom(366, 394)), CX, 380, kText);
     text(fit(foot2, lineRoom(394, 422)), CX, 408, kDim);
@@ -765,8 +786,12 @@ static String buttonWord(const char* name) {
 }
 
 void showAsk(const char* title, const String& body, const char* yes, const char* no) {
-  drawNotice(title, body, kWhite, buttonWord(board::kTalkButton) + ": " + yes,
-             buttonWord(board::kSideButton) + ": " + no);
+  drawNotice(title, body, kWhite, "", "", yes, no);  // (the buttons work as before: talk = yes, side = no)
+}
+
+int askHit(int x, int y) {
+  if (!askShown || abs(y - kAskY) > 34) return -1;
+  return x < CX ? 1 : 0;
 }
 
 int showPanel(const char* title, uint16_t titleColor, const std::vector<Row>& rows, int page) {
@@ -1042,15 +1067,41 @@ void storeImage(uint8_t* jpg, size_t len) {
   if (imgBuf) free(imgBuf);
   imgBuf = jpg;
   imgLen = jpg ? len : 0;
+  imgFit = false;  // a new picture fills the circle
 }
+
+// Width and height from a baseline JPEG's frame header.
+static bool jpegSize(const uint8_t* d, size_t n, int* w, int* h) {
+  size_t i = 2;
+  while (i + 9 < n && d[i] == 0xFF) {
+    const uint8_t m = d[i + 1];
+    const size_t len = (d[i + 2] << 8) | d[i + 3];
+    if (m == 0xC0 || m == 0xC1 || m == 0xC2) {
+      *h = (d[i + 5] << 8) | d[i + 6];
+      *w = (d[i + 7] << 8) | d[i + 8];
+      return *w > 0 && *h > 0;
+    }
+    if (m == 0xD8 || (m >= 0xD0 && m <= 0xD7)) i += 2;  // markers without a length
+    else i += 2 + len;
+  }
+  return false;
+}
+
+void toggleImageFit() { imgFit = !imgFit; }
 
 bool hasImage() { return imgLen > 0; }
 
 void showStoredImage() {
   if (!imgLen) return;
   beginFrame(true);
-  // Centred; a picture made for a smaller screen is shown at its own size.
-  canvas.drawJpg(imgBuf, imgLen, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center);
+  // Centred: the deck sends it filling the circle (its shorter side the
+  // screen's), so the middle shows; after a tap, all of it, scaled down.
+  float scale = 1.0f;
+  int iw = 0, ih = 0;
+  if (imgFit && jpegSize(imgBuf, imgLen, &iw, &ih) && (iw > W || ih > H)) {
+    scale = min((float)W / iw, (float)H / ih);
+  }
+  canvas.drawJpg(imgBuf, imgLen, 0, 0, W, H, 0, 0, scale, scale, lgfx::datum_t::middle_center);
   push();
 }
 

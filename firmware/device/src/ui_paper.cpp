@@ -1403,5 +1403,7 @@ void flashFrame(bool) {}  // the status lights flash instead
 
 void setTapButton(TapButton) {}  // no touch screen
 bool tapButtonHit(int, int) { return false; }
+int askHit(int, int) { return -1; }
+void toggleImageFit() {}
 
 }  // namespace ui

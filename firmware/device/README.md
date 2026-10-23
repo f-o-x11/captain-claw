@@ -142,6 +142,18 @@ swipe there brings the answer back. With a background picture set, a double
 tap on the home screen shows the picture alone, nothing over it; a double tap
 there (or the other button) goes back home, a swipe to the answer.
 
+The menu, the agent and character pickers and the status pages take touch
+too: swipe left for the next row or page, right for the one before, tap a
+chevron for the same, tap the badge between them to choose. The "send voice
+notes?" question has two pills to tap. A picture from the agent fills the
+circle; a single tap shows all of it, scaled down, and another fills again.
+The menu has two levels: what you reach for in the moment at the top (Replay,
+Status, Agent, Volume, Tap to talk, Software update, Wi-Fi) and the rest under
+*Settings*. The watch answers touch with a vibration vocabulary: a tick for a
+step or a page, a double tick at the end, a longer one for a choice, three
+for something that went wrong. The home screen's "Hold the yellow button to
+talk" goes away after the first five recordings.
+
 *Tap to talk* (Menu, or the settings page; off by default) puts a record
 button on the screen: under the name at home, under an answer or the
 character. Tap it and talk; the button turns into a stop square, and a second
