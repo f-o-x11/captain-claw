@@ -1146,6 +1146,10 @@ class AgentOrchestrationMixin:
         # Reset blind-rewrite tracker — a full write in a PREVIOUS turn must
         # not block a rewrite the user explicitly asked for in this turn.
         self._blind_write_paths: set[str] = set()
+        # Reset the per-turn Jev block reviews (jev_block_review): how many
+        # ran, and the calls Jev already let repeat once.
+        self._jev_block_reviews: int = 0
+        self._jev_released_sigs: set[str] = set()
         # Reset per-turn all-blocked streak counter.
         self._all_blocked_streak: int = 0
         # Reset tool-avoidance nudge flag (one nudge per turn max).

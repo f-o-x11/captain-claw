@@ -944,6 +944,7 @@ tools:
     timeout: 30                     # seconds per Jev request (429/529/5xx are retried)
     check_replies: true             # flag garbled chat replies and suggest /new
     check_progress: true            # when a turn runs out of steps, let Jev decide whether to extend
+    review_blocks: true             # when a guard refuses a repeated call, let Jev pick the next step
 ```
 
 **Jev first.** While a key is usable, the system prompt tells the agent to ask Jev whenever a task involves judging content — triage, routing, relevance, claim-vs-source checks, tone/urgency/risk, rubric scores, duplicates, best-of-N, a yes/no check before acting — with one call per piece of content carrying all its questions, and to say when Jev drove a decision. In eco mode `jev` is a core tool, so its schema is always sent (it stays hidden until a key works).
@@ -951,6 +952,16 @@ tools:
 **Garbled-reply check.** After a person's chat turn (web, WhatsApp, Telegram, the glasses HUD), Jev is asked one yes/no question: did the reply come out as unusable garbage (a looping line, token soup, raw tool-call JSON or control tokens, text cut off mid-word)? At p ≥ 0.8 the surface gets one extra notice — *"That reply came out garbled — this session may be overloaded. Send /new to start a fresh session"*. The notice is never written into the session, never spoken, and skipped for automated, public, shared-member and worker turns; no key, a timeout or a Jev error means no notice. Turn it off with `tools.jev.check_replies: false`.
 
 **Progress check.** When a turn uses up its step budget, the loop's own rule extends it only if the last few steps made new tool calls *and* a plan or requirement says work remains — so a plain request stops even while the agent is plainly working. Before stopping, Jev reads the request and the turn's recent steps (narration, each tool call and a slice of its result) and answers one yes/no question: is the agent still making real progress? At p ≥ 0.6 the budget grows by one more block of steps, never past the turn's hard ceiling, and Jev is asked again when that runs out; otherwise the turn stops and ships what it has, as before. The `completion_gate` entry shows `judge=jev` and `p_progressing`. The stagnation detector (six steps with nothing new) still runs, so a yes can't keep a looping agent alive. Skipped for shared-member turns; no key, a timeout (15 s) or a Jev error means the usual stop. Turn it off with `tools.jev.check_progress: false`.
+
+**Block review.** The tool loop refuses a call that repeats work already done in the turn: a duplicate call, or a full rewrite of a file written with nothing read since. The refusal is usually right, but one fixed follow-up message doesn't fit every case. Jev reads the request, the turn's recent steps and the refused call, and picks one next step:
+- **verify:** read the file once before deciding;
+- **continue:** go on with the rest of the request (share, send, the next item);
+- **finish:** give the final answer;
+- **ask_user:** ask the person.
+
+The pick's fixed instruction replaces the guard's usual message when p ≥ 0.55. For a read-only call (read, glob, search, fetch, or a `list`/`get`/`search` action), Jev may also judge that the repeat is legitimate because something changed since. At p ≥ 0.8 the call then runs, once per call per turn. A call that sends, creates or changes something is never released. Scale-loop items and Google/Microsoft send or mailbox changes keep their own messages.
+
+At most 3 reviews run per turn, and the `completion_gate` entry shows `step=jev_block_review`, the choice and p. Skipped for shared-member turns. No key, a timeout (8 s) or a Jev error means the usual message. Turn it off with `tools.jev.review_blocks: false`.
 
 ### todo
 
