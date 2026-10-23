@@ -218,23 +218,25 @@ int main(int argc, char** argv) {
   ui::showPicker(agents, 1, 0);
   save("13_agents_other");
 
-  bar("status 1/2", kText);
-  std::vector<ui::Row> rows = {
-      {"Wi-Fi", "Kuharski-5G  -54 dBm", kGreen},
-      {"IP", "192.168.1.48", kText},
-      {"Deck", "glasses.captain-claw.com  38 ms", kGreen},
-      {"Agent", "Captain Claw", kGreen},
-      {"Battery", "82%  3.98 V", kGreen},
-      {"Voice", "female  vol 75%  +6 dB", kText},
-      {"Usage", "7 turns  last 2m ago  up 1h 12m", kText},
-      {"Device", "watch-a1b2c3  fw 0.7.0  7480k free", kText},
-  };
-  int pages = ui::showPanel("", kText, rows, 0);
-  save("14_status_p1");
-  if (pages > 1) {
-    ui::showPanel("", kText, rows, 1);
-    save("15_status_p2");
-  }
+  ui::Status st;
+  st.wifi = true, st.ssid = "Kuharski-5G", st.rssi = -54, st.ip = "192.168.1.48";
+  st.deck = true, st.deckHost = "glasses.captain-claw.com", st.rttMs = 38;
+  st.agent = "Captain Claw", st.agentLinked = true;
+  st.batteryPct = 82, st.batteryMv = 3980, st.charging = false, st.usb = false;
+  st.uptime = "1h 12m", st.turns = 7, st.lastAnswerMin = 2;
+  st.voice = "female", st.volumePct = 75, st.boostDb = 6, st.speak = true, st.textSize = 1;
+  st.deviceId = "watch-a1b2c3", st.fw = "0.16.0", st.freeKb = 7480;
+  st.notes = 3, st.notesLength = "1:24", st.notesRoomMin = 14;
+  st.update = "0.16.1";
+  bar("status 1/3", kText);
+  ui::showStatus(st, 0);
+  save("14_status_connection");
+  bar("status 2/3", kText);
+  ui::showStatus(st, 1);
+  save("15_status_power");
+  bar("status 3/3", kText);
+  ui::showStatus(st, 2);
+  save("15b_status_device");
 
   bar("ready", kGreen);
   ui::showMessage("Hmm", "The agent didn't answer in time. Try again in a moment.", kOrange);

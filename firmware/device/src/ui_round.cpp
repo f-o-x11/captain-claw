@@ -34,7 +34,9 @@ static constexpr int kBadgeY = 196, kBadgeR = 80, kGlowR = 128;
 static constexpr int kTitleY = 322, kNoteY = 360, kDotsY = 402, kBatteryY = 438;
 // Tap to talk's button: under the name (home, listening), or lower and a
 // little smaller under an answer or a character, whose text then ends higher.
-static constexpr int kTapY = 386, kTapR = 30, kTapLowY = 414, kTapLowR = 26, kTapReplyBottom = 352;
+static constexpr int kTapY = 386, kTapR = 30, kTapLowY = 414, kTapLowR = 26, kTapReplyBottom = 372;
+static constexpr int kReplyTop = 96, kReplyDotsY = 70;  // an answer: its page dots under the clock, its text below
+static constexpr uint16_t kGood = rgb(40, 200, 90);
 static constexpr int kAskY = 396;          // the yes/no pills' middle
 
 static constexpr uint16_t kBlack = 0x0000, kWhite = 0xFFFF;
@@ -938,47 +940,150 @@ static void drawSmallBadge(Tone tone, const String& name, int cy) {
   text(initials(name), CX, cy + 1, kWhite);
 }
 
-// Idle: a watch first — the date, the time large, the agent's badge small
-// with its name, then the hint (or what's wrong), the battery as an arc at
-// the bottom of the ring and in words. Before the clock is known, the badge
-// takes the middle as it used to.
+static void drawCharacter(uint8_t kind, face::Pose pose, int level, int cy, float zoom = 1.6f);
+
+// Idle: a watch first — the date, the time large, the agent's character
+// (small, alive) with its name under it, then the hint (or what's wrong),
+// the battery as an arc at the bottom of the ring and in words. Before the
+// clock is known, the badge takes the middle as it used to.
 void showHome(const Home& home) {
   beginFrame();
   Tone tone = home.ready ? TBlue : barState == "offline" ? TGrey : TAmber;
   String name = barAgent.length() ? barAgent : String("Captain Claw");
   char clock[8];
-  const bool face = clockText(clock, sizeof(clock));
-  drawChrome(false, !face);
-  if (face) {
+  const bool clockFace = clockText(clock, sizeof(clock));
+  drawChrome(false, !clockFace);
+  if (clockFace) {
     font(vlw::Small);
     text(dateText(), CX, 104, kDim);
     font(vlw::Digits);
     text(clock, CX, 180, kText);
-    drawSmallBadge(tone, name, 282);
+    drawCharacter(home.character, home.ready ? face::Pose::Idle : face::Pose::Sad, 0, 278, 0.7f);
     font(vlw::Title);
-    text(fit(name, lineRoom(324, 358)), CX, 342, kText);
+    text(fit(name, lineRoom(334, 366)), CX, 350, kText);
   } else {
     drawBadge(tone, name, Glyph::Initials);
     font(vlw::Title);
     text(fit(name, lineRoom(kTitleY - 20, kTitleY + 20)), CX, kTitleY, kText);
   }
   if (tapMode == TapButton::Talk) {
-    drawTapButton(face ? 398 : kTapY, face ? kTapLowR : kTapR);  // in place of "hold the yellow button…"
+    drawTapButton(clockFace ? 398 : kTapY, clockFace ? kTapLowR : kTapR);  // in place of "hold the yellow button…"
   } else if (home.hint.length()) {
     font(vlw::Small);
     int first = 0;
-    const int top = face ? 364 : kNoteY - 16;
-    auto lines = wrapCentred(home.hint, top, top + 62, 28, 2, &first);
+    const int top = clockFace ? 370 : kNoteY - 16;
+    auto lines = wrapCentred(home.hint, top, top + 56, 28, 2, &first);
     drawLines(lines, first, 28, home.ready ? kDim : home.color);
   }
   bool chg = false;
   const int pct = batteryPct(&chg);
-  if (face && pct >= 0) {  // the level as an arc at the bottom of the ring
+  if (clockFace && pct >= 0) {  // the level as an arc at the bottom of the ring
     ringArc(150, 60, mix(kBlack, kText, 0.12f), 6, R - 2);
     ringArc(150, max(2, 60 * pct / 100), batteryColor(pct), 6, R - 2);
   }
   drawBatteryAt(kBatteryY, true);
   push();
+}
+
+// ── status: three pages of gauges ──────────────────────────────────────
+
+// A line with a coloured dot before it, and a quieter line under it.
+static void statusTile(int y, uint16_t dot, const String& line, const String& detail, uint16_t detailColor) {
+  font(vlw::BodyS);
+  const String l = fit(line, lineRoom(y - 14, y + 14) - 30);
+  const int w = tw(l);
+  canvas.fillSmoothCircle(CX - w / 2 - 14, y, 5, dot);
+  text(l, CX + 2, y, kText);
+  if (detail.length()) {
+    font(vlw::Small);
+    text(fit(detail, lineRoom(y + 10, y + 34)), CX, y + 24, detailColor);
+  }
+}
+
+// Connection: the ring is the Wi-Fi signal; the deck and the agent under it.
+static void statusConnection(const Status& s) {
+  const int q = s.wifi ? constrain((s.rssi + 100) * 2, 0, 100) : 0;
+  const uint16_t qc = !s.wifi ? kRed : s.rssi >= -67 ? kGood : s.rssi >= -80 ? kAmber : kRed;
+  ringTrack(qc);
+  if (q) ringArc(0, 360.0f * q / 100, qc);
+  drawGlyph(Glyph::Wifi, CX, 112);
+  font(vlw::Title);
+  text(fit(s.wifi ? s.ssid : String("No Wi-Fi"), lineRoom(160, 196)), CX, 178, kText);
+  font(vlw::Small);
+  if (s.wifi) {
+    const char* word = s.rssi >= -67 ? "good" : s.rssi >= -80 ? "fair" : "weak";
+    text(String(s.rssi) + " dBm · " + word, CX, 208, qc);
+  }
+  statusTile(258, s.deck ? kGood : kRed, s.deck ? s.deckHost : String("Deck offline"),
+             s.deck ? (s.rttMs >= 0 ? String(s.rttMs) + " ms round trip" : String("connected")) : String("reconnecting…"),
+             s.deck ? kDim : kRed);
+  statusTile(322, s.agentLinked ? kGood : s.deck ? kAmber : kRed, s.agent.length() ? s.agent : String("No agent"),
+             s.agentLinked ? String("agent linked") : String(s.deck ? "waiting for the agent" : ""), kDim);
+  if (s.wifi) {
+    font(vlw::Small);
+    text(s.ip, CX, 386, kDim);
+  }
+}
+
+// Power: the ring is the battery; uptime and use under it.
+static void statusPower(const Status& s) {
+  const int pct = constrain(s.batteryPct, 0, 100);
+  const uint16_t bc = batteryColor(pct);
+  ringTrack(bc);
+  ringArc(0, max(2.0f, 360.0f * pct / 100), bc);
+  font(vlw::Digits);
+  const String n = String(pct);
+  const int w = tw(n);
+  text(n, CX - 12, 172, kText);
+  font(vlw::Title);
+  text("%", CX - 12 + w / 2 + 8, 184, kText, middle_left);
+  char volts[16];
+  snprintf(volts, sizeof(volts), "%.2f V", s.batteryMv / 1000.0f);
+  font(vlw::Small);
+  text(String(volts) + (s.charging ? " · charging" : s.usb ? " · on USB" : " · on battery"), CX, 236, bc);
+  statusTile(290, kText, "Up " + s.uptime,
+             String(s.turns) + (s.turns == 1 ? " answer" : " answers") +
+                 (s.lastAnswerMin >= 0 ? " · last " + String(s.lastAnswerMin) + " min ago" : String("")),
+             kDim);
+  if (s.climate) {
+    char room[24], hum[24];
+    snprintf(room, sizeof(room), "%.1f °C", s.tempC);
+    snprintf(hum, sizeof(hum), "%d%% humidity", (int)(s.humidity + 0.5f));
+    statusTile(354, kText, room, hum, kDim);
+  }
+}
+
+// Device: the build, the voice, memory, notes kept offline.
+static void statusDevice(const Status& s) {
+  ringTrack(mix(kBlack, kText, 0.4f));
+  font(vlw::Title);
+  text("Firmware " + s.fw, CX, 128, kText);
+  font(vlw::Small);
+  text(s.deviceId, CX, 160, kDim);
+  if (s.update.length()) text("Update " + s.update + " available", CX, 188, kCyan);
+  static const char* sizes[] = {"small", "medium", "large"};
+  statusTile(240, s.speak ? kGood : kAmber, "Voice " + s.voice + " · " + String(s.volumePct) + "%" +
+                                                 (s.boostDb ? " · +" + String(s.boostDb) + " dB" : String("")),
+             s.speak ? String("text ") + sizes[s.textSize % 3] : String("muted · text ") + sizes[s.textSize % 3], kDim);
+  statusTile(304, kText, String(s.freeKb) + " KB free", "memory for pictures and sound", kDim);
+  if (s.notes) {
+    statusTile(368, kAmber, String(s.notes) + (s.notes == 1 ? " note kept offline" : " notes kept offline"),
+               s.notesLength + " · room for " + String(s.notesRoomMin) + " min" + (s.notesSending ? " · sending…" : ""),
+               kDim);
+  }
+}
+
+int showStatus(const Status& s, int page) {
+  const int pages = 3;
+  page = constrain(page, 0, pages - 1);
+  beginFrame();
+  if (page == 0) statusConnection(s);
+  else if (page == 1) statusPower(s);
+  else statusDevice(s);
+  drawChrome();
+  drawPageDots(pages, page, 424);
+  push();
+  return pages;
 }
 
 // Recent mic levels, newest last, for the bars under the timer.
@@ -1066,14 +1171,14 @@ static void layoutReply() {
   font(ts().body);
   const int line = ts().line;
   const int bottom = replyBottom();
-  const int per = (bottom - kTop) / line;
+  const int per = (bottom - kReplyTop) / line;
   auto lines = wrap(replyText, [&](int k) {
-    int y = kTop + (k % per) * line;
+    int y = kReplyTop + (k % per) * line;
     return lineRoom(y, y + line);
   });
   if ((int)lines.size() <= per) {  // one page: centred, where the lines are wider
     int first = 0;
-    replyPages.push_back(wrapCentred(replyText, kTop, bottom, line, per, &first));
+    replyPages.push_back(wrapCentred(replyText, kReplyTop, bottom, line, per, &first));
     replyCentred = true;
   } else {
     for (int i = 0; i < (int)lines.size(); i += per) {
@@ -1130,6 +1235,14 @@ static void sentenceAt(int at, int* from, int* to) {
   *to = n;
 }
 
+// The page character *at* is on.
+static int pageOf(int at) {
+  for (int i = 0; i < (int)pageEnds.size(); ++i) {
+    if (at < pageEnds[i]) return i;
+  }
+  return max(0, (int)pageEnds.size() - 1);
+}
+
 bool setSpoken(int at) {
   if (at < 0) {
     const bool was = litTo >= 0;
@@ -1142,13 +1255,21 @@ bool setSpoken(int at) {
   bool changed = from != litFrom || to != litTo;
   litFrom = from;
   litTo = to;
-  if (autoFollow && replyPage + 1 < (int)replyPages.size() && replyPage < (int)pageEnds.size() &&
-      spokenAt >= pageEnds[replyPage]) {
-    ++replyPage;  // the voice has gone on to the next page
-    nextFx = Fx::SlideOn;
+  const int page = pageOf(spokenAt);
+  if (autoFollow && page != replyPage) {  // the voice is on another page
+    nextFx = page > replyPage ? Fx::SlideOn : Fx::SlideBack;
+    replyPage = page;
     changed = true;
   }
   return changed;
+}
+
+void followVoice(int at) {
+  autoFollow = true;
+  if (at < 0) at = 0;
+  spokenAt = min(at, (int)replyText.length());
+  sentenceAt(spokenAt, &litFrom, &litTo);
+  replyPage = pageOf(spokenAt);
 }
 
 void setReplayable(bool on) { replayable = on; }
@@ -1201,7 +1322,7 @@ void showReply() {
     font(ts().body);
     const auto& lines = replyPages[replyPage];
     int line = ts().line;
-    int top = replyCentred ? kTop + ((replyBottom() - kTop) - (int)lines.size() * line) / 2 : kTop;
+    int top = replyCentred ? kReplyTop + ((replyBottom() - kReplyTop) - (int)lines.size() * line) / 2 : kReplyTop;
     // While it's spoken, the sentence the voice is in is lit, the rest dimmed.
     const auto* spans = replyPage < (int)lineSpans.size() ? &lineSpans[replyPage] : nullptr;
     for (int i = 0; i < (int)lines.size(); ++i) {
@@ -1212,7 +1333,7 @@ void showReply() {
       }
       text(lines[i], CX, top + i * line + line / 2, col);
     }
-    drawPageDots(replyPages.size(), replyPage, replyBottom() + 22);
+    drawPageDots(replyPages.size(), replyPage, kReplyDotsY);
   }
   if (answerButton()) drawTapButton(kTapLowY, kTapLowR);
   if (replayable) drawReplay(answerButton() ? CX - 74 : CX, kTapLowY, 20);
@@ -1240,12 +1361,12 @@ bool onFirstPage() { return replyPage == 0; }
 
 // Characters are drawn for the stick's 240×135 screen (under its 16 px bar),
 // then scaled up smoothly into the middle of the round one.
-static void drawCharacter(uint8_t kind, face::Pose pose, int level, int cy) {
+static void drawCharacter(uint8_t kind, face::Pose pose, int level, int cy, float zoom) {
   faceSprite.fillScreen(hasBackdrop ? kSeeThrough : kBlack);
   face::draw(faceSprite, kind, pose, level, millis(), 120, 76);
   faceSprite.setPivot(120, 76);
-  if (hasBackdrop) faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f, kSeeThrough);
-  else faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f);
+  if (hasBackdrop) faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, zoom, zoom, kSeeThrough);
+  else faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, zoom, zoom);
 }
 
 void showFace(uint8_t kind, face::Pose pose, int level) {

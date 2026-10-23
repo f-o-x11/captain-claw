@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.15.2"
+#define FW_VERSION "0.16.0"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -424,43 +424,44 @@ static ui::TapButton tapButtonKind() {
 
 static void syncTapButton() { ui::setTapButton(tapButtonKind()); }
 
-static std::vector<ui::Row> statusRows() {
-  std::vector<ui::Row> rows;
-  bool wifiOk = WiFi.status() == WL_CONNECTED;
-  rows.push_back({"Wi-Fi", wifiOk ? WiFi.SSID() + "  " + String(WiFi.RSSI()) + " dBm" : String("not connected"),
-                  wifiOk ? (WiFi.RSSI() < -80 ? kYellow : kGreen) : kRed});
-  rows.push_back({"IP", wifiOk ? WiFi.localIP().toString() : String("-"), kText});
-  rows.push_back({"Deck", serverHost() + (wsUp ? (rttMs >= 0 ? "  " + String(rttMs) + " ms" : String("  ok")) : String("  offline")),
-                  wsUp ? kGreen : kRed});
-  rows.push_back({"Agent", (agentName.length() ? agentName : String("none")) + (agentLinked ? "" : "  (waiting)"),
-                  agentLinked ? kGreen : (wsUp ? kYellow : kRed)});
-  int pct = M5.Power.getBatteryLevel();
-  int mv = M5.Power.getBatteryVoltage();
-  bool chg = M5.Power.isCharging() == m5::Power_Class::is_charging;
-  rows.push_back({"Battery", String(pct) + "%  " + String(mv / 1000.0f, 2) + " V" + (chg ? "  charging" : ""),
-                  pct >= 40 ? kGreen : pct >= 20 ? kYellow : kRed});
-  float tC, rh;
-  if (telemetry::climate(&tC, &rh)) {
-    rows.push_back({"Room", String(tC, 1) + " °C  " + String((int)lroundf(rh)) + "% humidity", kText});
+// What the status screens show now.
+static ui::Status statusNow() {
+  ui::Status s;
+  s.wifi = WiFi.status() == WL_CONNECTED;
+  if (s.wifi) {
+    s.ssid = WiFi.SSID();
+    s.rssi = WiFi.RSSI();
+    s.ip = WiFi.localIP().toString();
   }
-  rows.push_back({"Voice", String(settings.femaleVoice ? "female" : "male") + "  vol " +
-                               String((settings.volume * 100 + 127) / 255) + "%" +
-                               (settings.boostDb ? "  +" + String(settings.boostDb) + " dB" : String("")) +
-                               (settings.speak ? "" : "  muted"),
-                  kText});
-  rows.push_back({"Usage", String(turns) + " turn" + (turns == 1 ? "" : "s") +
-                               (lastReplyMs ? "  last " + String((millis() - lastReplyMs) / 60000) + "m ago" : String("")) +
-                               "  up " + uptime(),
-                  kText});
-  rows.push_back({"Device", deviceId() + "  fw " FW_VERSION "  " + String(ESP.getFreePsram() / 1024) + "k free", kText});
-  if (board::kOfflineNotes && notes::count()) {
-    rows.push_back({"Offline notes", String(notes::count()) + " waiting  " + clockLength(notes::seconds()) + "  room " +
-                                         String(notes::room(audio::kMicRate) / audio::kMicRate / 60) + " min" +
-                                         (upAllowed && wsUp ? "  sending…" : ""),
-                    kYellow});
+  s.deck = wsUp;
+  s.deckHost = serverHost();
+  s.rttMs = wsUp ? rttMs : -1;
+  s.agent = agentName;
+  s.agentLinked = agentLinked;
+  s.batteryPct = M5.Power.getBatteryLevel();
+  s.batteryMv = M5.Power.getBatteryVoltage();
+  s.charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
+  s.usb = telemetry::onUsbPower();
+  s.uptime = uptime();
+  s.turns = turns;
+  s.lastAnswerMin = lastReplyMs ? (int)((millis() - lastReplyMs) / 60000) : -1;
+  s.climate = telemetry::climate(&s.tempC, &s.humidity);
+  s.voice = settings.femaleVoice ? "female" : "male";
+  s.volumePct = (settings.volume * 100 + 127) / 255;
+  s.boostDb = settings.boostDb;
+  s.speak = settings.speak;
+  s.textSize = settings.textSize;
+  s.deviceId = deviceId();
+  s.fw = FW_VERSION;
+  s.freeKb = ESP.getFreePsram() / 1024;
+  if (board::kOfflineNotes) {
+    s.notes = notes::count();
+    if (s.notes) s.notesLength = clockLength(notes::seconds());
+    s.notesRoomMin = notes::room(audio::kMicRate) / audio::kMicRate / 60;
+    s.notesSending = upAllowed && wsUp;
   }
-  if (offer.valid()) rows.push_back({"Update", offer.version + " available (menu → Software update)", kCyan});
-  return rows;
+  if (offer.valid()) s.update = offer.version;
+  return s;
 }
 
 static void showIdle() {
@@ -775,6 +776,7 @@ static void startInstall();
 static void connectServer();
 static void dropBackgroundPart();
 static void leaveBackdrop();
+static int spokenCharAt();
 static void setBackground(const uint8_t* jpg, size_t len, const String& id);
 static void sendNotesNow();
 static void replayAnswer();
@@ -821,13 +823,13 @@ static void redraw() {
       break;
     }
     case Mode::Status: {
-      auto rows = statusRows();
-      int n = ui::showPanel("", kText, rows, statusPage);
+      const ui::Status st = statusNow();
+      int n = ui::showStatus(st, statusPage);
       if (n != statusPages || statusPage >= n) {  // the bar showed a stale "x/y"
         statusPages = n;
         statusPage = min(statusPage, n - 1);
         setBarState();
-        ui::showPanel("", kText, rows, statusPage);
+        ui::showStatus(st, statusPage);
       }
       break;
     }
@@ -1533,6 +1535,7 @@ static void replayLocal() {
     return;
   }
   audio::replay();
+  ui::followVoice(0);  // from the start, the page with it
   if (settings.iconMode && mode == Mode::Image) mode = Mode::Reply;
   if (!flashing) redraw();
 }
@@ -1544,6 +1547,7 @@ static void replayAnswer() {
     deckReplay = true;
     deckReplayMs = millis();
     quietSpeech = true;
+    ui::followVoice(0);
     sendType("replay");
   } else {
     replayLocal();
@@ -2734,8 +2738,12 @@ static void pollTouch(bool dark) {
     return;
   }
   if (button == ui::TapButton::Pause || button == ui::TapButton::Play) {
-    if (button == ui::TapButton::Pause) audio::pause();
-    else audio::resume();
+    if (button == ui::TapButton::Pause) {
+      audio::pause();
+    } else {
+      audio::resume();
+      ui::followVoice(spokenCharAt());  // back to the page the voice is on (paged by hand meanwhile)
+    }
     buzz(25);
     redraw();
     return;
@@ -3088,7 +3096,8 @@ void loop() {
       lastDrawMs = millis();
       if (ui::setSpoken(spokenCharAt())) redraw();  // the sentence or the page changed: the whole screen
       else ui::showSpeaking(audio::outputLevel());  // else the speaking line follows the voice (its strip only)
-    } else if (settings.iconMode && mode == Mode::Idle && !ui::hasReply() && since > frameGap(face::frameMs(settings.character))) {
+    } else if ((settings.iconMode || board::kRound) && ((mode == Mode::Idle && !ui::hasReply()) || mode == Mode::Home) &&
+               since > frameGap(face::frameMs(settings.character))) {
       lastDrawMs = millis();  // blinking, rain, bouncing…
       redraw();
     } else if (mode == Mode::CharPick && since > frameGap(face::frameMs(charSel))) {

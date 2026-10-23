@@ -377,6 +377,8 @@ bool onFirstPage() { return page == 0; }
 void slide(bool) {}  // the round screen's
 void fade() {}
 bool setSpoken(int) { return false; }
+void followVoice(int) {}
+int showStatus(const Status& s, int page) { return showPanel("", 0, statusRows(s), page); }
 void growReply(const String& t) { setReply(t); }
 void setReplayable(bool) {}
 bool replayHit(int, int) { return false; }
