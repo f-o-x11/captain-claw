@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.16.1"
+#define FW_VERSION "0.16.2"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -1140,13 +1140,18 @@ static void startSpeech(uint32_t rate, bool cont = false) {
 
 // ── talking from sleep ───────────────────────────────────────────────
 
-// Woken by the talk button, and it's still held: they're talking already.
-// (Where the button toggles, its press is enough.)
-static bool wokenToTalk() {
+// Woken by the talk button.
+static bool wokenByTalk() {
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  bool byTalk = cause == ESP_SLEEP_WAKEUP_EXT0 ||
-                (cause == ESP_SLEEP_WAKEUP_EXT1 && (esp_sleep_get_ext1_wakeup_status() & (1ULL << board::kTalkPin)));
-  return byTalk && (board::kTalkToggles || gpio_get_level(board::kTalkPin) == 0);
+  return cause == ESP_SLEEP_WAKEUP_EXT0 ||
+         (cause == ESP_SLEEP_WAKEUP_EXT1 && (esp_sleep_get_ext1_wakeup_status() & (1ULL << board::kTalkPin)));
+}
+
+// Woken by the talk button, and it's still held: they're talking already.
+// (Where the button toggles, its press is enough — unless the board says a
+// wake press only wakes, as the stick's does.)
+static bool wokenToTalk() {
+  return board::kTalkFromSleep && wokenByTalk() && (board::kTalkToggles || gpio_get_level(board::kTalkPin) == 0);
 }
 
 static void startPreroll(uint32_t maxMs = kPrerollMaxMs) {
@@ -2435,7 +2440,8 @@ void setup() {
                 settings.server.c_str());
 
   M5.update();
-  if ((!talking && talkBtn().isPressed()) || !settings.configured()) {
+  // Held at a cold boot: setup. (A wake press still held isn't that.)
+  if ((!talking && !wokenByTalk() && talkBtn().isPressed()) || !settings.configured()) {
     runSetupPortal(settings.configured() ? "Setup" : "First-time setup");
   }
 

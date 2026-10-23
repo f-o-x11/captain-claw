@@ -232,6 +232,11 @@ def activity_text(text: str, limit: int = 120) -> str:
     return out[:limit]
 
 
+def _blen(s: str) -> int:
+    """Length in UTF-8 bytes: how the firmware counts its text (č, đ, ° are two)."""
+    return len(s.encode("utf-8"))
+
+
 def _common_prefix(a: str, b: str) -> int:
     n = min(len(a), len(b))
     i = 0
@@ -682,17 +687,17 @@ class _DeviceConn:
             read = self.partial[:self.spoken_upto]
             tail = text[len(read):] if text.startswith(read) else text[_common_prefix(text, read):]
             spoken = speakable(tail) if self.speak else ""
-            total = self.spoken_total + len(spoken)
-            span = (len(screen_text(read, has_dj=has_dj)), len(shown))
+            total = self.spoken_total + _blen(spoken)
+            span = (_blen(screen_text(read, has_dj=has_dj)), _blen(shown))
         else:
             spoken = speakable(text) if self.speak else ""
-            total = len(spoken)
-            span = (0, len(shown))
+            total = _blen(spoken)
+            span = (0, _blen(shown))
             _answers[self.channel_id] = []  # a new answer
             self.speech_parts = 0
         # Round screens (the StopWatch) and e-paper use Inter, which has Đ.
-        # "spoken": how much of it is read aloud, so the watch can follow the
-        # voice through the text (0: nothing is).
+        # "spoken": how much of it is read aloud (UTF-8 bytes, as the device
+        # counts), so the watch can follow the voice through the text (0: none).
         await self.send_json({"type": "reply", "text": shown, "proactive": proactive, "spoken": total})
         if spoken:
             _answers.setdefault(self.channel_id, []).append(("tts", spoken, span))
@@ -730,10 +735,10 @@ class _DeviceConn:
         spoken = speakable(sentence) if self.speak else ""
         if spoken:
             has_dj = self.round_screen or self.paper
-            span = (len(screen_text(self.partial[:start], has_dj=has_dj)),
-                    len(screen_text(self.partial[:end], has_dj=has_dj)))
+            span = (_blen(screen_text(self.partial[:start], has_dj=has_dj)),
+                    _blen(screen_text(self.partial[:end], has_dj=has_dj)))
             _answers.setdefault(self.channel_id, []).append(("tts", spoken, span))
-            self.spoken_total += len(spoken)
+            self.spoken_total += _blen(spoken)
             await self._audio_q.put(("tts", spoken, span))
 
     async def _reset_stream(self) -> None:
