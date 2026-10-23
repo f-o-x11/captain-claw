@@ -27,6 +27,7 @@ constexpr const char* kTalkHint = "Hold the yellow button to talk";  // the home
 // Hold to talk, let go to send (false), or press to start and press again to
 // send (true).
 constexpr bool kTalkToggles = false;
+constexpr bool kTalkFromSleep = true;  // woken by the talk button and still holding it: talking already
 // Which of M5Unified's buttons (A/B/C) talks, goes next and goes back (0: none).
 constexpr char kTalkM5 = 'A', kSideM5 = 'B', kBackM5 = 0;
 constexpr const char* kTalkKey = "A";         // the letters a screen prints for them
@@ -62,6 +63,7 @@ constexpr const char* kTalkButton = "top button";
 constexpr const char* kSideButton = "A button";
 constexpr const char* kTalkHint = "Top button to talk";  // fits the home screen's chip
 constexpr bool kTalkToggles = true;  // press to start, press again to send: no holding on
+constexpr bool kTalkFromSleep = true;  // a press that wakes it starts a recording
 // M5Unified: BtnA = KEY3 (G10, top left), BtnB = KEY2 (G9, under it),
 // BtnC = KEY1 (G1, on top). All three are RTC GPIOs, so any of them wakes
 // the device from deep sleep. The top one (C) talks; A goes next, B back.
@@ -93,6 +95,7 @@ constexpr const char* kTalkButton = "front button";
 constexpr const char* kSideButton = "side button";
 constexpr const char* kTalkHint = "Press the front button to talk";
 constexpr bool kTalkToggles = true;  // press to start, press again to send
+constexpr bool kTalkFromSleep = false;  // a press that wakes it only wakes it; the next one talks
 constexpr char kTalkM5 = 'A', kSideM5 = 'B', kBackM5 = 0;
 constexpr const char* kTalkKey = "A";
 constexpr const char* kSideKey = "B";

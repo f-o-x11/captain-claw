@@ -211,6 +211,12 @@ recording's silence stop now measures "quiet" against the recording's own
 quietest and loudest blocks, not a fixed level — the stick's mic sits above
 that level even in a quiet room, so it never went quiet.
 
+0.16.2: on the stick a press that wakes it only wakes it — the next press
+talks (`board::kTalkFromSleep`; the watch still talks from sleep while the
+button is held, the paper on its top button). Flight Deck now counts the
+voice's places in UTF-8 bytes, as the firmware does, so letters like č and
+đ no longer put the lit sentence and the page turns behind the voice.
+
 *Tap to talk* (Menu, or the settings page; off by default) puts a record
 button on the screen: under the name at home, under an answer or the
 character. Tap it and talk; the button turns into a stop square, and a second

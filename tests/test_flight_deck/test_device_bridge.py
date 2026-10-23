@@ -228,7 +228,7 @@ async def test_the_device_turn_reply_is_shown_and_spoken():
     assert _types(conn) == ["state", "status", "reply", "state"]
     assert conn.ws.sent[2]["text"] == "Sunny, 24°C."
     assert conn.ws.sent[3]["state"] == "ready" and conn.pending is False
-    assert conn._audio_q.get_nowait() == ("tts", "Sunny, 24°C.", (0, 12))
+    assert conn._audio_q.get_nowait() == ("tts", "Sunny, 24°C.", (0, 13))  # bytes: ° is two
 
 
 @pytest.mark.asyncio
@@ -742,7 +742,7 @@ async def test_a_new_topic_goes_straight_to_the_answer():
     await frame({"type": "chat_message", "role": "assistant", "content": "23 °C."})
     await conn.on_bus({"type": "status", "status": "ready"})
     assert [m["text"] for m in conn.ws.sent if m["type"] == "reply"] == ["23 °C."]
-    assert conn._audio_q.get_nowait() == ("tts", "23 °C.", (0, 6))
+    assert conn._audio_q.get_nowait() == ("tts", "23 °C.", (0, 7))
     assert conn._audio_q.get_nowait() == ("end", None) and conn._audio_q.empty()
     assert conn.pending is False
 
@@ -755,9 +755,9 @@ async def test_a_new_topic_said_alone_gets_a_short_line():
     await conn.send_to_agent("New topic.", None)
     await frame(_NEW_SESSION)
     assert conn.ws.sent[1:] == [{"type": "reply", "text": db.NEW_TOPIC_REPLY, "proactive": False,
-                                 "spoken": len(db.speakable(db.NEW_TOPIC_REPLY))},
+                                 "spoken": len(db.speakable(db.NEW_TOPIC_REPLY).encode())},
                                 {"type": "state", "state": "ready"}]
-    assert conn._audio_q.get_nowait() == ("tts", db.NEW_TOPIC_REPLY, (0, len(db.NEW_TOPIC_REPLY)))
+    assert conn._audio_q.get_nowait() == ("tts", db.NEW_TOPIC_REPLY, (0, len(db.NEW_TOPIC_REPLY.encode())))
     assert conn.pending is False
 
 
@@ -926,16 +926,16 @@ async def test_sentences_are_spoken_as_the_answer_streams():
     await conn.on_bus({"type": "agent_delta", "text": "rain.\nTake a coat."})
     parts = [m["text"] for m in conn.ws.sent if m["type"] == "reply_part"]
     assert parts == ["Sunny today, 24 °C.", "Sunny today, 24 °C. Tomorrow rain."]
-    assert conn._audio_q.get_nowait() == ("tts", "Sunny today, 24 °C.", (0, 19))
-    assert conn._audio_q.get_nowait() == ("tts", "Tomorrow rain.", (19, 34))  # its place in the shown text
+    assert conn._audio_q.get_nowait() == ("tts", "Sunny today, 24 °C.", (0, 20))  # UTF-8 bytes: ° is two
+    assert conn._audio_q.get_nowait() == ("tts", "Tomorrow rain.", (20, 35))  # its place in the shown text
     await conn.on_bus({"type": "agent", "text": "Sunny today, 24 °C. Tomorrow rain.\nTake a coat."})
     reply = [m for m in conn.ws.sent if m["type"] == "reply"][0]
     assert reply["text"] == "Sunny today, 24 °C. Tomorrow rain.\nTake a coat."
-    assert reply["spoken"] == len("Sunny today, 24 °C.") + len("Tomorrow rain.") + len("Take a coat.")
-    assert conn._audio_q.get_nowait() == ("tts", "Take a coat.", (34, 47))  # only what wasn't read yet
+    assert reply["spoken"] == len("Sunny today, 24 °C.".encode()) + len("Tomorrow rain.") + len("Take a coat.")
+    assert conn._audio_q.get_nowait() == ("tts", "Take a coat.", (35, 48))  # only what wasn't read yet
     assert conn._audio_q.get_nowait() == ("end", None) and conn._audio_q.empty()
-    assert db._answers[conn.channel_id] == [("tts", "Sunny today, 24 °C.", (0, 19)), ("tts", "Tomorrow rain.", (19, 34)),
-                                            ("tts", "Take a coat.", (34, 47))]
+    assert db._answers[conn.channel_id] == [("tts", "Sunny today, 24 °C.", (0, 20)), ("tts", "Tomorrow rain.", (20, 35)),
+                                            ("tts", "Take a coat.", (35, 48))]
 
 
 @pytest.mark.asyncio
