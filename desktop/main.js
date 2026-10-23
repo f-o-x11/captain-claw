@@ -8,7 +8,7 @@
  *   4. On quit, gracefully shut down the backend.
  */
 
-const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
 const { spawn, execFileSync } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -246,6 +246,9 @@ function spawnFlightDeck() {
     ...process.env,
     FD_DATA_DIR: path.join(getUserDataDir(), "fd-data"),
     FD_AUTH_ENABLED: "false",
+    // This app's own deck: one local user on loopback, so Google and Microsoft
+    // connect there — their sign-in in the system browser (openSignIn).
+    FD_DESKTOP: "1",
   };
 
   if (binary) {
@@ -546,6 +549,32 @@ function buildMenu() {
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// ── Sign-in in the system browser ──────────────────────────────
+
+// Google refuses sign-in inside an app's own window, so the page asks the
+// shell to open its deck's /fd/google|microsoft/login?ticket=… in the system
+// browser; the provider then comes back to the deck's loopback /callback.
+// Only that: the page must be this app's deck, and so must the URL.
+const SIGN_IN_PATHS = new Set(["/fd/google/login", "/fd/microsoft/login"]);
+
+function isOwnDeck(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" && u.hostname === FD_HOST && u.port === String(actualFdPort);
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle("open-sign-in", async (event, url) => {
+  if (!isOwnDeck(event.senderFrame?.url || "") || !isOwnDeck(url) || !SIGN_IN_PATHS.has(new URL(url).pathname)) {
+    log.warn("Refused to open a sign-in that isn't this app's own");
+    return false;
+  }
+  await shell.openExternal(url);
+  return true;
+});
 
 // ── App lifecycle ──────────────────────────────────────────────
 

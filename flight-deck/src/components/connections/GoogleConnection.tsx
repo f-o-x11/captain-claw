@@ -52,10 +52,12 @@ export default function GoogleConnection() {
     loading,
     error,
     lastPopupMessage,
+    awaitingBrowser,
     refresh,
     saveConfig,
     clearCredentials,
     connect,
+    cancelBrowserSignIn,
     disconnect,
     startMessageListener,
   } = useGoogleAuthStore()
@@ -69,9 +71,11 @@ export default function GoogleConnection() {
   const kioskView = useAuthStore((s) => s.kioskView)
   const canManageClient = (!authEnabled || fdUser?.role === 'admin') && !kioskView
   const fdUserLabel = authEnabled && fdUser ? (fdUser.display_name || fdUser.email) : ''
-  // A Google connection belongs to a Flight Deck user, so it needs FD sign-in:
-  // a deck with auth off (the desktop app runs one) has no Google via FD.
-  const unavailable = authEnabled === false
+  // A Google connection belongs to a Flight Deck user, so it needs FD sign-in —
+  // or the desktop app's deck, whose one local user connects through the system
+  // browser. Any other deck with auth off has no Google via FD.
+  const desktopDeck = useAuthStore((s) => s.desktopDeck)
+  const unavailable = authEnabled === false && !desktopDeck
 
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -189,11 +193,11 @@ export default function GoogleConnection() {
           </div>
         </div>
         <div className="px-5 py-4 text-xs text-zinc-400 leading-relaxed">
-          Google isn't available on this deck: Flight Deck sign-in is turned off
-          (the desktop app always runs it that way), and each Google connection
-          belongs to a signed-in Flight Deck user. To connect Google, run Flight
-          Deck with sign-in on (<code className="text-zinc-300">FD_AUTH_ENABLED=true</code>,
-          the default) and connect from your account.
+          Google isn't available on this deck: Flight Deck sign-in is turned off,
+          and each Google connection belongs to a signed-in Flight Deck user. To
+          connect Google, run Flight Deck with sign-in on
+          (<code className="text-zinc-300">FD_AUTH_ENABLED=true</code>, the default) and
+          connect from your account — or use the desktop app.
         </div>
       </div>
     )
@@ -267,6 +271,19 @@ export default function GoogleConnection() {
           </div>
         )}
 
+        {/* The desktop app's sign-in runs in the system browser. */}
+        {awaitingBrowser && (
+          <div className="flex items-center gap-2 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-zinc-300">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-violet-500" />
+            <span className="flex-1">
+              Finish signing in to Google in your browser — this updates by itself when you're done.
+            </span>
+            <button type="button" onClick={cancelBrowserSignIn} className="text-zinc-400 hover:text-zinc-200">
+              Cancel
+            </button>
+          </div>
+        )}
+
         {/* The deck's client, set up once by an admin: nothing for this user to fill in. */}
         {configured && !canManageClient && !connected && (
           <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-xs text-zinc-400">
@@ -284,7 +301,36 @@ export default function GoogleConnection() {
             </div>
           </div>
         )}
-        {!configured && canManageClient && (
+        {!configured && canManageClient && desktopDeck && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-zinc-300">
+            <div className="font-medium text-amber-600 mb-0.5">Bring your own OAuth client</div>
+            <div className="text-zinc-400 space-y-1.5">
+              <p>
+                Captain Claw does not ship with Google credentials. In{' '}
+                <a
+                  href="https://console.cloud.google.com/apis/credentials"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-violet-500 hover:underline"
+                >
+                  Google Cloud Console
+                </a>{' '}
+                create an OAuth 2.0 Client ID of type{' '}
+                <span className="text-zinc-200 font-medium">Desktop app</span> — it needs no
+                redirect URI — and paste its Client ID and Client Secret here. A{' '}
+                <span className="text-zinc-200">Web application</span> client you already have works
+                too, once the redirect URI shown below is on its list. Enable the Gmail, Drive and
+                Calendar APIs you want in the same project.
+              </p>
+              <p>
+                On the OAuth consent screen, add your Google account as a test user. While the app
+                is in <span className="text-zinc-200">Testing</span>, Google ends the connection
+                after 7 days — publish it (it can stay unverified for your own use) to keep it.
+              </p>
+            </div>
+          </div>
+        )}
+        {!configured && canManageClient && !desktopDeck && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-zinc-300">
             <div className="font-medium text-amber-600 mb-0.5">Bring your own OAuth client</div>
             <div className="text-zinc-400">
@@ -347,16 +393,16 @@ export default function GoogleConnection() {
           {!connected && (
             <button
               onClick={connect}
-              disabled={!configured}
+              disabled={!configured || awaitingBrowser}
               className="inline-flex items-center gap-2 rounded-md bg-violet-600 hover:bg-violet-500 px-3.5 py-2 text-sm text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               title={
                 configured
-                  ? 'Link a Google account to your own Flight Deck user'
+                  ? desktopDeck ? 'Sign in to Google in your browser' : 'Link a Google account to your own Flight Deck user'
                   : canManageClient ? 'Save credentials first' : 'An admin has to configure Google first'
               }
             >
-              <ExternalLink className="h-4 w-4" />
-              Connect Google
+              {awaitingBrowser ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+              {awaitingBrowser ? 'Waiting for your browser…' : 'Connect Google'}
             </button>
           )}
           {connected && (
@@ -390,12 +436,27 @@ export default function GoogleConnection() {
             endpoint is require_admin; non-admins would only get 403s). */}
         {canManageClient && (
         <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-950/50 p-3">
-          <div className="text-xs text-zinc-500">
-            Redirect URI (add this to your OAuth client in Google Cloud Console):
-            <code className="block mt-1 text-[11px] text-zinc-200 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 break-all">
-              {config?.redirect_uri || `${window.location.origin}/fd/google/callback`}
-            </code>
-          </div>
+          {desktopDeck ? (
+            <div className="text-xs text-zinc-500">
+              Google sends you back to this app at
+              <code className="block mt-1 text-[11px] text-zinc-200 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 break-all">
+                {config?.redirect_uri || 'http://localhost/fd/google/callback'}
+              </code>
+              <div className="mt-1 text-[11px] text-zinc-600">
+                A <span className="text-zinc-400">Desktop app</span> client takes it on any port — nothing
+                to add. A <span className="text-zinc-400">Web application</span> client needs it in its
+                Authorized redirect URIs exactly, port included (the app uses another port when this
+                one is taken; add that one too if it ever does).
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-zinc-500">
+              Redirect URI (add this to your OAuth client in Google Cloud Console):
+              <code className="block mt-1 text-[11px] text-zinc-200 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 break-all">
+                {config?.redirect_uri || `${window.location.origin}/fd/google/callback`}
+              </code>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">

@@ -160,6 +160,22 @@ def _fd_auth_enabled() -> bool:
     return os.environ.get("FD_AUTH_ENABLED", "true").lower() in ("true", "1", "yes")
 
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
+def _fd_desktop_deck() -> bool:
+    """The desktop app's own deck: sign-in off, started by the Electron shell
+    (``FD_DESKTOP=1``) and listening on loopback only (``FD_BIND_HOST``, which
+    server.main records) — one person on one machine. Google and Microsoft run
+    there for the local user; every other sign-in-off deck still refuses them,
+    since it can't tell its users apart."""
+    return (
+        not _fd_auth_enabled()
+        and os.environ.get("FD_DESKTOP", "").lower() in ("1", "true", "yes")
+        and os.environ.get("FD_BIND_HOST", "").strip().lower() in _LOOPBACK_HOSTS
+    )
+
+
 # Synthetic user returned when auth is disabled (standalone desktop / local).
 _LOCAL_USER: dict = {
     "id": "local",
