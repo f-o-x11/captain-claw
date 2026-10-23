@@ -170,6 +170,11 @@ struct Home {
 };
 
 void showHome(const Home& home);
+#if defined(PAPER_B)
+// The B paper (ui_paper_b.cpp): seconds until its dashboard is next due
+// (0: now) — the sleep timer is set to land on it.
+uint32_t dashboardDueInSec();
+#endif
 
 // Conversation views (text mode).
 void showListening(int level, uint32_t elapsedMs);

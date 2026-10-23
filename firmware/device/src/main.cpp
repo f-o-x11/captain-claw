@@ -48,7 +48,11 @@
 #include <M5PM1.h>
 #endif
 
+#if defined(PAPER_B)
+#define FW_VERSION "1.0.0"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#else
 #define FW_VERSION "0.17.0"
+#endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -479,7 +483,7 @@ static ui::Status statusNow() {
 }
 
 static void showIdle() {
-  if (settings.iconMode) {
+  if (settings.iconMode && !board::kPaperB) {
     ui::showFace(settings.character, agentLinked ? face::Pose::Idle : face::Pose::Sad, 0);
     return;
   }
@@ -874,6 +878,7 @@ static void redraw() {
 }
 
 static void notice(const char* title, const String& body, uint16_t color) {
+  if (board::kPaperB) return;  // nothing to show it on: the lights and the voice carry what matters
   ui::fade();
   mode = Mode::Notice;
   setBarState();
@@ -907,6 +912,11 @@ static void openMenu() {
 static void openOptions() {
   phoneUrl = phoneSettingsBegin();
   if (phoneUrl.isEmpty()) {
+    if (board::kPaperB) {  // no Wi-Fi: the hotspot's code is the one that helps
+      ui::flush();
+      runSetupPortal("Wi-Fi & settings");
+      return;
+    }
     ui::drawNow();
     notice("Not connected", "Join Wi-Fi first, or use Wi-Fi & settings.", kRed);
     return;
@@ -1469,7 +1479,9 @@ static void pumpUpload() {
     bool idle = mode == Mode::Idle || mode == Mode::Reply || mode == Mode::Home || mode == Mode::Image ||
                 mode == Mode::Notice || mode == Mode::Backdrop;
     if (!notes::count() || !agentLinked || !idle || (int32_t)(now - upRetryAtMs) < 0) return;
-    if (!upAllowed) {
+    if (!upAllowed && board::kPaperB) {
+      upAllowed = upAsked = true;  // nothing to ask with: kept notes go by themselves
+    } else if (!upAllowed) {
       if (!upAsked && notes::count() != notesDeclined) askNotes();
       return;
     }
@@ -2081,7 +2093,12 @@ static void paperLights(bool on) {
     }
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
     esp_sleep_enable_ext1_wakeup(kButtonPins, ESP_EXT1_WAKEUP_ANY_LOW);
+#if defined(PAPER_B)
+    // The dashboard's half hour, from when it was last drawn (a minute at least).
+    esp_sleep_enable_timer_wakeup(max<uint64_t>(60, ui::dashboardDueInSec() + 10) * 1000000ULL);
+#else
     if (settings.asleepRefreshMin) esp_sleep_enable_timer_wakeup(settings.asleepRefreshMin * 60ULL * 1000000ULL);
+#endif
   } else {
     esp_sleep_enable_ext0_wakeup(board::kTalkPin, 0);  // the talk button pulls low
   }
@@ -2183,6 +2200,15 @@ static void noteSideClick(bool wokeOnly) {
 
 // One side click: next row / page, or back to the main screen.
 static void sideClick() {
+  if (board::kPaperB) {  // A: the options code — and, pressed again, the dashboard
+    if (mode == Mode::Link) {
+      ui::drawNow();
+      backToMain();
+    } else if (mode != Mode::Listening && mode != Mode::Waiting && !prerollOn) {  // (working: the lights say so)
+      openOptions();
+    }
+    return;
+  }
   ui::drawNow();  // a page, the status: asked to see it (the e-paper draws it now)
   if (mode == Mode::Menu || mode == Mode::CharPick || (mode == Mode::Agents && !agentsLoading) ||
       (mode == Mode::Status && statusPage + 1 < statusPages) ||
@@ -2239,6 +2265,14 @@ static void sideClick() {
 // The PaperColor's C button: one step back — the row or page before, else
 // out to the main screen; from the home screen, to the answer.
 static void backClick() {
+  if (board::kPaperB) {  // B: the last answer, a page at a time, then the dashboard
+    if (mode == Mode::Listening || prerollOn) return;
+    if (ui::hasReply() || ui::restoreAnswer()) {  // the answer from before a sleep, too
+      ui::nextPage();
+      if (mode == Mode::Link) mode = Mode::Reply;  // the options code gives way (working stays working: the lights)
+    }
+    return;
+  }
   ui::drawNow();  // back, the answer, the home screen: asked to see it
   if (mode == Mode::Menu || mode == Mode::CharPick || (mode == Mode::Agents && !agentsLoading) ||
       (mode == Mode::Status && statusPage > 0)) {
@@ -2950,7 +2984,12 @@ void loop() {
     if (sideBtn().wasClicked() && onAnswer()) noteSideClick(true);
   } else if (sideBtn().wasHold()) {
     touch();
-    if (mode == Mode::Ask) {
+    if (board::kPaperB) {  // Wi-Fi & settings: the setup hotspot and its code
+      if (mode != Mode::Listening && !prerollOn) {
+        ui::flush();
+        runSetupPortal("Wi-Fi & settings");
+      }
+    } else if (mode == Mode::Ask) {
       answerAsk(false);
     } else if (mode == Mode::CharPick) {  // back to the menu, keeping the old character
       mode = Mode::Menu;
@@ -2968,7 +3007,7 @@ void loop() {
     if (sideClickMs && mode == sideClickMode) {  // the second click: hear the answer again
       sideClickMs = 0;
       replayAnswer();
-    } else if (onAnswer()) {
+    } else if (onAnswer() && !board::kPaperB) {  // (B's A does one thing: no wait for a second click)
       noteSideClick(false);  // it may be the first of two
     } else {
       sideClick();
@@ -2984,7 +3023,12 @@ void loop() {
   if (board::kBackPin >= 0) {
     if (backBtn().wasHold()) {
       touch();
-      if (mode == Mode::Ask) {
+      if (board::kPaperB) {  // the dashboard, with fresh readings, now
+        if (mode != Mode::Listening && !prerollOn) {
+          ui::drawNow();
+          backToMain();
+        }
+      } else if (mode == Mode::Ask) {
         answerAsk(false);
       } else if (mode != Mode::Listening && !prerollOn) {
         ui::flush();

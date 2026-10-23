@@ -1,0 +1,175 @@
+// Renders the PaperColor "B" screens (the real ui_paper_b.cpp and its six-ink
+// conversion) on a Mac, one PPM per screen. preview/render.py paper_b turns
+// them into PNGs with the panel's muted inks.
+//
+//   pio run -e preview_paper_b
+//   uv run --no-project --with pillow python preview/render.py paper_b
+#include <M5Unified.h>
+
+#include <string>
+#include <vector>
+
+#include "../src/fonts.h"
+#include "../src/telemetry.h"
+#include "../src/ui.h"
+
+uint32_t g_previewMillis = 0;
+PreviewM5 M5;
+
+// ── stand-ins for the device-only parts ─────────────────────────────────
+
+namespace telemetry {
+bool climate(float* t, float* rh) {
+  *t = 22.6f;
+  *rh = 44.0f;
+  return true;
+}
+bool clockSet() { return true; }
+bool onUsbPower() { return false; }
+}  // namespace telemetry
+
+namespace battery {
+int minutesLeft() { return 130; }
+int minutesToFull() { return -1; }
+}  // namespace battery
+
+namespace notes {
+bool ready() { return true; }
+int count() { return 3; }
+uint32_t seconds() { return 84; }
+size_t room(uint32_t rate) { return (size_t)rate * 60 * 14; }
+}  // namespace notes
+
+static std::string gRoot = ".";
+
+namespace vlw {
+const uint8_t* data(Id id, size_t* len) {
+  static const char* names[Count] = {"small", "body_s", "body_m", "body_l", "title", "badge", "digits"};
+  static std::vector<uint8_t> files[Count];
+  if (files[id].empty()) {
+    std::string path = gRoot + "/fonts/" + names[id] + ".vlw";
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) {
+      fprintf(stderr, "missing %s\n", path.c_str());
+      exit(1);
+    }
+    fseek(f, 0, SEEK_END);
+    files[id].resize(ftell(f));
+    fseek(f, 0, SEEK_SET);
+    fread(files[id].data(), 1, files[id].size(), f);
+    fclose(f);
+  }
+  *len = files[id].size();
+  return files[id].data();
+}
+}  // namespace vlw
+
+// ── output ─────────────────────────────────────────────────────────────
+
+static std::string gOut;
+
+static void save(const char* name) {
+  ui::flush();
+  const int w = M5.Display.width(), h = M5.Display.height();
+  std::vector<uint8_t> rgb(w * h * 3);
+  M5.Display.readRectRGB(0, 0, w, h, rgb.data());
+  std::string path = gOut + "/" + name + ".ppm";
+  FILE* f = fopen(path.c_str(), "wb");
+  fprintf(f, "P6\n%d %d\n255\n", w, h);
+  fwrite(rgb.data(), 1, rgb.size(), f);
+  fclose(f);
+  printf("%s\n", path.c_str());
+}
+
+static uint8_t* readFile(const std::string& path, size_t* len) {
+  FILE* f = fopen(path.c_str(), "rb");
+  if (!f) return nullptr;
+  fseek(f, 0, SEEK_END);
+  *len = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  uint8_t* buf = (uint8_t*)malloc(*len);
+  fread(buf, 1, *len, f);
+  fclose(f);
+  return buf;
+}
+
+// ── the screens ────────────────────────────────────────────────────────
+
+static constexpr uint16_t kGreen = ui::rgb(40, 200, 90);
+
+static const char* kAsked = "What's on my calendar tomorrow, and can you move the dentist to Friday afternoon?";
+static const char* kShort = "Done. The dentist is on Friday at 15:00 — the clinic confirmed it.";
+static const char* kAnswer =
+    "Tomorrow you have three meetings: stand-up at 9:30, lunch with Ana at 12:00 and the dentist at 16:00. "
+    "I moved the dentist to Friday at 15:00 — the clinic confirmed it.";
+static const char* kLong =
+    "Sutra imaš tri sastanka: dnevni sastanak u 9:30, ručak s Anom u 12:00 i zubara u 16:00. Zubara sam "
+    "premjestio na petak u 15:00 — Đuro je potvrdio termin. Za ručak sam rezervirao stol u Čakovcu, a šećer "
+    "i kava su već naručeni.\n\nAko želiš, mogu poslati podsjetnik svima sat vremena prije, ili dodati "
+    "bilješke s prošlog sastanka u pozivnicu. Prognoza za petak je sunčano, 19 °C, pa je terasa slobodna "
+    "za kavu nakon zubara. Ponedjeljak je mirniji: samo pregled projekta u 11:00 i poziv s Markom u 15:30, "
+    "za koji sam već pripremio sažetak zadnjih brojki i tri pitanja koja je postavio prošli tjedan. "
+    "Utorak i srijeda su za sada prazni, a u četvrtak u 10:00 je sastanak odbora za koji još čekamo dnevni red.";
+
+int main(int argc, char** argv) {
+  gOut = argc > 1 ? argv[1] : "preview/out/paper_b";
+  gRoot = argc > 2 ? argv[2] : ".";
+  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+  tzset();
+
+  M5.Display.setColorDepth(16);
+  M5.Display.createSprite(400, 600);
+  ui::begin();
+  g_previewMillis = 123456;
+  ui::setHealth(ui::Up, ui::Up);
+  ui::setBar("Captain Claw", "ready", kGreen);
+
+  static constexpr uint16_t kRed = ui::rgb(230, 50, 50), kYellow = ui::rgb(250, 200, 40);
+  ui::Home home{true, "All good", kGreen, "", {}};
+  home.rows = {{"Paper", "ready — press C", kGreen},
+               {"Wi-Fi", "Kuharski-5G", kGreen},
+               {"Deck", "glasses.captain-claw.com", kGreen},
+               {"Agent", "Captain Claw", kGreen}};
+  ui::showHome(home);
+  save("01_dashboard");
+
+  ui::setQuestion(kAsked);
+  ui::setReply(kShort);
+  ui::nextPage();  // B: the answer, large
+  save("02_answer_short");
+
+  ui::setQuestion(kAsked);
+  ui::setReply(kAnswer);
+  ui::nextPage();
+  save("03_answer_medium");
+
+  ui::setQuestion("Što imam sutra?");
+  ui::setReply(kLong);
+  ui::nextPage();
+  save("04_answer_long_p1");
+  ui::nextPage();
+  save("05_answer_long_p2");
+  ui::nextPage();  // past the last page: the dashboard again
+  save("06_dashboard_again");
+
+  ui::showLink("Options · 1.0.0", "http://192.168.1.48/", "Scan it with your phone (same Wi-Fi): every setting is there.");
+  save("07_options");
+
+  ui::showSetup("First-time setup", "Captain-PaperColor-b2c3", "192.168.4.1");
+  save("08_setup");
+
+  ui::setHealth(ui::Down, ui::Down);
+  home.rows = {{"Paper", "not ready", kYellow},
+               {"Wi-Fi", "not connected", kRed},
+               {"Deck", "connecting…", kRed},
+               {"Agent", "-", kYellow}};
+  ui::drawNow();
+  ui::showHome(home);  // asked for (B held): the dashboard now
+  save("09_dashboard_links_down");
+
+  ui::setBar("Captain Claw", "asleep", kGreen);
+  g_previewMillis += 31 * 60 * 1000;  // half an hour on: due again, going to sleep
+  ui::showSleeping("", 0);
+  save("10_dashboard_asleep");
+  return 0;
+}

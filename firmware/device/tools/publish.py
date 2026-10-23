@@ -61,11 +61,21 @@ def keygen() -> None:
     print(f"public key:  {PUBKEY_H} (commit it)")
 
 
-def fw_version() -> str:
-    m = re.search(r'#define\s+FW_VERSION\s+"([^"]+)"', (ROOT / "src/main.cpp").read_text())
+def env_section(env: str) -> str:
+    """The env's lines in platformio.ini (empty when there's no such env)."""
+    ini = (ROOT / "platformio.ini").read_text()
+    m = re.search(rf"^\[env:{re.escape(env)}\]\n(.*?)(?=^\[|\Z)", ini, re.S | re.M)
+    return m.group(1) if m else ""
+
+
+def fw_version(env: str) -> str:
+    """FW_VERSION as the env builds it: the PAPER_B line for an env built with -DPAPER_B."""
+    text = (ROOT / "src/main.cpp").read_text()
+    m = re.search(r'#if defined\(PAPER_B\)\s*\n#define\s+FW_VERSION\s+"([^"]+)".*?#else\s*\n#define\s+FW_VERSION\s+"([^"]+)"',
+                  text, re.S)
     if not m:
-        sys.exit("FW_VERSION not found in src/main.cpp")
-    return m.group(1)
+        sys.exit("FW_VERSION (the PAPER_B and the plain line) not found in src/main.cpp")
+    return m.group(1) if "-DPAPER_B" in env_section(env) else m.group(2)
 
 
 def build(env: str) -> Path:
@@ -109,7 +119,9 @@ def upload(deck: str, token: str, fields: dict[str, str], blob: bytes) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("target", help="keygen, or a PlatformIO env to publish (sticks3, stopwatch, papercolor)")
+    ap.add_argument("target", help="keygen, or a PlatformIO env to publish (sticks3, stopwatch, papercolor, papercolor_b)")
+    ap.add_argument("--hw", help="the device kind to publish under (default: the env, minus a _b suffix — "
+                                 "papercolor_b publishes as papercolor, the same hardware)")
     ap.add_argument("--deck", help="Flight Deck URL, e.g. https://glasses.captain-claw.com")
     ap.add_argument("--token", default=os.environ.get("FD_TOKEN", ""),
                     help=f"admin token (or FD_TOKEN, or the file {TOKEN_FILE})")
@@ -127,15 +139,16 @@ def main() -> None:
                  f"check {TOKEN_FILE if not os.environ.get('FD_TOKEN') else 'FD_TOKEN'}")
     path = ROOT / ".pio/build" / a.target / "firmware.bin" if a.no_build else build(a.target)
     blob = path.read_bytes()
-    version = fw_version()
+    version = fw_version(a.target)
+    hw = a.hw or a.target.removesuffix("_b")
     # The firmware reports itself as "&fw=<FW_VERSION>"; a build that doesn't
     # contain it is stale (built before FW_VERSION changed) — never publish it.
     if f"&fw={version}".encode() not in blob:
         sys.exit(f"{path} isn't a {version} build (FW_VERSION changed since it was built) — "
                  "publish without --no-build")
     digest = hashlib.sha256(blob).hexdigest()
-    fields = {"hw": a.target, "version": version, "sha256": digest, "sig": sign(blob), "notes": a.notes}
-    print(f"{a.target} {version}: {len(blob) // 1024} KB, sha256 {digest[:16]}…")
+    fields = {"hw": hw, "version": version, "sha256": digest, "sig": sign(blob), "notes": a.notes}
+    print(f"{a.target} {version} as {hw}: {len(blob) // 1024} KB, sha256 {digest[:16]}…")
     result = upload(a.deck, a.token, fields, blob)
     print(f"published: {json.dumps(result)}")
 

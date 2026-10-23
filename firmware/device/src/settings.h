@@ -34,7 +34,7 @@ struct Settings {
   uint8_t cueLeadS = 1;     // the cue comes this many seconds (1 or 2) before speech
   bool tapTalk = false;     // touch screens: a record button — tap to talk, tap again to send
   uint16_t talks = 0;       // recordings sent so far: the home screen's "hold … to talk" goes after a few
-  bool autoUpdate = false;  // install offered updates by itself (idle + USB power)
+  bool autoUpdate = false;  // install offered updates by itself (idle + USB power); the B paper defaults to on
   String lastFw;            // the version that last ran (shows "Updated to …" once)
   uint8_t textSize = 0;     // reading text: 0 small, 1 medium, 2 large
   String tz;                // POSIX time zone for the clock ("" = kDefaultTz)

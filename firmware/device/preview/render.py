@@ -140,10 +140,11 @@ def paper_framed(ppm: Path) -> Image.Image:
 
 def main() -> None:
     args = sys.argv[1:]
-    paper = bool(args) and args[0] == "paper"
+    mode = args[0] if args and args[0] in ("paper", "paper_b") else ""
+    paper = bool(mode)
     if paper:
         args = args[1:]
-    default = ROOT / "preview" / "out" / ("paper" if paper else "")
+    default = ROOT / "preview" / "out" / (mode if paper else "")
     out = Path(args[0] if args else default).resolve()
     out.mkdir(parents=True, exist_ok=True)
     for old in out.glob("*.ppm"):
@@ -151,7 +152,7 @@ def main() -> None:
     (sample_paper_picture if paper else sample_picture)(out / "sample.jpg")
     if not paper:
         sample_background(out / "background.jpg")
-    program = ROOT / ".pio" / "build" / ("preview_paper" if paper else "preview") / "program"
+    program = ROOT / ".pio" / "build" / ("preview_" + mode if paper else "preview") / "program"
     subprocess.run([str(program), str(out), str(ROOT)], check=True, stdout=subprocess.DEVNULL)
     frames = []
     for ppm in sorted(out.glob("*.ppm")):

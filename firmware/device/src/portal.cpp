@@ -336,10 +336,11 @@ void runSetupPortal(const char* reason) {
     dns.processNextRequest();
     server.handleClient();
     M5.update();
-    // Held B (the PaperColor's B, the other devices' side button): leave
-    // without saving — a restart, back to how it was.
-    if (M5.BtnB.wasHold()) {
-      Serial.println("[claw] setup portal left (B held): restarting");
+    // Held B (the PaperColor's B, the other devices' side button; the B
+    // paper's A, the button that opened it): leave without saving — a
+    // restart, back to how it was.
+    if (M5.BtnB.wasHold() || (board::kPaperB && M5.BtnA.wasHold())) {
+      Serial.println("[claw] setup portal left (held): restarting");
       ESP.restart();
     }
     delay(2);

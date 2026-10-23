@@ -124,6 +124,49 @@ pio run -e preview_paper
 uv run --no-project --with pillow python preview/render.py paper   # → preview/out/paper/sheet.png
 ```
 
+### PaperColor the "B" way (`papercolor_b`, versions 1.x)
+
+The same paper built as if it had no screen: `src/ui_paper_b.cpp` replaces
+`ui_paper.cpp` (the "A" way above stays, env `papercolor`; both are the
+`papercolor` kind for updates, and the deck offers whichever version is
+newest, so B is published as 1.x). The lights carry listening, working,
+speaking and trouble exactly as above; the voice carries the answers; the
+paper changes only when it must:
+
+- **A dashboard, every half hour:** the clock as of the drawing, the date,
+  the room (temperature, humidity), the battery (percent, and how long it
+  has or until it's full), the voice notes waiting offline (how many, how
+  long, how much room is left), and the links (Wi-Fi, deck, agent). Awake
+  it redraws on the half hour; asleep the timer wake lands on the half hour
+  and draws it (no Wi-Fi), then sleeps again. Nothing else — an answer
+  arriving, the agent working, a picture — touches the paper.
+- **B: the last answer,** at the largest of the four sizes that fits it on
+  one screen (the question in one line above it, a picture on the first
+  page); longer answers page at the smallest size, B pages on, and after the
+  last page B brings the dashboard back (with fresh readings). The answer
+  lives in flash: B after a sleep shows it. Hold B for the dashboard now.
+- **A: the options code** (the phone settings page), A again closes it;
+  with no Wi-Fi it opens the setup hotspot instead. Hold A for the hotspot
+  (*Wi-Fi & settings*) at any time; hold A again there to leave.
+- **C talks** (press, talk, press again — or 2.5 s of quiet sends it); a
+  double press plays the last answer again; on the options code it installs
+  the update on offer.
+- **No asking:** voice notes kept offline go to the agent by themselves on
+  the next link, and *Auto update* defaults to on (an update installs itself
+  when idle on USB) — both can be changed on the phone page. Notices have
+  nowhere to go: the lights say what matters.
+
+| | C (top) | A | B |
+|---|---|---|---|
+| click | talk, click again to send · while it speaks: stop · on Options: update | Options (QR code) · Options: done · no Wi-Fi: the setup hotspot | the last answer · next page · after the last: the dashboard |
+| hold | | Wi-Fi & settings (the setup hotspot; hold A again to leave) | the dashboard now |
+| double-click | hear the last answer again | | |
+
+```bash
+pio run -e papercolor_b -t upload
+pio run -e preview_paper_b && uv run --no-project --with pillow python preview/render.py paper_b   # → preview/out/paper_b/
+```
+
 ## StopWatch screen
 
 The round screen follows M5Stack's own StopWatch look: black, a glowing badge
@@ -350,7 +393,7 @@ through a domain needs that domain in `FD_ALLOWED_HOSTS` or `FD_PUBLIC_URL`.
 ```bash
 uv tool install platformio
 cd firmware/device
-pio run -e sticks3 -t upload      # or: -e stopwatch / -e papercolor
+pio run -e sticks3 -t upload      # or: -e stopwatch / -e papercolor / -e papercolor_b
 ```
 
 If the upload can't connect: hold the side button until the green LED
@@ -374,7 +417,9 @@ uv run --no-project --with cryptography python tools/publish.py sticks3 \
 ```
 
 It builds, signs (ECDSA P-256, key in `~/.captain-claw/firmware-signing/` — back it
-up; without it no device accepts a new build) and uploads (admin token). Connected
+up; without it no device accepts a new build) and uploads (admin token). The
+`papercolor_b` env publishes as the `papercolor` kind (`--hw` to say otherwise):
+the paper takes whichever version is newest, so the B builds are 1.x. Connected
 devices of that kind get the offer at once, others on their next connect:
 Menu → *Software update* (or by itself with *Auto update*, when idle on USB). A new
 version that can't reach Flight Deck within 90 s rolls back to the previous one.
