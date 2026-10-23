@@ -1142,9 +1142,10 @@ class AgentToolLoopMixin:
                         f"DUPLICATE CALL BLOCKED: You have already called `{tc.name}` "
                         f"on this target {_dup_count} times this turn. The file was "
                         "ALREADY SAVED SUCCESSFULLY on the first call. Do NOT attempt "
-                        "to write it again. You are DONE writing. Now respond with a "
-                        "brief TEXT summary of what you created (file name, description). "
-                        "Do NOT call any more tools."
+                        "to write it again. You are DONE writing this file. If the "
+                        "request still has other steps (share a link, send it, …), do "
+                        "them now; otherwise respond with a brief TEXT summary of what "
+                        "you created (file name, description)."
                     )
                 elif _google_write:
                     # A failed call rolls its count back, so the earlier one
@@ -1241,10 +1242,12 @@ class AgentToolLoopMixin:
                         f"BLIND REWRITE BLOCKED: You already wrote `{_bw_path}` "
                         "this turn and have gathered no new information since "
                         "(no read/shell/browser/fetch call in between). The "
-                        "file is saved on disk and complete. Use the edit tool "
-                        "for targeted changes, or provide your final text "
-                        "response now. If you genuinely need a full rewrite, "
-                        "read the file first."
+                        "file is saved on disk and complete — a "
+                        "`[written to disk: …]` note in your history is a "
+                        "shortened copy of your call, not the file's content. "
+                        "Use the edit tool for targeted changes, carry on with "
+                        "the rest of the request, or give your final answer. "
+                        "If you doubt what the file holds, read it first."
                     )
                     log.info(
                         "Blind rewrite blocked",
@@ -1576,14 +1579,15 @@ class AgentToolLoopMixin:
                 # After a successful file write the full content lives
                 # on disk.  Replace it in the parent assistant message's
                 # tool_calls with a compact reference to free context
-                # budget for subsequent iterations.
+                # budget — one step late, so the model's next call still
+                # sees what it just wrote (see _queue_write_compaction).
                 if (
                     result.success
                     and _tool_lower == "write"
                     and isinstance(arguments, dict)
-                    and hasattr(self, "_compact_write_tool_call")
+                    and hasattr(self, "_queue_write_compaction")
                 ):
-                    self._compact_write_tool_call(tc.id, arguments)
+                    self._queue_write_compaction(tc.id, arguments)
 
                 # ── Shell heredoc compaction ──────────────────────
                 # LLMs sometimes bypass the write tool and use shell
