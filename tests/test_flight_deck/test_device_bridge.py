@@ -881,3 +881,30 @@ async def test_an_old_turn_is_not_brought_back(deck):
     assert new.pending is False
     await new.resume()
     assert _after_bound(new) == []
+
+
+@pytest.mark.asyncio
+async def test_a_device_leaving_is_logged_with_how_it_ended(monkeypatch, caplog):
+    import logging
+
+    from captain_claw.flight_deck import device_firmware
+
+    class _Socket(_WS):
+        query_params = {"token": "t", "device": "watch-1", "hw": "stopwatch", "fw": "0.12.10"}
+
+        async def accept(self):
+            pass
+
+        async def receive(self):
+            return {"type": "websocket.disconnect", "code": 1006}
+
+    async def _user(token):
+        return {"id": "u1"}
+
+    monkeypatch.setattr(db, "_device_user", _user)
+    monkeypatch.setattr(db, "_pick_agent", lambda user_id, selector: None)
+    monkeypatch.setattr(device_firmware, "offer_for", lambda hw, fw: None)
+    with caplog.at_level(logging.INFO, logger=db.log.name):
+        await db.device_ws(_Socket())
+    line = next(r.getMessage() for r in caplog.records if "left after" in r.getMessage())
+    assert line.startswith("device watch-1 (stopwatch 0.12.10) left after 0s: code 1006, last heard 0s before")
