@@ -413,6 +413,9 @@ class JevToolConfig(BaseModel):
     # When a turn runs out of steps, ask Jev whether the agent is still making
     # progress and, if so, extend the step budget (captain_claw/jev_progress.py).
     check_progress: bool = True
+    # When a guard refuses a repeated call, ask Jev what the agent should do
+    # next (captain_claw/jev_block_review.py).
+    review_blocks: bool = True
 
 
 class TypesenseToolConfig(BaseModel):

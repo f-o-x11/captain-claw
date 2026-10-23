@@ -13,7 +13,7 @@ import os
 import re
 from typing import Any
 
-from captain_claw import mail_authority
+from captain_claw import jev_block_review, mail_authority
 from captain_claw.config import get_config
 from captain_claw.context_spill import SPILL_TOOLS as _SPILL_TOOLS
 from captain_claw.context_spill import governor_enabled as _governor_enabled
@@ -882,6 +882,73 @@ class AgentToolLoopMixin:
             pass
         return []
 
+    async def _jev_review_refusal(
+        self,
+        tc: ToolCall,
+        arguments: Any,
+        *,
+        kind: str,
+        signature: str,
+        count: int = 1,
+        target: str = "",
+        releasable: bool = False,
+    ) -> jev_block_review.Review | None:
+        """Ask Jev what should follow a refused call (jev_block_review).
+
+        None when it can't run or the turn used up its reviews; a signature
+        Jev already let through once is never offered for release again."""
+        used = int(getattr(self, "_jev_block_reviews", 0) or 0)
+        if used >= jev_block_review.MAX_REVIEWS_PER_TURN or not self.session:
+            return None
+        if not await jev_block_review.ready():
+            # Off or no key: don't ask Flight Deck again on every block.
+            self._jev_block_reviews = jev_block_review.MAX_REVIEWS_PER_TURN
+            return None
+        released: set[str] = getattr(self, "_jev_released_sigs", None) or set()
+        self._jev_released_sigs = released
+        self._jev_block_reviews = used + 1
+        self._emit_thinking(
+            "Call blocked — asking Jev what should come next",
+            tool=tc.name, phase="tool",
+        )
+        start = getattr(self, "last_turn_start_idx", None)
+        turn_messages = (
+            self.session.messages[start:] if isinstance(start, int)
+            else self.session.messages[-30:]
+        )
+        result = await jev_block_review.review(
+            str(getattr(self, "_turn_user_text", "") or ""),
+            turn_messages,
+            kind=kind,
+            tool=tc.name,
+            arguments=arguments,
+            count=count,
+            target=target,
+            releasable=releasable and signature not in released,
+        )
+        if result is None:
+            return None
+        if result.release:
+            released.add(signature)
+        self._emit_tool_output(
+            "completion_gate",
+            {
+                "step": "jev_block_review",
+                "guard": kind,
+                "tool": tc.name,
+                "choice": result.choice,
+                "p": round(result.probability, 3),
+                "applied": bool(result.release or result.message),
+            },
+            (
+                "step=jev_block_review\n"
+                f"guard={kind}\ntool={tc.name}\njudge=jev\n"
+                f"choice={result.choice}\np={result.probability:.2f}\n"
+                f"applied={bool(result.release or result.message)}"
+            ),
+        )
+        return result
+
     async def _handle_tool_calls(
         self,
         tool_calls: list[ToolCall],
@@ -1125,6 +1192,7 @@ class AgentToolLoopMixin:
             # model asked for. Allow that one repeat; a third is still a loop.
             if _tool_lower == "web_get":
                 _dup_max = max(_dup_max, 2)
+            _review: jev_block_review.Review | None = None
             if _dup_count >= _dup_max:
                 # During scale tasks, give a more actionable message that
                 # tells the LLM to write what it has or skip the item.
@@ -1188,6 +1256,23 @@ class AgentToolLoopMixin:
                         "changed. Use the data you already have and move on to the next "
                         "item. Do NOT re-read, re-extract, or re-glob the same target."
                     )
+                # Jev picks what follows; a scale item and a send/create/
+                # mailbox change keep their own specific message.
+                if _sp is None and not _google_write and not _mailbox_change:
+                    _review = await self._jev_review_refusal(
+                        tc, arguments,
+                        kind=jev_block_review.DUPLICATE,
+                        signature=_dup_sig,
+                        count=_dup_count,
+                        target=(
+                            str(arguments.get("path", "") or "").strip()
+                            if _tool_lower == "write" and isinstance(arguments, dict) else ""
+                        ),
+                        releasable=jev_block_review.can_release(_tool_lower, _call_action),
+                    )
+                if _review is not None and _review.message:
+                    dup_msg = _review.message
+            if _dup_count >= _dup_max and not (_review is not None and _review.release):
                 log.info("Blocking duplicate tool call", tool=tc.name, call_id=tc.id, count=_dup_count)
                 self._add_session_message(
                     role="tool",
@@ -1249,6 +1334,15 @@ class AgentToolLoopMixin:
                         "the rest of the request, or give your final answer. "
                         "If you doubt what the file holds, read it first."
                     )
+                    # A rewrite is never released; Jev only picks what follows.
+                    _bw_review = await self._jev_review_refusal(
+                        tc, arguments,
+                        kind=jev_block_review.BLIND_REWRITE,
+                        signature=f"blind|{_bw_key}",
+                        target=_bw_path,
+                    )
+                    if _bw_review is not None and _bw_review.message:
+                        blind_msg = _bw_review.message
                     log.info(
                         "Blind rewrite blocked",
                         tool=tc.name,
