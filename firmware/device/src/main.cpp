@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.13.1"
+#define FW_VERSION "0.13.2"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -325,6 +325,8 @@ static void setBarState() {
     st = "offline", col = kRed;
   } else if (mode == Mode::Listening) {
     st = "listening", col = kRed;
+  } else if (audio::paused()) {
+    st = "paused", col = kText;
   } else if (audio::playing()) {
     st = "speaking", col = kCyan;
   } else if (mode == Mode::Waiting) {
@@ -363,11 +365,18 @@ static String notesCount() {
 }
 
 // The tap button the screens draw: none, record, or stop (a tapped recording).
-static void syncTapButton() {
-  ui::setTapButton(!board::kHasTouch || !settings.tapTalk ? ui::TapButton::Off
-                   : tapRec                               ? ui::TapButton::Stop
-                                                          : ui::TapButton::Talk);
+// The button on the screen (StopWatch): pause / play under an answer while
+// its sound plays, else Tap to talk's record / stop button.
+static ui::TapButton tapButtonKind() {
+  if (!board::kHasTouch) return ui::TapButton::Off;
+  if ((mode == Mode::Reply || mode == Mode::Idle) && audio::playing() && !tapRec) {
+    return audio::paused() ? ui::TapButton::Play : ui::TapButton::Pause;
+  }
+  if (!settings.tapTalk) return ui::TapButton::Off;
+  return tapRec ? ui::TapButton::Stop : ui::TapButton::Talk;
 }
+
+static void syncTapButton() { ui::setTapButton(tapButtonKind()); }
 
 static std::vector<ui::Row> statusRows() {
   std::vector<ui::Row> rows;
@@ -716,8 +725,12 @@ static void redraw() {
       else ui::showWorking(heard, activity, statusLine, millis() - workStartMs, toolSteps);
       break;
     case Mode::Reply:
-      if (settings.iconMode && audio::playing()) ui::showFace(settings.character, face::Pose::Speaking, audio::outputLevel());
-      else ui::showReply();
+      if (settings.iconMode && audio::playing()) {
+        ui::showFace(settings.character, audio::paused() ? face::Pose::Idle : face::Pose::Speaking,
+                     audio::outputLevel());
+      } else {
+        ui::showReply();
+      }
       break;
     case Mode::Image: ui::showStoredImage(); break;
     case Mode::Menu: {
@@ -1936,7 +1949,7 @@ static void goToSleep() {
 // flashing or waiting for the agent: then the screen goes off, later the
 // stick powers off (deep sleep; the front button wakes it).
 static void handleIdlePower() {
-  if (mode == Mode::Listening || mode == Mode::Waiting || mode == Mode::Link || audio::playing() || flashing ||
+  if (mode == Mode::Listening || mode == Mode::Waiting || mode == Mode::Link || audio::sounding() || flashing ||
       probation || prerollOn || !upNotes.empty() || upAwaitAck) {  // (an upload ends by the ack timeout at worst)
     lastActivityMs = millis();
     return;
@@ -2463,7 +2476,8 @@ static void pollTouch(bool dark) {
     return;
   }
   if (dist > 25) return;
-  if (!settings.tapTalk || !ui::tapButtonHit(t.base_x, t.base_y)) {
+  const ui::TapButton button = tapButtonKind();
+  if (button == ui::TapButton::Off || !ui::tapButtonHit(t.base_x, t.base_y)) {
     static uint32_t lastTapMs = 0;  // taps on the button act at once, so only these count
     if (lastTapMs && millis() - lastTapMs < kDoubleMs + 100) {
       lastTapMs = 0;
@@ -2472,6 +2486,13 @@ static void pollTouch(bool dark) {
       lastTapMs = millis();
       if (!lastTapMs) lastTapMs = 1;
     }
+    return;
+  }
+  if (button == ui::TapButton::Pause || button == ui::TapButton::Play) {
+    if (button == ui::TapButton::Pause) audio::pause();
+    else audio::resume();
+    buzz(25);
+    redraw();
     return;
   }
   if (tapRec) {
@@ -2748,12 +2769,12 @@ void loop() {
         workDirty = false;
         redraw();
       }
-    } else if (settings.iconMode && mode == Mode::Reply && audio::playing() &&
+    } else if (settings.iconMode && mode == Mode::Reply && audio::sounding() &&
                since > frameGap(min<uint32_t>(60, face::frameMs(settings.character)))) {
       lastDrawMs = millis();
       setBarState();
       ui::showFace(settings.character, face::Pose::Speaking, audio::outputLevel());
-    } else if (!settings.iconMode && ui::animated() && mode == Mode::Reply && audio::playing() && since > 80) {
+    } else if (!settings.iconMode && ui::animated() && mode == Mode::Reply && audio::sounding() && since > 80) {
       lastDrawMs = millis();  // the speaking line follows the voice (its strip only)
       ui::showSpeaking(audio::sounding() ? audio::outputLevel() : 0);
     } else if (settings.iconMode && mode == Mode::Idle && !ui::hasReply() && since > frameGap(face::frameMs(settings.character))) {

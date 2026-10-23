@@ -282,6 +282,19 @@ int main(int argc, char** argv) {
                "16:00. I moved the dentist to Friday at 15:00.");
   ui::showReply();
   save("28_tap_reply");
+  ui::setTapButton(ui::TapButton::Pause);  // the answer's sound plays: pause it
+  bar("speaking", kCyan);
+  gPlaying = true;
+  gLevel = 70;
+  ui::showReply();
+  ui::showSpeaking(70);
+  save("28b_tap_reply_pause");
+  gPlaying = false;
+  ui::setTapButton(ui::TapButton::Play);  // held: play on
+  bar("paused", kText);
+  ui::showReply();
+  save("28c_tap_reply_play");
+  ui::setTapButton(ui::TapButton::Talk);
   ui::setReply("");
   ui::showFace(0, face::Pose::Idle, 0);
   save("29_tap_icon");

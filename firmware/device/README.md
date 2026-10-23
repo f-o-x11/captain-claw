@@ -149,6 +149,14 @@ tap sends the recording (offline it's kept as a voice note). Holding the
 yellow button works as before, and its press also ends a tapped recording.
 A tapped recording also ends by itself after 2.5 s of quiet (and is sent);
 with nothing said at all it's dropped.
+
+While an answer is spoken, the button under it is a **pause** (two bars) —
+whether or not Tap to talk is on — and a **play** while it's held; the bar
+says *paused*. The rest of the answer keeps arriving meanwhile, so play goes
+on from the word it stopped at. A held answer counts as idle: the screen
+dims and the watch sleeps on its usual timers (a touch wakes it, with the
+play button still there until it sleeps). The answer always leaves room for
+the button, so its text never jumps when one comes or goes.
 Text uses Inter (`fonts/`, made by `tools/make_fonts.py`; SIL OFL, see
 `fonts/OFL.txt`), laid out to the circle.
 

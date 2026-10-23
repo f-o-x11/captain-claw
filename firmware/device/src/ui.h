@@ -155,7 +155,9 @@ void flashFrame(bool on);
 // Tap to talk (touch screens, an option): a record button on the main
 // screens (home, answer, character), a stop button while a recording that
 // was tapped on listens.
-enum class TapButton : uint8_t { Off, Talk, Stop };
+// Talk / Stop: Tap to talk's record and stop buttons. Pause / Play: an
+// answer's sound, on the answer screen.
+enum class TapButton : uint8_t { Off, Talk, Stop, Pause, Play };
 void setTapButton(TapButton button);
 // A touch at (x, y) lands on the button on the screen now.
 bool tapButtonHit(int x, int y);

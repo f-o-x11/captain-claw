@@ -414,26 +414,33 @@ void showSpeaking(int level) {
 }
 
 // Tap to talk: a record button (a red dot in a ring), or a stop button (a
-// red square) while a recording that was tapped on listens.
+// red square) while a recording that was tapped on listens. An answer's
+// sound: pause (two bars) while it plays, play (a triangle) while it's held.
 static void drawTapButton(int cy, int r) {
   canvas.fillSmoothCircle(CX, cy, r, mix(kBlack, kText, 0.85f));
   canvas.fillSmoothCircle(CX, cy, r - 4, kBlack);
   if (tapMode == TapButton::Stop) {
     const int side = r * 7 / 10;
     canvas.fillSmoothRoundRect(CX - side / 2, cy - side / 2, side, side, 5, kRed);
+  } else if (tapMode == TapButton::Pause) {
+    const int h = r * 7 / 10, w = r / 5, gap = r / 5;
+    canvas.fillSmoothRoundRect(CX - gap / 2 - w, cy - h / 2, w, h, 2, kWhite);
+    canvas.fillSmoothRoundRect(CX + gap / 2 + 1, cy - h / 2, w, h, 2, kWhite);
+  } else if (tapMode == TapButton::Play) {
+    const int h = r * 7 / 10, w = r * 6 / 10, x = CX - w / 2 + 2;  // a touch right: it looks centred
+    canvas.fillTriangle(x, cy - h / 2, x, cy + h / 2, x + w, cy, kWhite);
   } else {
     canvas.fillSmoothCircle(CX, cy, r - 9, kRed);
   }
   tapX = CX, tapY = cy, tapR = r;
 }
 
-static void layoutReply();
-
-void setTapButton(TapButton button) {
-  const bool relayout = (button == TapButton::Off) != (tapMode == TapButton::Off);
-  tapMode = button;
-  if (relayout && replyText.length()) layoutReply();  // the answer makes room for it, or takes it back
+// The buttons that sit under an answer (or the character showing it).
+static bool answerButton() {
+  return tapMode == TapButton::Talk || tapMode == TapButton::Pause || tapMode == TapButton::Play;
 }
+
+void setTapButton(TapButton button) { tapMode = button; }
 
 bool tapButtonHit(int x, int y) {
   const int dx = x - tapX, dy = y - tapY, reach = tapR + 30;  // a fingertip's slack round it
@@ -908,8 +915,10 @@ void showWorking(const String& heard, const std::vector<String>& activity, const
   push();
 }
 
-// Where an answer's text ends: higher when the tap button sits under it.
-static int replyBottom() { return tapMode == TapButton::Off ? kBottom : kTapReplyBottom; }
+// Where an answer's text ends: above the button that sits under it (pause /
+// play while it's spoken, Tap to talk's), reserved always so the text never
+// reflows when a button comes or goes.
+static int replyBottom() { return kTapReplyBottom; }
 
 static void layoutReply() {
   replyPages.clear();
@@ -964,7 +973,7 @@ void showReply() {
     drawLines(lines, top, line, kText);
     drawPageDots(replyPages.size(), replyPage, replyBottom() + 22);
   }
-  if (tapMode == TapButton::Talk) drawTapButton(kTapLowY, kTapLowR);
+  if (answerButton()) drawTapButton(kTapLowY, kTapLowR);
   push();
 }
 
@@ -1006,7 +1015,7 @@ void showFace(uint8_t kind, face::Pose pose, int level) {
   text(fit(name, lineRoom(342, 378)), CX, 360, kText);
   // The tap button takes the state line's place: to talk, or to stop.
   const bool listening = pose == face::Pose::Listening;
-  if ((tapMode == TapButton::Talk && !listening && pose != face::Pose::Thinking) ||
+  if ((answerButton() && !listening && pose != face::Pose::Thinking) ||
       (tapMode == TapButton::Stop && listening)) {
     drawTapButton(kTapLowY, kTapLowR);
   } else {

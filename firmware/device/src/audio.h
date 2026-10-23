@@ -51,8 +51,11 @@ void playFeed(const uint8_t* data, size_t len);
 void playEnd();                            // no more data for this stream
 void playStop();                           // stop now (the clip is kept)
 void playPoll();                           // keep the speaker fed; call from loop()
-bool playing();                            // a stream is buffered or sounding
+bool playing();                            // a stream is buffered or sounding (or held by pause())
 bool sounding();                           // the speaker is actually outputting it
+void pause();                              // hold the sound where it is (the stream keeps arriving)
+void resume();                             // carry on from there
+bool paused();                             // held by pause()
 // True once each time the answer's sound has played to its end by itself
 // (not stopped, not a replay): the moment for the closing chime.
 bool takeFinished();
