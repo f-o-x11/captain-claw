@@ -174,17 +174,13 @@ function spawnBackend() {
           if (response === 0) {
             backendReady = false;
             spawnBackend();
-            waitForBackend().then(() => mainWindow?.loadURL(getBackendUrl()));
+            waitForBackend().then(() => mainWindow?.loadURL(getAppUrl()));
           } else {
             app.quit();
           }
         });
     }
   });
-}
-
-function getBackendUrl() {
-  return `http://${BACKEND_HOST}:${actualPort}`;
 }
 
 function waitForBackend() {
@@ -394,6 +390,14 @@ function getFdUrl() {
   return `http://${FD_HOST}:${actualFdPort}`;
 }
 
+// What the window shows: the deck in desktop mode. `?app=desktop` makes the
+// page act as the desktop app even without the preload bridge, and the page
+// keeps it for the window's life, so reloads and /console/… addresses stay
+// in desktop mode — never the full Flight Deck.
+function getAppUrl() {
+  return `${getFdUrl()}/?app=desktop`;
+}
+
 function waitForFlightDeck() {
   return new Promise((resolve, reject) => {
     const start = Date.now();
@@ -456,6 +460,8 @@ function createWindow() {
     title: "Captain Claw",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      // The preload is sandboxed and can't read package.json: hand it the version.
+      additionalArguments: [`--captain-claw-version=${app.getVersion()}`],
       nodeIntegration: false,
       contextIsolation: true,
     },
@@ -580,7 +586,7 @@ app.whenReady().then(async () => {
     actualFdPort = await pickFdPort(saved ?? (upgraded ? LEGACY_FD_PORT : undefined));
     spawnFlightDeck();
     await waitForFlightDeck();
-    mainWindow.loadURL(getFdUrl());
+    mainWindow.loadURL(getAppUrl());
   } catch (err) {
     log.error("Failed to start Flight Deck:", err);
     dialog.showErrorBox(
@@ -606,7 +612,7 @@ app.on("activate", () => {
   // macOS: re-create window when dock icon is clicked
   if (BrowserWindow.getAllWindows().length === 0 && fdReady) {
     createWindow();
-    mainWindow.loadURL(getFdUrl());
+    mainWindow.loadURL(getAppUrl());
   }
 });
 
