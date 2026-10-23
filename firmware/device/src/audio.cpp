@@ -14,6 +14,7 @@ static int nextBlock = 0;
 static bool micOn = false;
 static int lastLevel = 0;
 static uint32_t micStartMs = 0, voiceMs = 0;
+static int loudRun = 0;  // loud blocks in a row (kVoiceRun of them = a voice)
 
 // ── speaker: one append-only PSRAM buffer holds the last answer's clip ──
 static constexpr size_t kPlayCap = 1600 * 1024;  // samples (~66 s at 24 kHz)
@@ -122,7 +123,8 @@ static void drainDone(size_t inflight, void (*sink)(const int16_t*, size_t)) {
     int peak = 0;
     for (size_t i = 0; i < kBlock; ++i) peak = max(peak, abs((int)blk[i]));
     lastLevel = min(100, peak * 100 / 12000);
-    if (peak >= kVoicePeak && millis() - micStartMs > 300) voiceMs = millis();  // (not the mic's start-up)
+    loudRun = peak >= kVoicePeak ? loudRun + 1 : 0;
+    if (loudRun >= kVoiceRun && millis() - micStartMs > 300) voiceMs = millis();  // (not the mic's start-up)
     sink(blk, kBlock);
     for (int i = 1; i < fifoLen; ++i) fifo[i - 1] = fifo[i];
     --fifoLen;
@@ -138,6 +140,7 @@ void micStart() {
   lastLevel = 0;
   micStartMs = millis();
   voiceMs = 0;
+  loudRun = 0;
   micOn = true;
   submitNext();
   submitNext();

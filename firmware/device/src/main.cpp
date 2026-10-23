@@ -46,7 +46,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.12.7"
+#define FW_VERSION "0.12.8"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -162,7 +162,7 @@ static constexpr uint32_t kOfflineMaxMs = 60000;   // a voice note kept offline 
 static uint32_t prerollMaxMs = kPrerollMaxMs;      // this recording's cap
 static bool prerollOffline = false;                // recorded knowing the deck can't be reached
 static constexpr uint32_t kPrerollMinMs = 1000;    // less than this recorded is a press that woke it
-static constexpr int kPrerollQuietPeak = audio::kVoicePeak;  // a short recording that never got louder is too
+static constexpr int kPrerollQuietPeak = 900;      // a short recording that never got louder is too
 static int16_t* preroll = nullptr;
 static size_t prerollCap = 0, prerollSent = 0;  // in samples
 static uint32_t prerollStartMs = 0;
@@ -2259,6 +2259,7 @@ static void stopOnSilence() {
   static uint32_t watching = 0;  // the recording's start (a new one resets the rest)
   static uint32_t voiceMs = 0;   // when a voice was last heard in it (0 = not yet)
   static size_t scanned = 0;     // background-recording samples looked at so far
+  static int loudRun = 0;        // …and its loud blocks in a row (kVoiceRun = a voice)
   if (!tapRec) return;
   const bool live = !prerollOn && mode == Mode::Listening && audio::micActive();
   if (!live && !(prerollOn && !prerollEndMs)) return;
@@ -2266,18 +2267,21 @@ static void stopOnSilence() {
   if (start != watching) {
     watching = start;
     voiceMs = 0;
+    loudRun = 0;
     scanned = audio::kMicRate * 3 / 10;  // past the mic's start-up
   }
   const uint32_t now = millis();
   if (live) {
     if (audio::micVoiceMs()) voiceMs = audio::micVoiceMs();
   } else {
-    // The background recording, 50 ms at a time — all of it, also what
-    // was said while the device woke and connected.
-    for (const size_t ready = prerollReady(now - 40); scanned + 800 <= ready; scanned += 800) {
+    // The background recording, block by block like the live mic — all of
+    // it, also what was said while the device woke and connected.
+    const size_t B = audio::kVoiceBlock;
+    for (const size_t ready = prerollReady(now - 40); scanned + B <= ready; scanned += B) {
       int peak = 0;
-      for (size_t i = scanned; i < scanned + 800; i += 2) peak = max(peak, abs((int)preroll[i]));
-      if (peak >= audio::kVoicePeak) voiceMs = prerollStartMs + (uint32_t)((scanned + 800) * 1000ULL / audio::kMicRate);
+      for (size_t i = scanned; i < scanned + B; ++i) peak = max(peak, abs((int)preroll[i]));
+      loudRun = peak >= audio::kVoicePeak ? loudRun + 1 : 0;
+      if (loudRun >= audio::kVoiceRun) voiceMs = prerollStartMs + (uint32_t)((scanned + B) * 1000ULL / audio::kMicRate);
     }
   }
   if ((int32_t)(now - (voiceMs ? voiceMs : start)) < (int32_t)kSilenceStopMs) return;
