@@ -692,6 +692,14 @@ class ToolsConfig(BaseModel):
         "jev", "audio", "telegram_inbox",
         "whatsapp_send_file", "intentions", "image_vision", "video_vision", "cv", "topics",
         "sessions", "history", "vfs",
+        # The everyday working set. Archetype and spawn lists used to decide
+        # these, and most left some out: 24 of 31 archetypes had no insights
+        # (so "remember that…" had nowhere to go), and Gmail/OneDrive
+        # attachments point at extract tools few archetypes carried.
+        # web_fetch also registers web_get and web_fetch_batch.
+        "shell", "glob", "web_fetch", "web_search",
+        "pdf_extract", "docx_extract", "xlsx_extract", "pptx_extract",
+        "insights", "contacts", "apis", "todo",
         # Deep memory is reached through Flight Deck, which owns the Typesense
         # connection and the credentials — so from an agent's side the archive
         # is simply always there. A per-agent opt-in would mean an agent could
