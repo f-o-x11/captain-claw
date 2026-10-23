@@ -1513,10 +1513,38 @@ class AgentSessionMixin:
     # Post-write tool_call compaction
     # ------------------------------------------------------------------
 
+    def _queue_write_compaction(
+        self,
+        call_id: str,
+        arguments: dict[str, Any],
+    ) -> None:
+        """Compact a successful write one step late.
+
+        The write just made keeps its content in history until the next write
+        or the end of the turn (:meth:`_flush_write_compactions`). Compacting it
+        at once meant the model's very next call showed its own write holding
+        only the marker, and a careful model (Claude Haiku on glasses staging)
+        read that as "I saved a placeholder": it rewrote the file, hit the
+        blind-rewrite guard, and told the user the finished report was broken.
+        """
+        self._flush_write_compactions()
+        self._compact_write_tool_call(call_id, arguments, compact=False)
+        self._pending_write_compactions = [(call_id, dict(arguments))]
+
+    def _flush_write_compactions(self) -> None:
+        """Compact every write still waiting in :meth:`_queue_write_compaction`."""
+        pending = getattr(self, "_pending_write_compactions", None) or []
+        self._pending_write_compactions = []
+        for call_id, arguments in pending:
+            self._compact_write_tool_call(call_id, arguments, record=False)
+
     def _compact_write_tool_call(
         self,
         call_id: str,
         arguments: dict[str, Any],
+        *,
+        record: bool = True,
+        compact: bool = True,
     ) -> None:
         """Replace full file content in stored tool_call with compact ref.
 
@@ -1528,6 +1556,8 @@ class AgentSessionMixin:
         This walks backwards through session messages, finds the parent
         assistant message for *call_id*, and replaces the ``content``
         argument with a short pointer (path + line count + size).
+        *record* / *compact* split the manifest entry from the compaction,
+        so a deferred compaction records the write once, when it happens.
         """
         if not self.session:
             return
@@ -1538,7 +1568,10 @@ class AgentSessionMixin:
 
         # Record in workspace manifest — lightweight tracking of all
         # files created/modified this session for context injection.
-        self._record_workspace_write(path, lines, size_kb)
+        if record:
+            self._record_workspace_write(path, lines, size_kb)
+        if not compact:
+            return
 
         if not content or len(content) < 200:
             # Not worth compacting tiny writes — the overhead of the
@@ -1553,9 +1586,13 @@ class AgentSessionMixin:
             and getattr(self, "_governor_on", lambda: False)()
         ):
             return
+        # Says outright that the text WAS saved: a model reading only
+        # "[written to disk: …]" as its own write's content took it for the
+        # file body and "fixed" a placeholder that never existed.
         compact_ref = (
             f"[written to disk: {path}, {lines} lines, {size_kb:.1f}KB"
-            f" — use read tool to view]"
+            f" — the full text was saved; this note only shortens the call in"
+            f" your history. Use read tool to view it.]"
         )
 
         import json as _json

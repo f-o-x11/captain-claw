@@ -158,6 +158,10 @@ _ECO_CORE_TOOLS: frozenset[str] = frozenset({
     "google_mail", "google_drive", "google_calendar",
     "microsoft_mail", "microsoft_onedrive", "microsoft_calendar",
     "whatsapp_send_file", "intentions",
+    # Memory: "remember that…" comes in any language ("zapamti to"). Without
+    # the schema the agent told the user it had no memory tool, or claimed
+    # it had saved a fact it never stored.
+    "insights",
     # Scheduling: cron self-describes as a frozen/always-available tool, and
     # scheduling requests arrive in any language ("za 5 minuta", "in 5 min").
     # The English-only intent patterns can't catch those, so keep cron in core
@@ -229,6 +233,11 @@ _ECO_INTENT_PATTERNS: list[tuple[_re.Pattern[str], frozenset[str]]] = [
     # Calendar
     (_re.compile(r"\bcalendar\b|\bschedule\b|\bmeeting\b|\bagenda\b|\bevent\b", _re.I),
      frozenset({"google_calendar", "microsoft_calendar"})),
+    # Memory (EN / HR / SR): remember, recall, what do you know about me.
+    # `insights` is core; these are the rest of the memory layers.
+    (_re.compile(r"\bremember\w*|\bmemor\w*|\brecall\b|\bforget\b|\bzapamti\w*|\bupamti\w*"
+                 r"|\bpam[tć]\w*|\bpamc\w*|\bsje[ćc]a\w*|\bse[ćc]a\w*", _re.I),
+     frozenset({"personality", "typesense", "topics"})),
     # NOTE: cron is intentionally NOT matched here — it lives in _ECO_CORE_TOOLS
     # so scheduling works in any language, not just the English cues above.
     # Google Drive
@@ -405,6 +414,8 @@ _STALL_HANDBACK_RE = _re.compile(
     r")",
     _re.IGNORECASE,
 )
+# A sentence that ends in a question mark: the reply is asking the user.
+_STALL_QUESTION_RE = _re.compile(r"\?(?:\s|[*_)\"'»”]|$)")
 # Upper length bound for the CLOSING-sentence stall check. Weak models
 # often prefix a short observation before the stall ("Great data from
 # GitHub. Let me grab a few more sources.") which anchoring on the first
@@ -464,6 +475,11 @@ def _looks_like_stall(text: str) -> bool:
         return True
     if _STALL_HANDBACK_RE.match(first_line):
         # "Let me know if …" — a sign-off, not a stall.
+        return False
+    if _STALL_QUESTION_RE.search(stripped):
+        # A question to the user hands control back too. "What time, and
+        # should it be all day? I'll set the location to Lobby." was forced
+        # into a tool call, and the event went in before the user answered.
         return False
     if not _STALL_FIRST_LINE_RE.match(first_line):
         return _closing_sentence_stalls(stripped)
@@ -1549,10 +1565,17 @@ class AgentOrchestrationMixin:
             log.info("Force script mode: instruction injected into user input")
 
         list_context_excerpt = self._collect_list_extraction_context()
+        # A peer's relayed result is an answer to pass on, not work: its
+        # cited sources once read as 19 list members, and the scale loop
+        # fetched them all on a turn that said "do NOT call any tool".
+        _relayed_turn = (
+            isinstance(getattr(self, "_turn_origin", None), tuple)
+            and self._turn_origin[0] in ("delegated_result", "fleet_notice")
+        )
         # Workers execute a single focused task — skip the heavyweight list
         # task extraction / coverage pipeline which can cause endless loops
         # on simple fetch-and-summarize instructions.
-        if getattr(self, "_is_worker", False):
+        if getattr(self, "_is_worker", False) or _relayed_turn:
             list_task_plan = list_task_plan  # keep default (disabled)
         elif _force_script:
             # Force-script mode: skip list extraction entirely.
@@ -1580,7 +1603,10 @@ class AgentOrchestrationMixin:
         # coverage-check loops on simple fetch-and-summarize tasks.
         # Same for latched-off agents (code agents): URLs in a code prompt
         # (docs links, API endpoints) are references, not work items.
-        if not is_worker and not _force_script and not self._scale_system_disabled():
+        if (
+            not is_worker and not _force_script and not _relayed_turn
+            and not self._scale_system_disabled()
+        ):
             url_extraction_source = user_input if clarification_context_applied else effective_user_input
             input_urls = self._extract_urls(url_extraction_source)
             if len(input_urls) > len(list_task_plan.get("members", [])):
@@ -2575,6 +2601,20 @@ class AgentOrchestrationMixin:
                 # If the agent keeps rewriting the same file(s), it's
                 # stuck in a loop.  Inject a nudge to finalize.
                 if _tool_results and not _write_loop_nudged:
+                    # A rewrite the guards refused never touched the file, and
+                    # its refusal already says what to do: an iteration of
+                    # refused rewrites only stops the turn on the second try.
+                    # Stopping on the first ended turns before the share/send
+                    # steps the user asked for.
+                    _refused_ids = {
+                        str(r.get("tool_call_id", ""))
+                        for r in _tool_results
+                        if str(r.get("content", "")).startswith(
+                            ("BLIND REWRITE BLOCKED", "DUPLICATE CALL BLOCKED"))
+                    }
+                    _all_refused = bool(_refused_ids) and all(
+                        str(_tc_orig.id) in _refused_ids for _tc_orig in response.tool_calls)
+                    _loop_at = 3 if _all_refused else 2
                     _write_tools_this_iter = []
                     for _tc_orig in response.tool_calls:
                         _tn = str(_tc_orig.name).lower()
@@ -2596,7 +2636,7 @@ class AgentOrchestrationMixin:
                     if (
                         _write_tools_this_iter
                         and len(_write_tools_this_iter) == len(response.tool_calls)
-                        and all(_write_path_counts.get(p, 0) >= 2 for p in _write_tools_this_iter)
+                        and all(_write_path_counts.get(p, 0) >= _loop_at for p in _write_tools_this_iter)
                     ):
                         _write_loop_nudged = True
                         log.info(
@@ -2606,12 +2646,18 @@ class AgentOrchestrationMixin:
                         )
                         self._add_session_message(
                             role="user",
+                            # Rewrites only: "call no more tools" made the model
+                            # drop the share/send steps still owed and tell the
+                            # user it had no tools.
                             content=(
                                 "[system] STOP — you have already written this file. "
                                 "The file is saved and complete. "
-                                "Do NOT rewrite it again. Provide your final text "
-                                "response now summarizing what you did and referencing "
-                                "the file(s) you created. Do NOT call any more tools."
+                                "Do NOT rewrite it again. If the request still has "
+                                "steps that don't rewrite it (share a link, send it, "
+                                "…), do them now; to check what the file holds, read "
+                                "it. Otherwise give your final text response, "
+                                "summarizing what you did and referencing the file(s) "
+                                "you created."
                             ),
                         )
 
