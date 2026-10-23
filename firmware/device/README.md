@@ -169,7 +169,10 @@ needed: the watch knows how far into the speech the speaker is (the mouth
 uses the same estimate); once the speech has all arrived, that fraction of
 the text is the place, and before that the pace learned from the last answer
 carries it (the deck says how many characters it speaks: `"spoken"` in the
-reply). After the speech, a small replay button sits under the text — tap it
+reply). From 0.15.2 each sound also says which characters of the shown text
+it covers (`"from"`/`"to"` on `audio_start`), so the lit sentence is exact at
+every sentence and by its length within, and the pace is learned from each
+sentence as it finishes — the estimate above only serves an older deck. After the speech, a small replay button sits under the text — tap it
 to hear the answer again.
 
 The answer comes as it's written (0.15.0). Flight Deck follows the model's

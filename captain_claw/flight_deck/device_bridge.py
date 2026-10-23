@@ -675,25 +675,28 @@ class _DeviceConn:
             self._forget_stream()
             return  # the reconnect brings it
         self.last_reply_at = time.monotonic()
+        has_dj = self.round_screen or self.paper
+        shown = screen_text(text, has_dj=has_dj)
         if self.streamed:
             # Spoken as it came: only what follows the last sentence read is left.
             read = self.partial[:self.spoken_upto]
             tail = text[len(read):] if text.startswith(read) else text[_common_prefix(text, read):]
             spoken = speakable(tail) if self.speak else ""
             total = self.spoken_total + len(spoken)
+            span = (len(screen_text(read, has_dj=has_dj)), len(shown))
         else:
             spoken = speakable(text) if self.speak else ""
             total = len(spoken)
+            span = (0, len(shown))
             _answers[self.channel_id] = []  # a new answer
             self.speech_parts = 0
         # Round screens (the StopWatch) and e-paper use Inter, which has Đ.
         # "spoken": how much of it is read aloud, so the watch can follow the
         # voice through the text (0: nothing is).
-        await self.send_json({"type": "reply", "text": screen_text(text, has_dj=self.round_screen or self.paper),
-                              "proactive": proactive, "spoken": total})
+        await self.send_json({"type": "reply", "text": shown, "proactive": proactive, "spoken": total})
         if spoken:
-            _answers.setdefault(self.channel_id, []).append(("tts", spoken))
-            await self._audio_q.put(("tts", spoken))
+            _answers.setdefault(self.channel_id, []).append(("tts", spoken, span))
+            await self._audio_q.put(("tts", spoken, span))
         if total:
             await self._audio_q.put(("end", None))  # speech_end, once the voice has all gone out
         self._forget_stream()
@@ -705,13 +708,15 @@ class _DeviceConn:
             m = _SENTENCE_END.search(self.partial, self.spoken_upto)
             if not m:
                 return
-            sentence = self.partial[self.spoken_upto:m.end()]
-            self.spoken_upto = m.end()
-            await self._speak_part(sentence)
+            start, end = self.spoken_upto, m.end()
+            self.spoken_upto = end
+            await self._speak_part(self.partial[start:end], start, end)
 
-    async def _speak_part(self, sentence: str) -> None:
+    async def _speak_part(self, sentence: str, start: int, end: int) -> None:
         """A sentence that just completed: on the screen (the answer so far)
-        and read aloud, straight after the one before."""
+        and read aloud, straight after the one before. Its sound says which
+        characters of the screen text it covers, so the watch's lit sentence
+        follows the voice exactly at each sentence and by its length within."""
         if not self.streamed:
             self.streamed = True
             self.speech_parts = 0
@@ -724,9 +729,12 @@ class _DeviceConn:
             await self.send_json({"type": "reply_part", "text": shown})
         spoken = speakable(sentence) if self.speak else ""
         if spoken:
-            _answers.setdefault(self.channel_id, []).append(("tts", spoken))
+            has_dj = self.round_screen or self.paper
+            span = (len(screen_text(self.partial[:start], has_dj=has_dj)),
+                    len(screen_text(self.partial[:end], has_dj=has_dj)))
+            _answers.setdefault(self.channel_id, []).append(("tts", spoken, span))
             self.spoken_total += len(spoken)
-            await self._audio_q.put(("tts", spoken))
+            await self._audio_q.put(("tts", spoken, span))
 
     async def _reset_stream(self) -> None:
         """Text that came before a tool call wasn't the answer: forgotten, and
@@ -1033,12 +1041,17 @@ class _DeviceConn:
 
     async def _audio_loop(self) -> None:
         while True:
-            kind, arg = await self._audio_q.get()
+            item = await self._audio_q.get()
+            kind, arg = item[0], item[1]
+            span = item[2] if len(item) > 2 else None  # (from, to): the sound's words in the text
             if kind == "end":  # the answer's voice has all gone out
                 await self.send_json({"type": "speech_end"})
                 continue
             await self._stop_say()  # an answer's sound never shares the wire with an aside
-            job = self._play_tts(arg) if kind == "tts" else self._play_file(arg)
+            if kind == "tts":
+                job = self._play_tts(arg, span=span) if span is not None else self._play_tts(arg)
+            else:
+                job = self._play_file(arg)
             self._audio_task = asyncio.create_task(job)
             try:
                 await self._audio_task
@@ -1102,7 +1115,7 @@ class _DeviceConn:
             except BaseException:
                 pass
 
-    async def _stream_pcm(self, chunks, aside: bool = False) -> None:
+    async def _stream_pcm(self, chunks, aside: bool = False, span: tuple | None = None) -> None:
         start: dict = {"type": "audio_start", "rate": TTS_RATE}
         if aside:
             start["aside"] = True
@@ -1110,6 +1123,8 @@ class _DeviceConn:
             if self.speech_parts:
                 start["cont"] = True  # the answer's next sound: no cue before it
             self.speech_parts += 1
+            if span is not None:  # where this sound's words are in the shown text
+                start["from"], start["to"] = int(span[0]), int(span[1])
         await self.send_json(start)
         try:
             pending = b""
@@ -1128,13 +1143,14 @@ class _DeviceConn:
             except Exception:
                 pass
 
-    async def _play_tts(self, text: str, aside: bool = False, language: str | None = None) -> None:
+    async def _play_tts(self, text: str, aside: bool = False, language: str | None = None,
+                        span: tuple | None = None) -> None:
         from captain_claw.flight_deck.soniox_routes import key_for
 
         gen = gb.soniox_tts_pcm(text, language=language or self.lang, voice=self.voice,
                                 api_key=await key_for(self.user_id or None))
         try:
-            await self._stream_pcm(gen, aside=aside)
+            await self._stream_pcm(gen, aside=aside, span=span)
         except gb.SonioxTTSError as exc:
             await self.send_json({"type": "status", "text": f"Voice unavailable: {exc}"[:200]})
         finally:

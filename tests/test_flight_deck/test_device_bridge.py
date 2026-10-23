@@ -228,7 +228,7 @@ async def test_the_device_turn_reply_is_shown_and_spoken():
     assert _types(conn) == ["state", "status", "reply", "state"]
     assert conn.ws.sent[2]["text"] == "Sunny, 24°C."
     assert conn.ws.sent[3]["state"] == "ready" and conn.pending is False
-    assert conn._audio_q.get_nowait() == ("tts", "Sunny, 24°C.")
+    assert conn._audio_q.get_nowait() == ("tts", "Sunny, 24°C.", (0, 12))
 
 
 @pytest.mark.asyncio
@@ -290,7 +290,7 @@ async def test_replay_sends_the_last_answer_again(monkeypatch):
     conn.last_reply_at = time.monotonic()
     await conn.on_bus({"type": "media", "items": [{"kind": "audio", "path": "/w/b.mp3", "name": "b.mp3"}]})
     played = _queued(conn)
-    assert [kind for kind, _ in played] == ["tts", "file"]
+    assert [item[0] for item in played] == ["tts", "file"]
 
     assert await conn.replay() is True
     assert _queued(conn) == played  # the speech and the sound, in order
@@ -305,7 +305,7 @@ async def test_a_new_answer_replaces_the_one_to_replay(monkeypatch):
     await conn.on_bus({"type": "agent", "text": "Second."})
     _queued(conn)
     await conn.replay()
-    assert _queued(conn) == [("tts", "Second.")]
+    assert _queued(conn) == [("tts", "Second.", (0, 7))]
 
 
 @pytest.mark.asyncio
@@ -327,7 +327,7 @@ async def test_the_answer_to_replay_survives_a_reconnect(monkeypatch):
     await first.on_bus({"type": "agent", "text": "Cut short by the link."})
     again = _conn(speak=True)  # same owner and device id: the same channel
     assert await again.replay() is True
-    assert _queued(again) == [("tts", "Cut short by the link.")]
+    assert _queued(again) == [("tts", "Cut short by the link.", (0, 22))]
     assert await _watch().replay() is False  # another device has its own
 
 
@@ -742,7 +742,7 @@ async def test_a_new_topic_goes_straight_to_the_answer():
     await frame({"type": "chat_message", "role": "assistant", "content": "23 °C."})
     await conn.on_bus({"type": "status", "status": "ready"})
     assert [m["text"] for m in conn.ws.sent if m["type"] == "reply"] == ["23 °C."]
-    assert conn._audio_q.get_nowait() == ("tts", "23 °C.")
+    assert conn._audio_q.get_nowait() == ("tts", "23 °C.", (0, 6))
     assert conn._audio_q.get_nowait() == ("end", None) and conn._audio_q.empty()
     assert conn.pending is False
 
@@ -757,7 +757,7 @@ async def test_a_new_topic_said_alone_gets_a_short_line():
     assert conn.ws.sent[1:] == [{"type": "reply", "text": db.NEW_TOPIC_REPLY, "proactive": False,
                                  "spoken": len(db.speakable(db.NEW_TOPIC_REPLY))},
                                 {"type": "state", "state": "ready"}]
-    assert conn._audio_q.get_nowait() == ("tts", db.NEW_TOPIC_REPLY)
+    assert conn._audio_q.get_nowait() == ("tts", db.NEW_TOPIC_REPLY, (0, len(db.NEW_TOPIC_REPLY)))
     assert conn.pending is False
 
 
@@ -820,7 +820,7 @@ async def test_an_answer_landing_while_the_link_is_down_comes_on_the_reconnect(d
     await new.resume()
     assert _after_bound(new) == [{"type": "reply", "text": "Tri sata.", "proactive": False, "spoken": 9},
                                  {"type": "state", "state": "ready"}]
-    assert new._audio_q.get_nowait() == ("tts", "Tri sata.")
+    assert new._audio_q.get_nowait() == ("tts", "Tri sata.", (0, 9))
 
 
 @pytest.mark.asyncio
@@ -926,16 +926,16 @@ async def test_sentences_are_spoken_as_the_answer_streams():
     await conn.on_bus({"type": "agent_delta", "text": "rain.\nTake a coat."})
     parts = [m["text"] for m in conn.ws.sent if m["type"] == "reply_part"]
     assert parts == ["Sunny today, 24 °C.", "Sunny today, 24 °C. Tomorrow rain."]
-    assert conn._audio_q.get_nowait() == ("tts", "Sunny today, 24 °C.")
-    assert conn._audio_q.get_nowait() == ("tts", "Tomorrow rain.")
+    assert conn._audio_q.get_nowait() == ("tts", "Sunny today, 24 °C.", (0, 19))
+    assert conn._audio_q.get_nowait() == ("tts", "Tomorrow rain.", (19, 34))  # its place in the shown text
     await conn.on_bus({"type": "agent", "text": "Sunny today, 24 °C. Tomorrow rain.\nTake a coat."})
     reply = [m for m in conn.ws.sent if m["type"] == "reply"][0]
     assert reply["text"] == "Sunny today, 24 °C. Tomorrow rain.\nTake a coat."
     assert reply["spoken"] == len("Sunny today, 24 °C.") + len("Tomorrow rain.") + len("Take a coat.")
-    assert conn._audio_q.get_nowait() == ("tts", "Take a coat.")  # only what wasn't read yet
+    assert conn._audio_q.get_nowait() == ("tts", "Take a coat.", (34, 47))  # only what wasn't read yet
     assert conn._audio_q.get_nowait() == ("end", None) and conn._audio_q.empty()
-    assert db._answers[conn.channel_id] == [("tts", "Sunny today, 24 °C."), ("tts", "Tomorrow rain."),
-                                            ("tts", "Take a coat.")]
+    assert db._answers[conn.channel_id] == [("tts", "Sunny today, 24 °C.", (0, 19)), ("tts", "Tomorrow rain.", (19, 34)),
+                                            ("tts", "Take a coat.", (34, 47))]
 
 
 @pytest.mark.asyncio
@@ -943,11 +943,11 @@ async def test_text_before_a_tool_call_is_not_the_answer():
     conn = _conn(speak=True)
     conn.pending = True
     await conn.on_bus({"type": "agent_delta", "text": "Let me check the calendar. "})
-    assert conn._audio_q.get_nowait() == ("tts", "Let me check the calendar.")
+    assert conn._audio_q.get_nowait() == ("tts", "Let me check the calendar.", (0, 26))
     await conn.on_bus({"type": "activity", "text": "Reading the calendar", "tool": "google_calendar", "phase": "tool"})
     assert {"type": "speech_reset"} in conn.ws.sent
     await conn.on_bus({"type": "agent_delta", "text": "Three meetings tomorrow. "})
-    assert conn._audio_q.get_nowait() == ("tts", "Three meetings tomorrow.")
+    assert conn._audio_q.get_nowait() == ("tts", "Three meetings tomorrow.", (0, 24))
     await conn.on_bus({"type": "agent", "text": "Three meetings tomorrow."})
     reply = [m for m in conn.ws.sent if m["type"] == "reply"][0]
     assert reply["spoken"] == len("Three meetings tomorrow.")
@@ -961,10 +961,11 @@ async def test_the_cue_comes_once_per_answer():
     async def pcm():
         yield b"\x00\x00" * 10
 
-    await conn._stream_pcm(pcm())
-    await conn._stream_pcm(pcm())
+    await conn._stream_pcm(pcm(), span=(0, 19))
+    await conn._stream_pcm(pcm(), span=(19, 34))
     starts = [m for m in conn.ws.sent if isinstance(m, dict) and m["type"] == "audio_start"]
     assert "cont" not in starts[0] and starts[1]["cont"] is True
+    assert (starts[0]["from"], starts[0]["to"], starts[1]["from"], starts[1]["to"]) == (0, 19, 19, 34)
 
 
 @pytest.mark.asyncio

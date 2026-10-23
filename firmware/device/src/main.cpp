@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.15.1"
+#define FW_VERSION "0.15.2"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -171,8 +171,22 @@ static uint32_t pendingTapMs = 0;    // a single tap on a picture acts once it c
 // speaks, how long the text is, and the speaking pace learned from the last
 // answer whose speech had all arrived (characters a second).
 static int spokenChars = 0, replyChars = 0;
-static float charsPerSec = 14.0f;
+static float charsPerSec = 16.0f;
 static bool paceLearned = false;
+// The answer's voice sound by sound (audio_start "from"/"to"): where each
+// sound's words are in the text and where its samples begin in the clip.
+// A sound without words (one the agent made) ends the following.
+struct Segment {
+  size_t start;
+  int from, to;
+};
+static Segment segs[48];
+static int nSegs = 0;
+
+static void noteSegment(size_t start, int from, int to) {
+  if (start == 0) nSegs = 0;  // a fresh clip: a new answer
+  if (nSegs < 48) segs[nSegs++] = {start, from, to};
+}
 static bool streamedReply = false;  // this answer is coming in parts (reply_part)
 static bool speechMore = false;     // the deck has more of the answer's voice to send: no closing chime yet
 static constexpr uint16_t kHintTurns = 5;  // the home screen's "hold … to talk" goes after this many
@@ -1682,6 +1696,9 @@ static void onText(const char* payload, size_t len) {
     }
     speechMore = true;  // until speech_end
     startSpeech(doc["rate"] | 24000, doc["cont"] | false);
+    // Where this sound's words are (the deck says), from where its samples begin.
+    if (doc["to"].is<int>()) noteSegment(audio::clipSamples(), doc["from"] | 0, doc["to"] | 0);
+    else noteSegment(audio::clipSamples(), -1, -1);
     setBarState();
   } else if (type == "audio_end") {
     audio::playEnd();
@@ -2744,7 +2761,30 @@ static void pollTouch(bool dark) {
 // answer (learned here) carries the estimate.
 static int spokenCharAt() {
   if (!audio::playing()) return -1;
-  const size_t total = audio::speechTotal(), at = audio::speechAt();
+  const uint32_t rate = audio::playRateHz();
+  // A touch ahead (an eighth of a second): a lit sentence reads better early than late.
+  const size_t at = audio::speechAt() + rate / 8;
+  int k = -1;
+  for (int i = 0; i < nSegs; ++i) {
+    if (segs[i].start <= at) k = i;
+  }
+  if (k >= 0) {
+    // The sound's own words: exact at its ends, by its length within. The
+    // one still arriving goes by the pace of the ones before it.
+    const Segment& s = segs[k];
+    if (s.from < 0) return -1;  // not words
+    const bool last = k + 1 == nSegs;
+    const size_t end = last ? (audio::streamArrived() ? audio::clipSamples() : 0) : segs[k + 1].start;
+    if (end > s.start) {
+      charsPerSec = constrain((s.to - s.from) * (float)rate / (end - s.start), 6.0f, 30.0f);
+      const uint64_t in = min<uint64_t>((uint64_t)(s.to - s.from) * (at - s.start) / (end - s.start), s.to - s.from);
+      return s.from + (int)in;
+    }
+    return min(s.to, s.from + (int)((at - s.start) * charsPerSec / rate));
+  }
+  // An older deck says nothing of the sounds' words: the played fraction of
+  // the speech once it has all arrived, the pace before.
+  const size_t total = audio::speechTotal();
   const int chars = spokenChars > 0 ? min(spokenChars, replyChars) : replyChars;
   if (audio::speechEnded() && total) {
     if (!paceLearned) {
