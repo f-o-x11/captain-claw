@@ -41,7 +41,13 @@ if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
     exit 1
 fi
 
-PYTHON="$(command -v python3 || command -v python)"
+# The project's own environment first: a bare python3 can be another
+# interpreter (macOS ships 3.9) without captain-claw's dependencies.
+if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    PYTHON="$SCRIPT_DIR/.venv/bin/python"
+else
+    PYTHON="$(command -v python3 || command -v python)"
+fi
 PY_VERSION=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 echo "Using Python $PY_VERSION ($PYTHON)"
 
@@ -69,7 +75,9 @@ echo "Chromium installed to $PLAYWRIGHT_BROWSERS_PATH"
 echo ""
 echo "Building Captain Claw binaries..."
 echo ""
-"$PYTHON" -m PyInstaller captain_claw.spec
+# --noconfirm: replace the previous dist/captain-claw instead of asking
+# (without a terminal PyInstaller refuses, and the build stops there).
+"$PYTHON" -m PyInstaller --noconfirm captain_claw.spec
 
 # ── Copy Playwright browsers into dist (post-PyInstaller) ────────
 # Chromium's .app bundle cannot be codesigned by PyInstaller, so we

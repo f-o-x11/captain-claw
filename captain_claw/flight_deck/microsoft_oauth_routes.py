@@ -3,7 +3,9 @@
 The Microsoft twin of ``google_oauth_routes``, built the same way:
 
 * The deployment's OAuth *client* — an app registration's client id + secret,
-  its tenant, the scopes — lives in ``system_settings`` (admin only).
+  its tenant, the scopes — lives in ``system_settings`` (admin only). The
+  secret is optional: without it the registration is a public client ("Mobile
+  and desktop applications"), which is what the desktop app uses.
 * Each Flight Deck user connects THEIR OWN Microsoft account; the tokens live
   in that user's ``user_settings`` (``microsoft_oauth:*`` — server-owned, never
   readable or writable through ``/fd/settings``).
@@ -24,7 +26,9 @@ stored under :data:`mail_signature.MICROSOFT_KEY`) reaches their agents in
 Not (yet) carried over from Google: shared-agent members' own connections (a
 member request to these routes is refused by the speaker-grant middleware —
 ``/fd/microsoft/*`` is not grant-aware) and a send gate (the agent tools only
-draft). Like Google, only on an auth-enabled deck.
+draft). Like Google, only on an auth-enabled deck or the desktop app's own
+deck, whose sign-in runs in the system browser and comes back to its loopback
+``/callback`` (see google_oauth_routes).
 """
 
 from __future__ import annotations
@@ -42,7 +46,7 @@ from pydantic import BaseModel
 from captain_claw import mail_signature
 from captain_claw.flight_deck import google_oauth_routes as _g
 from captain_claw.flight_deck.admin_routes import require_admin
-from captain_claw.flight_deck.auth import _fd_auth_enabled, get_current_user, get_db
+from captain_claw.flight_deck.auth import _fd_desktop_deck, get_current_user, get_db
 from captain_claw.flight_deck.db import FlightDeckDB
 from captain_claw.logging import get_logger
 from captain_claw.microsoft_oauth import (
@@ -78,8 +82,9 @@ _AGENT_ROUTE_SUFFIXES = ("/access_token", "/agent_status")
 
 def _require_auth_deck(request: Request) -> None:
     """Router-wide gate (see ``google_oauth_routes._require_auth_deck``): an
-    auth-disabled deck keeps no DB and can't tell its users apart."""
-    if _fd_auth_enabled():
+    auth-disabled deck can't tell its users apart — unless it is the desktop
+    app's single-user loopback deck."""
+    if _g._connections_available():
         return
     agent_route = request.url.path.rstrip("/").endswith(_AGENT_ROUTE_SUFFIXES)
     raise HTTPException(
@@ -160,9 +165,12 @@ async def _load_client(db: FlightDeckDB) -> dict[str, Any]:
 
 
 async def _token_client(db: FlightDeckDB) -> dict[str, Any] | None:
-    """The configured client, or None until an admin saved id + secret."""
+    """The configured client, or None until an admin saved a client id. The
+    secret is optional: without one the registration is a public client
+    ("Mobile and desktop applications" — what the desktop app's loopback
+    sign-in uses), and the token calls send none."""
     client = await _load_client(db)
-    if not (client["client_id"] and client["client_secret"]):
+    if not client["client_id"]:
         return None
     return client
 
@@ -257,7 +265,7 @@ async def _refresh_if_needed(
 async def get_valid_microsoft_access_token(user_id: str) -> str | None:
     """A valid Microsoft Graph access token for *user_id*, or None. No default
     owner: an unattributed call gets nothing."""
-    if not user_id or not _fd_auth_enabled():
+    if not user_id or not _g._connections_available():
         return None
     try:
         db = get_db()
@@ -275,7 +283,7 @@ async def get_valid_microsoft_access_token(user_id: str) -> str | None:
 
 async def is_microsoft_connected(user_id: str) -> bool:
     """No network: has *user_id* connected Microsoft on this deck?"""
-    if not user_id or not _fd_auth_enabled():
+    if not user_id or not _g._connections_available():
         return False
     try:
         db = get_db()
@@ -291,9 +299,13 @@ async def is_microsoft_connected(user_id: str) -> bool:
 
 
 def _redirect_uri(request: Request) -> str:
-    """Must match a Web redirect URI on the app registration exactly.
+    """Must match a redirect URI on the app registration: a Web one exactly,
+    a "Mobile and desktop applications" one up to the port (Microsoft ignores
+    a loopback port there — the desktop deck's moves between launches).
     FD_PUBLIC_URL wins (reverse proxies); else the request's own host.
     Microsoft accepts plain http only for localhost."""
+    if _fd_desktop_deck():
+        return f"{_g._desktop_origin()}/fd/microsoft/callback"
     public = _g._public_url()
     if public:
         return f"{public}/fd/microsoft/callback"
@@ -460,7 +472,7 @@ def _take_connect_ticket(request: Request) -> str:
     entry = _connect_tickets.pop(ticket, None) if ticket else None
     if not entry or time.time() - float(entry.get("ts") or 0) > _TICKET_TTL:
         return ""
-    if not _g._same_secret(ticket, request.cookies.get(_TICKET_COOKIE, "")):
+    if not _g._ticket_held_here(request, ticket, _TICKET_COOKIE):
         log.warning("Microsoft connect refused: ticket not held by this browser")
         return ""
     return str(entry.get("owner") or "")
@@ -475,14 +487,19 @@ def _page(*, ok: bool, title: str, detail: str = "", email: str = "", status_cod
 
 @router.get("/login")
 async def microsoft_login(request: Request) -> Response:
-    """Redirect the popup to Microsoft's sign-in, for the ticket's user."""
+    """Redirect the popup to Microsoft's sign-in, for the ticket's user (on
+    the desktop deck, from its sign-in origin — ``_g._off_desktop_origin``)."""
+    moved = _g._off_desktop_origin(request)
+    if moved:
+        return moved
     db = get_db()
     client = await _token_client(db)
     if not client:
         return HTMLResponse(
             "<h3>Microsoft OAuth not configured</h3>"
-            "<p>An admin must enter the app registration's Client ID and Client "
-            "Secret on the Connections page first.</p>",
+            "<p>An admin must enter the app registration's Client ID (and, for "
+            "a Web registration, its Client Secret) on the Connections page "
+            "first.</p>",
             status_code=400,
         )
     owner = _take_connect_ticket(request)

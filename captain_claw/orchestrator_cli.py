@@ -249,4 +249,8 @@ async def _list_workflows_cli(config_path: str = "") -> None:
 
 
 if __name__ == "__main__":
+    # Frozen (PyInstaller) builds: a multiprocessing helper re-runs this
+    # binary — without this it starts another full server instead.
+    import multiprocessing
+    multiprocessing.freeze_support()
     cli_orchestrate()

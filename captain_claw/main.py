@@ -456,6 +456,10 @@ def version() -> None:
 
 
 if __name__ == "__main__":
+    # Frozen (PyInstaller) builds: a multiprocessing helper re-runs this
+    # binary — without this it starts another full server instead.
+    import multiprocessing
+    multiprocessing.freeze_support()
     import typer
 
     def _version_callback(value: bool) -> None:

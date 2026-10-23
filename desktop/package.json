@@ -46,8 +46,8 @@
       "category": "public.app-category.developer-tools",
       "icon": "icons/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] },
-        { "target": "zip", "arch": ["x64", "arm64"] }
+        "dmg",
+        "zip"
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false
@@ -55,8 +55,8 @@
     "win": {
       "icon": "icons/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "zip", "arch": ["x64"] }
+        "nsis",
+        "zip"
       ]
     },
     "nsis": {
@@ -70,9 +70,9 @@
       "icon": "icons",
       "category": "Development",
       "target": [
-        { "target": "AppImage", "arch": ["x64"] },
-        { "target": "deb", "arch": ["x64"] },
-        { "target": "tar.gz", "arch": ["x64"] }
+        "AppImage",
+        "deb",
+        "tar.gz"
       ]
     }
   }

@@ -29,10 +29,12 @@ export default function MicrosoftConnection() {
     loading,
     error,
     lastPopupMessage,
+    awaitingBrowser,
     refresh,
     saveConfig,
     clearCredentials,
     connect,
+    cancelBrowserSignIn,
     disconnect,
     startMessageListener,
   } = useMicrosoftAuthStore()
@@ -43,7 +45,9 @@ export default function MicrosoftConnection() {
   const kioskView = useAuthStore((s) => s.kioskView)
   const canManageClient = (!authEnabled || fdUser?.role === 'admin') && !kioskView
   const fdUserLabel = authEnabled && fdUser ? (fdUser.display_name || fdUser.email) : ''
-  const unavailable = authEnabled === false
+  // As for Google: sign-in on, or the desktop app's deck (system-browser sign-in).
+  const desktopDeck = useAuthStore((s) => s.desktopDeck)
+  const unavailable = authEnabled === false && !desktopDeck
 
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -144,7 +148,7 @@ export default function MicrosoftConnection() {
           Microsoft isn't available on this deck: Flight Deck sign-in is turned off, and each
           Microsoft connection belongs to a signed-in Flight Deck user. Run Flight Deck with
           sign-in on (<code className="text-zinc-300">FD_AUTH_ENABLED=true</code>, the default)
-          to connect Microsoft.
+          to connect Microsoft — or use the desktop app.
         </div>
       </div>
     )
@@ -205,6 +209,19 @@ export default function MicrosoftConnection() {
           </div>
         )}
 
+        {/* The desktop app's sign-in runs in the system browser. */}
+        {awaitingBrowser && (
+          <div className="flex items-center gap-2 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-zinc-300">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-violet-500" />
+            <span className="flex-1">
+              Finish signing in to Microsoft in your browser — this updates by itself when you're done.
+            </span>
+            <button type="button" onClick={cancelBrowserSignIn} className="text-zinc-400 hover:text-zinc-200">
+              Cancel
+            </button>
+          </div>
+        )}
+
         {/* The deck's client, set up once by an admin: nothing for this user to fill in. */}
         {configured && !canManageClient && !connected && (
           <div className="rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-xs text-zinc-400">
@@ -240,13 +257,25 @@ export default function MicrosoftConnection() {
                 Microsoft accounts</span> (tenant <code>common</code>), or only your organization (put its
                 tenant ID below).
               </div>
-              <div>
-                Add a <span className="text-zinc-200 font-medium">Web</span> redirect URI — the one shown below
-                — then under Certificates &amp; secrets create a client secret and paste the Application
-                (client) ID and the secret's <span className="text-zinc-200">Value</span> here. Graph
-                permissions are requested at sign-in; no admin consent is needed unless your organization
-                requires it.
-              </div>
+              {desktopDeck ? (
+                <div>
+                  Under Authentication, add the platform{' '}
+                  <span className="text-zinc-200 font-medium">Mobile and desktop applications</span> with the
+                  custom redirect URI shown below, then paste the Application (client) ID here — no client
+                  secret. A registration you already use on the web works too: add the same address as a{' '}
+                  <span className="text-zinc-200">Web</span> redirect URI and keep its secret. Graph
+                  permissions are requested at sign-in; no admin consent is needed unless your organization
+                  requires it.
+                </div>
+              ) : (
+                <div>
+                  Add a <span className="text-zinc-200 font-medium">Web</span> redirect URI — the one shown below
+                  — then under Certificates &amp; secrets create a client secret and paste the Application
+                  (client) ID and the secret's <span className="text-zinc-200">Value</span> here. Graph
+                  permissions are requested at sign-in; no admin consent is needed unless your organization
+                  requires it.
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -284,16 +313,16 @@ export default function MicrosoftConnection() {
           {!connected && (
             <button
               onClick={connect}
-              disabled={!configured}
+              disabled={!configured || awaitingBrowser}
               className="inline-flex items-center gap-2 rounded-md bg-violet-600 hover:bg-violet-500 px-3.5 py-2 text-sm text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               title={
                 configured
-                  ? 'Link a Microsoft account to your own Flight Deck user'
+                  ? desktopDeck ? 'Sign in to Microsoft in your browser' : 'Link a Microsoft account to your own Flight Deck user'
                   : canManageClient ? 'Save the app registration first' : 'An admin has to configure Microsoft first'
               }
             >
-              <ExternalLink className="h-4 w-4" />
-              Connect Microsoft
+              {awaitingBrowser ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+              {awaitingBrowser ? 'Waiting for your browser…' : 'Connect Microsoft'}
             </button>
           )}
           {connected && (
@@ -330,16 +359,31 @@ export default function MicrosoftConnection() {
 
         {canManageClient && (
         <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-950/50 p-3">
-          <div className="text-xs text-zinc-500">
-            Redirect URI (add it as a <span className="text-zinc-300">Web</span> redirect URI on the app registration):
-            <code className="block mt-1 text-[11px] text-zinc-200 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 break-all">
-              {config?.redirect_uri || `${window.location.origin}/fd/microsoft/callback`}
-            </code>
-            <div className="mt-1 text-[11px] text-zinc-600">
-              Microsoft accepts plain http only for localhost — a deck reached by name needs https
-              (set FD_PUBLIC_URL behind a proxy).
+          {desktopDeck ? (
+            <div className="text-xs text-zinc-500">
+              Redirect URI (add it under <span className="text-zinc-300">Mobile and desktop applications</span>
+              {' '}on the app registration):
+              <code className="block mt-1 text-[11px] text-zinc-200 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 break-all">
+                {/* Without the port: Microsoft ignores it for localhost, and the app's can change. */}
+                {(config?.redirect_uri || 'http://localhost/fd/microsoft/callback').replace(/^(http:\/\/localhost):\d+/, '$1')}
+              </code>
+              <div className="mt-1 text-[11px] text-zinc-600">
+                Or, on a <span className="text-zinc-400">Web</span> registration with a secret, add it as a Web
+                redirect URI with this app's port: {config?.redirect_uri || 'http://localhost:<port>/fd/microsoft/callback'}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="text-xs text-zinc-500">
+              Redirect URI (add it as a <span className="text-zinc-300">Web</span> redirect URI on the app registration):
+              <code className="block mt-1 text-[11px] text-zinc-200 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 break-all">
+                {config?.redirect_uri || `${window.location.origin}/fd/microsoft/callback`}
+              </code>
+              <div className="mt-1 text-[11px] text-zinc-600">
+                Microsoft accepts plain http only for localhost — a deck reached by name needs https
+                (set FD_PUBLIC_URL behind a proxy).
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">
@@ -358,6 +402,7 @@ export default function MicrosoftConnection() {
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1">
               Client secret (Value)
+              {desktopDeck && <span className="ml-1 text-zinc-600">— only for a Web registration</span>}
               {config?.client_secret_set && !clientSecret && (
                 <span className="ml-2 text-[10px] text-emerald-500">(saved)</span>
               )}

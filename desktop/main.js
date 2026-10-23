@@ -8,7 +8,7 @@
  *   4. On quit, gracefully shut down the backend.
  */
 
-const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
 const { spawn, execFileSync } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -174,17 +174,13 @@ function spawnBackend() {
           if (response === 0) {
             backendReady = false;
             spawnBackend();
-            waitForBackend().then(() => mainWindow?.loadURL(getBackendUrl()));
+            waitForBackend().then(() => mainWindow?.loadURL(getAppUrl()));
           } else {
             app.quit();
           }
         });
     }
   });
-}
-
-function getBackendUrl() {
-  return `http://${BACKEND_HOST}:${actualPort}`;
 }
 
 function waitForBackend() {
@@ -250,6 +246,9 @@ function spawnFlightDeck() {
     ...process.env,
     FD_DATA_DIR: path.join(getUserDataDir(), "fd-data"),
     FD_AUTH_ENABLED: "false",
+    // This app's own deck: one local user on loopback, so Google and Microsoft
+    // connect there — their sign-in in the system browser (openSignIn).
+    FD_DESKTOP: "1",
   };
 
   if (binary) {
@@ -394,6 +393,14 @@ function getFdUrl() {
   return `http://${FD_HOST}:${actualFdPort}`;
 }
 
+// What the window shows: the deck in desktop mode. `?app=desktop` makes the
+// page act as the desktop app even without the preload bridge, and the page
+// keeps it for the window's life, so reloads and /console/… addresses stay
+// in desktop mode — never the full Flight Deck.
+function getAppUrl() {
+  return `${getFdUrl()}/?app=desktop`;
+}
+
 function waitForFlightDeck() {
   return new Promise((resolve, reject) => {
     const start = Date.now();
@@ -456,6 +463,8 @@ function createWindow() {
     title: "Captain Claw",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      // The preload is sandboxed and can't read package.json: hand it the version.
+      additionalArguments: [`--captain-claw-version=${app.getVersion()}`],
       nodeIntegration: false,
       contextIsolation: true,
     },
@@ -541,6 +550,32 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// ── Sign-in in the system browser ──────────────────────────────
+
+// Google refuses sign-in inside an app's own window, so the page asks the
+// shell to open its deck's /fd/google|microsoft/login?ticket=… in the system
+// browser; the provider then comes back to the deck's loopback /callback.
+// Only that: the page must be this app's deck, and so must the URL.
+const SIGN_IN_PATHS = new Set(["/fd/google/login", "/fd/microsoft/login"]);
+
+function isOwnDeck(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === "http:" && u.hostname === FD_HOST && u.port === String(actualFdPort);
+  } catch {
+    return false;
+  }
+}
+
+ipcMain.handle("open-sign-in", async (event, url) => {
+  if (!isOwnDeck(event.senderFrame?.url || "") || !isOwnDeck(url) || !SIGN_IN_PATHS.has(new URL(url).pathname)) {
+    log.warn("Refused to open a sign-in that isn't this app's own");
+    return false;
+  }
+  await shell.openExternal(url);
+  return true;
+});
+
 // ── App lifecycle ──────────────────────────────────────────────
 
 app.on("second-instance", () => {
@@ -580,7 +615,7 @@ app.whenReady().then(async () => {
     actualFdPort = await pickFdPort(saved ?? (upgraded ? LEGACY_FD_PORT : undefined));
     spawnFlightDeck();
     await waitForFlightDeck();
-    mainWindow.loadURL(getFdUrl());
+    mainWindow.loadURL(getAppUrl());
   } catch (err) {
     log.error("Failed to start Flight Deck:", err);
     dialog.showErrorBox(
@@ -606,7 +641,7 @@ app.on("activate", () => {
   // macOS: re-create window when dock icon is clicked
   if (BrowserWindow.getAllWindows().length === 0 && fdReady) {
     createWindow();
-    mainWindow.loadURL(getFdUrl());
+    mainWindow.loadURL(getAppUrl());
   }
 });
 

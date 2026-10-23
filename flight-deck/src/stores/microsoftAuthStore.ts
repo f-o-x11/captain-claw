@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { useAuthStore, refreshAccessToken, registerSignOutTeardown } from './authStore'
+import { useAuthStore, refreshAccessToken, registerSignOutTeardown, selectConnectionsAvailable } from './authStore'
+import { isDesktopShell, openInSystemBrowser, watchBrowserSignIn } from '../services/desktopShell'
 
 // The Microsoft (Outlook / OneDrive / Calendar) twin of googleAuthStore: the
 // admin's app registration (client id + secret, tenant, scopes) and each
@@ -52,6 +53,8 @@ interface MicrosoftAuthStore {
   loading: boolean
   error: string | null
   lastPopupMessage: string | null
+  // The desktop app's sign-in is in the system browser (see googleAuthStore).
+  awaitingBrowser: boolean
   // The agentic signature (GET/PUT /fd/microsoft/mail-signature): plain text
   // the agents add to the end of every Outlook draft. null = not loaded yet.
   signature: string | null
@@ -67,6 +70,7 @@ interface MicrosoftAuthStore {
   }>) => Promise<boolean>
   clearCredentials: () => Promise<boolean>
   connect: () => Promise<void>
+  cancelBrowserSignIn: () => void
   disconnect: () => Promise<void>
   startMessageListener: () => () => void
   fetchSignature: () => Promise<void>
@@ -177,14 +181,12 @@ function _watchPopup(popup: Window, onClosed: () => void): void {
 // must not finish it into the outgoing user's account.
 registerSignOutTeardown(() => _forgetPopup(true))
 
-function _isDesktopShell(): boolean {
-  return !!(window as Window & { captainClawDesktop?: { isDesktop?: boolean } }).captainClawDesktop?.isDesktop
-}
+let _stopBrowserWatch: (() => void) | null = null
+registerSignOutTeardown(() => _stopBrowserWatch?.())
 
 const _POPUP_BLOCKED = 'The browser blocked the Microsoft sign-in popup — allow popups for this site and try again.'
 const _SESSION_EXPIRED = 'Your Flight Deck session has expired — sign in again, then connect Microsoft.'
 const _AUTH_OFF = "Microsoft isn't available on this deck: Flight Deck sign-in is turned off."
-const _DESKTOP_SHELL = "The desktop app can't run the Microsoft sign-in — open Flight Deck in a web browser to connect Microsoft."
 
 function _connectError(exc: unknown): string {
   if (exc instanceof HttpError && exc.status === 401) return _SESSION_EXPIRED
@@ -197,11 +199,12 @@ export const useMicrosoftAuthStore = create<MicrosoftAuthStore>((set, get) => ({
   loading: false,
   error: null,
   lastPopupMessage: null,
+  awaitingBrowser: false,
   signature: null,
   signatureError: null,
 
   refresh: async () => {
-    if (useAuthStore.getState().authEnabled === false) {
+    if (!selectConnectionsAvailable(useAuthStore.getState())) {
       set({ status: emptyStatus, config: null, loading: false, error: null })
       return
     }
@@ -260,12 +263,33 @@ export const useMicrosoftAuthStore = create<MicrosoftAuthStore>((set, get) => ({
 
   connect: async () => {
     set({ error: null })
-    if (!useAuthStore.getState().authEnabled) {
+    if (!selectConnectionsAvailable(useAuthStore.getState())) {
       set({ error: _AUTH_OFF })
       return
     }
-    if (_isDesktopShell()) {
-      set({ error: _DESKTOP_SHELL })
+    // The desktop app: the sign-in runs in the system browser and comes back to
+    // the deck's loopback /callback — see googleAuthStore.connect.
+    if (isDesktopShell()) {
+      _stopBrowserWatch?.()
+      let ticket: string
+      try {
+        ticket = await _mintConnectTicket()
+        await openInSystemBrowser(`${window.location.origin}/fd/microsoft/login?ticket=${encodeURIComponent(ticket)}`)
+      } catch (exc) {
+        set({ error: _connectError(exc) })
+        return
+      }
+      set({ awaitingBrowser: true, lastPopupMessage: null })
+      _stopBrowserWatch = watchBrowserSignIn(
+        async () => {
+          await get().syncStatus()
+          return !!get().status?.connected
+        },
+        () => {
+          _stopBrowserWatch = null
+          set({ awaitingBrowser: false })
+        },
+      )
       return
     }
     const w = 520
@@ -292,6 +316,8 @@ export const useMicrosoftAuthStore = create<MicrosoftAuthStore>((set, get) => ({
     popup.location.href = `${window.location.origin}/fd/microsoft/login?ticket=${encodeURIComponent(ticket)}`
     _watchPopup(popup, () => { get().syncStatus() })
   },
+
+  cancelBrowserSignIn: () => { _stopBrowserWatch?.() },
 
   disconnect: async () => {
     set({ loading: true, error: null })

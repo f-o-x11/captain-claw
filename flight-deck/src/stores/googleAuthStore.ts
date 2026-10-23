@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { useAuthStore, refreshAccessToken, registerSignOutTeardown } from './authStore'
+import { useAuthStore, refreshAccessToken, registerSignOutTeardown, selectConnectionsAvailable } from './authStore'
+import { isDesktopShell, openInSystemBrowser, watchBrowserSignIn } from '../services/desktopShell'
 
 export interface GrantedScope {
   scope: string
@@ -94,6 +95,9 @@ interface GoogleAuthStore {
   loading: boolean
   error: string | null
   lastPopupMessage: string | null
+  // The desktop app sent the sign-in to the system browser and is waiting for
+  // the connection to appear (watchBrowserSignIn).
+  awaitingBrowser: boolean
   gmailSend: GmailSendPolicy | null
   gmailSends: GmailSendRecord[]
   gmailSendError: string | null
@@ -109,6 +113,7 @@ interface GoogleAuthStore {
   }>) => Promise<boolean>
   clearCredentials: () => Promise<boolean>
   connect: () => Promise<void>
+  cancelBrowserSignIn: () => void
   disconnect: () => Promise<void>
   startMessageListener: () => () => void
   fetchGmailSend: () => Promise<void>
@@ -221,16 +226,13 @@ function _watchPopup(popup: Window, onClosed: () => void): void {
 
 registerSignOutTeardown(() => _forgetPopup(true))
 
-// The Electron shell (desktop/preload.js): it hands every http(s)
-// window.open to the system browser and denies the in-app window.
-function _isDesktopShell(): boolean {
-  return !!(window as Window & { captainClawDesktop?: { isDesktop?: boolean } }).captainClawDesktop?.isDesktop
-}
+// The desktop app's sign-in in the system browser: stops following it.
+let _stopBrowserWatch: (() => void) | null = null
+registerSignOutTeardown(() => _stopBrowserWatch?.())
 
 const _POPUP_BLOCKED = 'The browser blocked the Google sign-in popup — allow popups for this site and try again.'
 const _SESSION_EXPIRED = 'Your Flight Deck session has expired — sign in again, then connect Google.'
 const _AUTH_OFF = "Google isn't available on this deck: Flight Deck sign-in is turned off."
-const _DESKTOP_SHELL = "The desktop app can't run the Google sign-in — open Flight Deck in a web browser to connect Google."
 
 function _connectError(exc: unknown): string {
   if (exc instanceof HttpError && exc.status === 401) return _SESSION_EXPIRED
@@ -263,13 +265,14 @@ export const useGoogleAuthStore = create<GoogleAuthStore>((set, get) => ({
   loading: false,
   error: null,
   lastPopupMessage: null,
+  awaitingBrowser: false,
   gmailSend: null,
   gmailSends: [],
   gmailSendError: null,
 
   refresh: async () => {
     // No Google via FD with sign-in off (see connect()) — nothing to ask.
-    if (useAuthStore.getState().authEnabled === false) {
+    if (!selectConnectionsAvailable(useAuthStore.getState())) {
       set({ status: emptyStatus, config: null, loading: false, error: null })
       return
     }
@@ -355,17 +358,38 @@ export const useGoogleAuthStore = create<GoogleAuthStore>((set, get) => ({
     // can; the popup-closed watch and the focus re-check (startMessageListener)
     // cover the flows where it can't.
     set({ error: null })
-    // A Google connection belongs to a Flight Deck user, so it needs sign-in:
-    // with auth off FD offers no Google (the card says so instead of Connect).
-    if (!useAuthStore.getState().authEnabled) {
+    // A Google connection belongs to a Flight Deck user, so it needs sign-in —
+    // or the desktop app's deck, whose one local user connects (the card says
+    // so instead of Connect anywhere else).
+    if (!selectConnectionsAvailable(useAuthStore.getState())) {
       set({ error: _AUTH_OFF })
       return
     }
-    // The Electron shell denies in-app windows and hands URLs to the system
-    // browser — which doesn't hold the ticket's cookie, so /login refuses it
-    // there. (The desktop app runs FD with sign-in off anyway: no Google.)
-    if (_isDesktopShell()) {
-      set({ error: _DESKTOP_SHELL })
+    // The desktop app: Google refuses sign-in inside the app's window, so the
+    // sign-in runs in the system browser (which never saw the ticket's cookie —
+    // the desktop deck doesn't ask for it) and comes back to the deck's own
+    // loopback /callback. Nothing reports back here: watch the status instead.
+    if (isDesktopShell()) {
+      _stopBrowserWatch?.()
+      let ticket: string
+      try {
+        ticket = await _mintConnectTicket()
+        await openInSystemBrowser(`${window.location.origin}/fd/google/login?ticket=${encodeURIComponent(ticket)}`)
+      } catch (exc) {
+        set({ error: _connectError(exc) })
+        return
+      }
+      set({ awaitingBrowser: true, lastPopupMessage: null })
+      _stopBrowserWatch = watchBrowserSignIn(
+        async () => {
+          await get().syncStatus()
+          return !!get().status?.connected
+        },
+        () => {
+          _stopBrowserWatch = null
+          set({ awaitingBrowser: false })
+        },
+      )
       return
     }
     const w = 520
@@ -399,6 +423,8 @@ export const useGoogleAuthStore = create<GoogleAuthStore>((set, get) => ({
     popup.location.href = `${window.location.origin}/fd/google/login?ticket=${encodeURIComponent(ticket)}`
     _watchPopup(popup, () => { get().syncStatus() })
   },
+
+  cancelBrowserSignIn: () => { _stopBrowserWatch?.() },
 
   disconnect: async () => {
     set({ loading: true, error: null })

@@ -11,8 +11,14 @@ their OWNER's account without duplicating the OAuth dance.
 Only one OAuth callback URL needs to be registered with Google — this
 one — regardless of how many agents consume the tokens.
 
-Only on an auth-enabled deck: with ``FD_AUTH_ENABLED=false`` Flight Deck keeps
-no DB, and every route here answers "not available" (``_require_auth_deck``).
+Only on an auth-enabled deck or the desktop app's own deck (sign-in off, one
+local user on loopback — ``auth._fd_desktop_deck``). Any other deck with
+``FD_AUTH_ENABLED=false`` answers "not available" (``_require_auth_deck``).
+
+On the desktop deck the sign-in runs in the system browser (Google refuses
+embedded windows): the app hands ``/login?ticket=…`` to that browser and
+Google redirects back to this deck's loopback ``/callback`` — the native-app
+loopback flow, which needs a "Desktop app" OAuth client (any loopback port).
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ from captain_claw.flight_deck import speaker_grants
 from captain_claw.flight_deck.auth import (
     _LOCAL_USER,
     _fd_auth_enabled,
+    _fd_desktop_deck,
     get_current_user,
     get_db,
 )
@@ -70,16 +77,24 @@ AUTH_OFF_VALUE = "auth-disabled"
 _AGENT_ROUTE_SUFFIXES = ("/access_token", "/agent_status", "/credentials", "/gmail/send")
 
 
-def _require_auth_deck(request: Request) -> None:
-    """Router-wide gate: Google via Flight Deck needs an auth-enabled deck.
+def _connections_available() -> bool:
+    """Whether this deck may hold Google / Microsoft connections: it signs its
+    users in, or it is the desktop app's single-user loopback deck."""
+    return _fd_auth_enabled() or _fd_desktop_deck()
 
-    An auth-disabled deck keeps no DB (``get_db()`` would assert) and can't tell
-    its users — or a web page reaching its loopback — apart, so every route says
-    so instead of failing with a 500. The agent endpoints answer 403, which the
-    agent's Google tools surface verbatim (google_oauth_manager); the UI and
-    popup routes 503.
+
+def _require_auth_deck(request: Request) -> None:
+    """Router-wide gate: Google via Flight Deck needs an auth-enabled deck, or
+    the desktop app's own deck (``_connections_available``).
+
+    Any other auth-disabled deck can't tell its users apart, so every route
+    says so instead of handing one person's Google to whoever asks. The agent
+    endpoints answer 403, which the agent's Google tools surface verbatim
+    (google_oauth_manager); the UI and popup routes 503. On the desktop deck
+    origin_guard still keeps web pages off the API, and agents still need the
+    X-Agent-Auth this deck minted (``_agent_owner``).
     """
-    if _fd_auth_enabled():
+    if _connections_available():
         return
     agent_route = request.url.path.rstrip("/").endswith(_AGENT_ROUTE_SUFFIXES)
     raise HTTPException(
@@ -276,14 +291,10 @@ def _effective_owner(user: dict | None) -> str:
 
 
 def _tenant(user_id: str) -> str:
-    """The Google owner for *user_id*. With auth disabled the deck would have
-    exactly one tenant, the local user — dormant: Google is refused on such a
-    deck (``_require_auth_deck``)."""
+    """The Google owner for *user_id*. With auth disabled the deck has exactly
+    one tenant, the local user (the desktop deck — any other refuses Google,
+    ``_require_auth_deck``)."""
     return user_id if _fd_auth_enabled() else _LOCAL_USER["id"]
-
-
-def _is_local_tenant(user_id: str) -> bool:
-    return not _fd_auth_enabled() and user_id == _LOCAL_USER["id"]
 
 
 async def _load_tokens(db: FlightDeckDB, user_id: str) -> GoogleOAuthTokens | None:
@@ -312,7 +323,7 @@ async def get_valid_google_access_token(user_id: str) -> str | None:
     event-spine pollers (#2) and Drive export to call Google directly from Flight
     Deck. *user_id* is required and there is deliberately no default owner: an
     unattributed call gets nothing rather than the primary owner's account."""
-    if not user_id or not _fd_auth_enabled():  # see _require_auth_deck
+    if not user_id or not _connections_available():  # see _require_auth_deck
         return None
     try:
         db = get_db()
@@ -332,7 +343,7 @@ async def get_valid_google_access_token(user_id: str) -> str | None:
 async def is_google_connected(user_id: str) -> bool:
     """FD-side, no network: has *user_id* connected their own Google account on
     this deck? Gates per-user pollers that need Google."""
-    if not user_id or not _fd_auth_enabled():  # see _require_auth_deck
+    if not user_id or not _connections_available():  # see _require_auth_deck
         return False
     try:
         db = get_db()
@@ -345,13 +356,10 @@ async def is_google_connected(user_id: str) -> bool:
 
 
 async def _store_tokens(db: FlightDeckDB, user_id: str, tokens: GoogleOAuthTokens) -> None:
+    # Per user — the desktop deck's local user too: it has a users row
+    # (db.ensure_local_user), so a deck that later turns sign-in on doesn't hand
+    # its connection to the primary owner through the deployment-wide keys.
     blob = json.dumps(tokens.to_dict(), ensure_ascii=True)
-    if _is_local_tenant(user_id):
-        # Auth disabled: the synthetic local user has no users row (user_settings
-        # has an FK to it), so the deck's single tenant keeps its connection in
-        # the deployment-wide keys — the ones _load_tokens falls back to for it.
-        await db.set_system_setting(_K_TOKENS, blob)
-        return
     await db.set_settings(user_id, {_K_TOKENS: blob})
 
 
@@ -369,10 +377,7 @@ async def _load_user(db: FlightDeckDB, user_id: str) -> dict[str, Any] | None:
 
 async def _store_user(db: FlightDeckDB, user_id: str, user: dict[str, Any]) -> None:
     blob = json.dumps(user, ensure_ascii=True)
-    if _is_local_tenant(user_id):
-        await db.set_system_setting(_K_USER, blob)  # see _store_tokens
-        return
-    await db.set_settings(user_id, {_K_USER: blob})
+    await db.set_settings(user_id, {_K_USER: blob})  # see _store_tokens
 
 
 def _same_google_account(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bool:
@@ -477,13 +482,40 @@ async def _clear_all_oauth_state(db: FlightDeckDB) -> None:
 # ── redirect URI ────────────────────────────────────────────────────
 
 
+def _desktop_origin() -> str:
+    """Where the desktop deck's sign-ins run: ``http://localhost:<port>``.
+
+    The loopback name a Microsoft app registration can list without editing its
+    manifest (and matches on any port), and one Google's "Desktop app" clients
+    take on any port too — so neither registration depends on the port the app
+    picked this launch. /login moves there first (``_off_desktop_origin``), so
+    the state cookie it sets and the provider's callback share a host."""
+    return f"http://localhost:{os.environ.get('FD_PORT', '25080')}"
+
+
+def _off_desktop_origin(request: Request) -> RedirectResponse | None:
+    """On the desktop deck, a /login reached under another loopback name (the
+    app itself runs on 127.0.0.1): the same request at ``_desktop_origin``,
+    its ticket still unspent. None anywhere else."""
+    if not _fd_desktop_deck():
+        return None
+    here = f"{_browser_scheme(request)}://{request.headers.get('host') or request.url.netloc}"
+    if here.lower() == _desktop_origin():
+        return None
+    query = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"{_desktop_origin()}{request.url.path}{query}", status_code=302)
+
+
 def _redirect_uri(request: Request) -> str:
     """Build the redirect URI that Google will bounce the user back to.
 
-    Uses the request's own host so it works for dev (localhost:25080),
-    packaged desktop app, or behind a reverse proxy. This must exactly
-    match the URI registered in Google Cloud Console.
+    Uses the request's own host so it works for dev (localhost:25080) or
+    behind a reverse proxy; the desktop deck always uses ``_desktop_origin``.
+    This must match the URI registered in Google Cloud Console — exactly for a
+    "Web application" client, up to the port for a "Desktop app" one.
     """
+    if _fd_desktop_deck():
+        return f"{_desktop_origin()}/fd/google/callback"
     scheme = request.url.scheme
     host = request.headers.get("host") or request.url.netloc
     # If FD_PUBLIC_URL is set, prefer it (handles proxied deployments).
@@ -754,6 +786,21 @@ async def google_connect_ticket(
     return resp
 
 
+def _ticket_held_here(request: Request, ticket: str, cookie: str) -> bool:
+    """Whether this browser may spend *ticket*: it holds the *cookie*
+    /connect-ticket set alongside it.
+
+    Not asked on the desktop deck: the app hands /login to the system browser,
+    which never saw that cookie (Google refuses sign-in inside the app's own
+    window). The cookie stops a /login link forwarded to someone else's browser;
+    a loopback deck with one local user has nobody to forward it to, and the
+    ticket stays single-use, short-lived and unguessable. The state cookie
+    /login sets still binds the callback to the browser that started it."""
+    if _fd_desktop_deck():
+        return True
+    return _same_secret(ticket, request.cookies.get(cookie, ""))
+
+
 def _take_connect_ticket(request: Request) -> str:
     """Consume ``?ticket=`` and return its user id — or "" when it is unknown,
     expired, already used, or not the ticket this browser's cookie holds. Any
@@ -762,7 +809,7 @@ def _take_connect_ticket(request: Request) -> str:
     entry = _connect_tickets.pop(ticket, None) if ticket else None
     if not entry or time.time() - float(entry.get("ts") or 0) > _TICKET_TTL:
         return ""
-    if not _same_secret(ticket, request.cookies.get(_TICKET_COOKIE, "")):
+    if not _ticket_held_here(request, ticket, _TICKET_COOKIE):
         log.warning("Google connect refused: ticket not held by this browser")
         return ""
     return str(entry.get("owner") or "")
@@ -783,8 +830,12 @@ async def google_login(request: Request) -> Response:
     to the primary owner. No origin pre-check: the state cookie lands on the
     host the BROWSER is on (whatever Host a proxy forwards), and a flow started
     off FD_PUBLIC_URL's origin simply can't complete — /callback's "not
-    started in this browser" page names the address to use.
+    started in this browser" page names the address to use. (The desktop deck
+    moves the request to its sign-in origin first: ``_off_desktop_origin``.)
     """
+    moved = _off_desktop_origin(request)
+    if moved:
+        return moved
     db = get_db()
     eff = await _effective_oauth(db)
     if not eff:
@@ -1027,8 +1078,10 @@ async def _agent_owner(request: Request, *, service: str = "Google") -> str:
 
     Resolved ONLY from this deck's own records, never from the agent's word:
 
-    * Auth disabled → 403 (``_require_auth_deck`` refuses first; this keeps a
-      direct call from ever handing out a desktop deck's tokens).
+    * Auth disabled → 403, except on the desktop deck (``_require_auth_deck``
+      refuses first; this keeps a direct call from ever handing out the tokens
+      of a sign-in-off deck that isn't one). There every agent this deck
+      spawned belongs to the local user.
     * A browser request (``Origin`` / ``Sec-Fetch-*``) is refused outright — a
       web page must never read a token, refresh token or client secret.
     * ``X-Agent-Auth`` — the per-agent ``web_auth`` token FD minted at spawn —
@@ -1043,7 +1096,7 @@ async def _agent_owner(request: Request, *, service: str = "Google") -> str:
       one; pre-owner records) maps to the only user of a single-user deck, else
       a distinct 403 telling the user to respawn — never the primary owner.
     """
-    if not _fd_auth_enabled():
+    if not _connections_available():
         raise HTTPException(status_code=403, detail=_AUTH_OFF_DETAIL)
     if _is_browser_request(request):
         raise HTTPException(
@@ -1251,7 +1304,9 @@ def _callback_html(
 
     Tries to ``postMessage`` the result to a same-origin ``window.opener`` (the
     Flight Deck tab) and close itself. Falls back to a redirect to ``/`` for
-    the full-tab flow.
+    the full-tab flow — except on the desktop deck, whose sign-in runs in the
+    system browser: there the page stays and sends the user back to the app
+    (which watches the connection), rather than open the deck in the browser.
 
     *detail* can be attacker-chosen (``/callback?error_description=…`` is
     unauthenticated), so everything is HTML-escaped for the markup and
@@ -1275,6 +1330,10 @@ def _callback_html(
     h_title = html.escape(title)
     h_detail = html.escape(detail)
     nonce = secrets.token_urlsafe(16)
+    desktop = _fd_desktop_deck()
+    h_close = "Close this tab and go back to the app." if desktop else "You can close this window."
+    # The full-tab flow lands back on the deck; the desktop deck's browser tab doesn't.
+    fallback = "" if desktop else "setTimeout(function(){ window.location.href = '/'; }, 1500);"
 
     page = f"""<!DOCTYPE html>
 <html>
@@ -1295,7 +1354,7 @@ display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0
 <div class="box">
 <h2 class="{'ok' if ok else 'err'}">{h_title}</h2>
 <p>{h_detail}</p>
-<p style="margin-top:1rem;font-size:0.8rem;">You can close this window.</p>
+<p style="margin-top:1rem;font-size:0.8rem;">{h_close}</p>
 </div>
 <script nonce="{nonce}">
 (function() {{
@@ -1312,7 +1371,7 @@ display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0
     }} catch (e) {{}}
     return;
   }}
-  setTimeout(function(){{ window.location.href = '/'; }}, 1500);
+  {fallback}
 }})();
 </script>
 </body>

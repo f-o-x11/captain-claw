@@ -265,18 +265,21 @@ export function ModelsPage() {
             </div>
             {Object.keys(tiers).length === 0 && <p className="text-sm text-zinc-500">Loading the tiers…</p>}
 
-            {/* Less-used settings of the set */}
-            <div className="grid grid-cols-1 gap-5 border-t border-zinc-800/80 pt-5 lg:grid-cols-2">
-              <Field
-                label={<span className="flex items-center gap-1.5"><Hammer className="h-3.5 w-3.5" /> Designs teams in Agent Forge</span>}
-                hint="The tier whose model plans a team of agents from a goal."
-              >
-                <select value={forgeTier} onChange={(e) => setForgeTier(e.target.value)} className={inputCls}>
-                  {TIER_ORDER.filter((t) => tiers[t]).map((t) => (
-                    <option key={t} value={t}>{registry?.tiers[t]?.label || t} — {tiers[t].model || 'no model'}</option>
-                  ))}
-                </select>
-              </Field>
+            {/* Less-used settings of the set: the Forge tier lines up with the
+                left tier column, the extra keys get the whole width below it. */}
+            <div className="space-y-5 border-t border-zinc-800/80 pt-5">
+              <div className="wide:w-[calc(50%-0.375rem)]">
+                <Field
+                  label={<span className="flex items-center gap-1.5"><Hammer className="h-3.5 w-3.5" /> Designs teams in Agent Forge</span>}
+                  hint="The tier whose model plans a team of agents from a goal."
+                >
+                  <select value={forgeTier} onChange={(e) => setForgeTier(e.target.value)} className={inputCls}>
+                    {TIER_ORDER.filter((t) => tiers[t]).map((t) => (
+                      <option key={t} value={t}>{registry?.tiers[t]?.label || t} — {tiers[t].model || 'no model'}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
               <ExtraKeys envVars={envVars} setEnvVars={setEnvVars} />
             </div>
           </Card>
@@ -722,36 +725,92 @@ function NewSetDialog({ copyName, onClose, onOneModel, onDefaults, onCopy }: {
 
 // ── Extra keys of a set (env vars every agent it spawns gets) ──
 
+// The rows' columns: name, value, remove. A phone stacks the value under the name.
+const KEY_ROW_COLS = 'grid-cols-[minmax(0,1fr)_2.25rem] sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_2.25rem]'
+
 function ExtraKeys({ envVars, setEnvVars }: { envVars: EnvVar[]; setEnvVars: React.Dispatch<React.SetStateAction<EnvVar[]>> }) {
-  const [open, setOpen] = useState(envVars.length > 0)
+  // Rows whose value is shown in the clear (by index; a removal hides them all).
+  const [shown, setShown] = useState<Set<number>>(new Set())
   const set = (i: number, patch: Partial<EnvVar>) => setEnvVars((prev) => prev.map((v, j) => (j === i ? { ...v, ...patch } : v)))
+  const remove = (i: number) => {
+    setEnvVars((prev) => prev.filter((_, j) => j !== i))
+    setShown(new Set())
+  }
+  const toggle = (i: number) => setShown((prev) => {
+    const next = new Set(prev)
+    if (next.has(i)) next.delete(i)
+    else next.add(i)
+    return next
+  })
   return (
     <div>
-      <div className="mb-1.5 flex items-center justify-between gap-2">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-400">
           <KeyRound className="h-3.5 w-3.5" /> Extra keys for agents
           {envVars.length > 0 && <span className="text-zinc-600">({envVars.length})</span>}
         </span>
-        {!open && <button onClick={() => setOpen(true)} className="text-xs text-violet-600 hover:underline dark:text-violet-400">Show</button>}
+        <span className="text-[11px] leading-relaxed text-zinc-500">
+          Other services' keys — web search and the like — that every agent this set starts gets as environment variables.
+        </span>
       </div>
-      {open ? (
-        <div className="space-y-2">
-          {envVars.map((ev, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input value={ev.key} onChange={(e) => set(i, { key: e.target.value })} placeholder="BRAVE_API_KEY" className={`${inputCls} w-2/5 font-mono text-xs`} />
-              <input type="password" value={ev.value} onChange={(e) => set(i, { value: e.target.value })} placeholder="value" autoComplete="off" className={`${inputCls} flex-1 font-mono text-xs`} />
-              <button onClick={() => setEnvVars((prev) => prev.filter((_, j) => j !== i))} aria-label="Remove" className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-800 hover:text-red-500">
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          ))}
-          <button onClick={() => setEnvVars((prev) => [...prev, { key: '', value: '' }])} className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-200">
-            <Plus className="h-3.5 w-3.5" /> Add a key
-          </button>
+      {envVars.length > 0 && (
+        <div className="overflow-hidden rounded-xl border border-zinc-800">
+          <div className={`hidden ${KEY_ROW_COLS} gap-2 border-b border-zinc-800 bg-zinc-900/50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-zinc-500 sm:grid`}>
+            <span>Name</span>
+            <span>Value</span>
+            <span />
+          </div>
+          <ul className="divide-y divide-zinc-800">
+            {envVars.map((ev, i) => (
+              <li key={i} className={`grid ${KEY_ROW_COLS} items-center gap-2 px-3 py-2`}>
+                <input
+                  value={ev.key}
+                  onChange={(e) => set(i, { key: e.target.value })}
+                  placeholder="BRAVE_API_KEY"
+                  aria-label="Key name"
+                  spellCheck={false}
+                  className={`${inputCls} font-mono text-xs`}
+                />
+                <div className="relative order-last col-span-2 sm:order-none sm:col-span-1">
+                  <input
+                    type={shown.has(i) ? 'text' : 'password'}
+                    value={ev.value}
+                    onChange={(e) => set(i, { value: e.target.value })}
+                    placeholder="Value"
+                    aria-label={`Value of ${ev.key || 'this key'}`}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={`${inputCls} pr-9 font-mono text-xs`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => toggle(i)}
+                    aria-label={shown.has(i) ? 'Hide the value' : 'Show the value'}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-zinc-500 hover:text-zinc-200"
+                  >
+                    {shown.has(i) ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => remove(i)}
+                  aria-label={`Remove ${ev.key || 'this key'}`}
+                  className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-red-500"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
-      ) : (
-        <p className="text-[11px] leading-relaxed text-zinc-500">Other services' keys (web search, …) every agent this set starts gets.</p>
       )}
+      <button
+        type="button"
+        onClick={() => setEnvVars((prev) => [...prev, { key: '', value: '' }])}
+        className={`${envVars.length > 0 ? 'mt-2' : ''} inline-flex items-center gap-1.5 rounded-lg border border-dashed border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-200`}
+      >
+        <Plus className="h-3.5 w-3.5" /> Add a key
+      </button>
     </div>
   )
 }

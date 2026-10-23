@@ -282,15 +282,20 @@ async def exchange_code_for_tokens(
     scopes: list[str] | None = None,
     tenant: str | None = None,
 ) -> MicrosoftOAuthTokens:
-    """Exchange an authorization code for access + refresh tokens."""
+    """Exchange an authorization code for access + refresh tokens.
+
+    An empty *client_secret* is a public client (a "Mobile and desktop
+    applications" registration): Microsoft refuses a secret from one, so none
+    is sent and PKCE alone proves the caller."""
     payload: dict[str, str] = {
         "client_id": client_id,
-        "client_secret": client_secret,
         "code": code,
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
         "scope": " ".join(scopes or DEFAULT_SCOPES),
     }
+    if client_secret:
+        payload["client_secret"] = client_secret
     if code_verifier:
         payload["code_verifier"] = code_verifier
     async with httpx.AsyncClient(timeout=30) as client:
@@ -307,14 +312,16 @@ async def refresh_access_token(
     scopes: list[str] | None = None,
     tenant: str | None = None,
 ) -> MicrosoftOAuthTokens:
-    """A fresh access token (and, usually, a rotated refresh token)."""
+    """A fresh access token (and, usually, a rotated refresh token). No
+    secret for a public client (see exchange_code_for_tokens)."""
     payload = {
         "client_id": client_id,
-        "client_secret": client_secret,
         "refresh_token": refresh_token,
         "grant_type": "refresh_token",
         "scope": " ".join(scopes or DEFAULT_SCOPES),
     }
+    if client_secret:
+        payload["client_secret"] = client_secret
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(token_url(tenant), data=payload)
     if resp.status_code != 200:

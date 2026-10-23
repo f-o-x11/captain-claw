@@ -21,7 +21,7 @@ import {
 import { useMCPStore } from '../../stores/mcpStore'
 import { useCodexAuthStore } from '../../stores/codexAuthStore'
 import { useConsoleStore } from '../../stores/consoleStore'
-import { useAuthStore } from '../../stores/authStore'
+import { selectConnectionsAvailable, useAuthStore } from '../../stores/authStore'
 import { Page, PageHeader, Dot } from './parts'
 
 // Connections: the services agents reach, with the deck-wide part (the OAuth
@@ -60,7 +60,7 @@ function serviceFor(id: string | undefined): ServiceId | undefined {
 type Status = { tone: 'on' | 'pending' | 'off'; text: string }
 
 // What each row says: the deck-wide part where there is one.
-function useStatuses(accounts: boolean): Partial<Record<ServiceId, Status>> {
+function useStatuses(accounts: boolean, oauth: boolean): Partial<Record<ServiceId, Status>> {
   const [out, setOut] = useState<Partial<Record<ServiceId, Status>>>({})
   const mcpShared = useMCPStore((s) => s.servers.filter((x) => x.deck_wide).length)
   const codex = useCodexAuthStore((s) => s.status)
@@ -69,10 +69,11 @@ function useStatuses(accounts: boolean): Partial<Record<ServiceId, Status>> {
     let cancelled = false
     const put = (id: ServiceId, st: Status) => { if (!cancelled) setOut((o) => ({ ...o, [id]: st })) }
     for (const p of ['google', 'microsoft'] as const) {
-      // Their sign-in needs accounts: a deck without sign-in can't connect them.
-      if (!accounts) { put(p, { tone: 'off', text: 'Needs sign-in' }); continue }
+      // Their sign-in needs accounts — or the desktop app's deck (selectConnectionsAvailable).
+      if (!oauth) { put(p, { tone: 'off', text: 'Needs sign-in' }); continue }
       getOAuthClientConfig(p)
-        .then((c) => put(p, c.client_id_set && c.client_secret_set
+        // Microsoft's secret is optional: none for a "Mobile and desktop" registration.
+        .then((c) => put(p, c.client_id_set && (c.client_secret_set || p === 'microsoft')
           ? { tone: 'on', text: accounts ? 'Ready for everyone' : 'Ready' }
           : { tone: 'pending', text: 'Needs the OAuth client' }))
         .catch(() => {})
@@ -95,7 +96,7 @@ function useStatuses(accounts: boolean): Partial<Record<ServiceId, Status>> {
         : k.env_key_set ? { tone: 'on', text: 'Server key' } : { tone: 'off', text: 'No team key' }))
       .catch(() => {})
     return () => { cancelled = true }
-  }, [accounts])
+  }, [accounts, oauth])
 
   const mcp: Status = mcpShared > 0 ? { tone: 'on', text: `${mcpShared} shared with everyone` } : { tone: 'off', text: 'None shared' }
   return {
@@ -122,7 +123,8 @@ export function ConnectionsConsole() {
     })
   }, [])
   const accounts = useAuthStore((s) => s.authEnabled !== false)
-  const statuses = useStatuses(accounts)
+  const oauth = useAuthStore(selectConnectionsAvailable)
+  const statuses = useStatuses(accounts, oauth)
   const current = SERVICES.find((s) => s.id === active)!
 
   const pick = (id: ServiceId) => { setActive(id); setDetail(true) }

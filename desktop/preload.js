@@ -5,11 +5,18 @@
  * that it is running inside the desktop shell.
  */
 
-const { contextBridge } = require("electron");
+const { contextBridge, ipcRenderer } = require("electron");
+
+// Preloads run sandboxed (Electron's default): require() reaches only a few
+// built-in modules, so a require("./package.json") here threw and the page
+// never got the bridge. main.js passes the version as an argument instead.
+const versionArg = process.argv.find((arg) => arg.startsWith("--captain-claw-version="));
 
 contextBridge.exposeInMainWorld("captainClawDesktop", {
   platform: process.platform,
   arch: process.arch,
   isDesktop: true,
-  version: require("./package.json").version,
+  version: versionArg ? versionArg.split("=")[1] : undefined,
+  // Google / Microsoft sign-in in the system browser (main.js checks the URL).
+  openSignIn: (url) => ipcRenderer.invoke("open-sign-in", String(url)),
 });

@@ -61,6 +61,10 @@ export interface AuthStore {
   // back. This window only: a reload keeps it, a new launch starts in the
   // Admin console.
   kioskView: boolean
+  // The desktop app's own deck (/fd/auth/status desktop_deck): sign-in off, yet
+  // Google and Microsoft connect — through the system browser. See
+  // selectConnectionsAvailable.
+  desktopDeck: boolean
 
   setAuth: (user: User, token: string) => void
   clearAuth: () => void
@@ -72,6 +76,7 @@ export interface AuthStore {
   setBranding: (v: Partial<Branding>) => void
   setAdminStartPending: (v: boolean) => void
   setKioskView: (v: boolean) => void
+  setDesktopDeck: (v: boolean) => void
   setToken: (token: string) => void
 }
 
@@ -94,6 +99,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
   branding: { name: DEFAULT_INSTANCE_NAME, description: '', logo: '', poweredBy: true },
   adminStartPending: false,
   kioskView: readKioskView(),
+  desktopDeck: false,
 
   setAuth: (user, token) => set({ user, token, isAuthenticated: true }),
   clearAuth: () => set({ user: null, token: '', isAuthenticated: false }),
@@ -111,8 +117,18 @@ export const useAuthStore = create<AuthStore>((set) => ({
     } catch { /* storage blocked: this page load only */ }
     set({ kioskView })
   },
+  setDesktopDeck: (desktopDeck) => set({ desktopDeck }),
   setToken: (token) => set({ token }),
 }))
+
+/**
+ * Whether this deck offers Google and Microsoft connections: one with sign-in
+ * (each user connects their own), or the desktop app's deck (its one local
+ * user). Any other deck with sign-in off has none. Not yet known (authEnabled
+ * null) counts as offered, as before the status check lands.
+ */
+export const selectConnectionsAvailable = (s: AuthStore): boolean =>
+  s.authEnabled !== false || s.desktopDeck
 
 /**
  * Whether the kiosk lock is in effect for the CURRENT viewer. An admin picks
@@ -157,6 +173,7 @@ export async function checkAuthStatus(): Promise<boolean> {
   useAuthStore.getState().setDockerSpawnEnabled(data.docker_spawn_enabled !== false)
   if (data.internal_fd_url) useAuthStore.getState().setInternalFdUrl(data.internal_fd_url)
   useAuthStore.getState().setSimpleChatOnly(data.simple_chat_only === true)
+  useAuthStore.getState().setDesktopDeck(data.desktop_deck === true)
   // A deck that predates the waitlist sends neither flag: keep "register".
   if (typeof data.registration_open === 'boolean') {
     useAuthStore.getState().setSignUp({

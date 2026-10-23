@@ -58,9 +58,32 @@ if $CLEAN; then
     echo ""
 fi
 
-# ── Step 1: Build Python backend with PyInstaller ────────────────
 if ! $ELECTRON_ONLY; then
-    echo "Step 1: Building Python backend..."
+    # ── Step 1: Build Flight Deck frontend ───────────────────────
+    # Before the backend: PyInstaller copies captain_claw/flight_deck/static
+    # into the binaries, so a frontend built after it never reaches the app.
+    echo "Step 1: Building Flight Deck frontend..."
+    echo "─────────────────────────────────"
+
+    cd flight-deck
+
+    if ! command -v npm &>/dev/null; then
+        echo "Error: npm is required but not found."
+        echo "Install Node.js from https://nodejs.org"
+        exit 1
+    fi
+
+    npm install
+    npm run build
+
+    cd "$SCRIPT_DIR"
+
+    echo ""
+    echo "Flight Deck frontend build complete."
+    echo ""
+
+    # ── Step 1b: Build Python backend with PyInstaller ───────────
+    echo "Step 1b: Building Python backend..."
     echo "─────────────────────────────────"
 
     ./build.sh
@@ -74,27 +97,6 @@ if ! $ELECTRON_ONLY; then
         exit 0
     fi
 fi
-
-# ── Step 1b: Build Flight Deck frontend ────────────────────────
-echo "Step 1b: Building Flight Deck frontend..."
-echo "─────────────────────────────────"
-
-cd flight-deck
-
-if ! command -v npm &>/dev/null; then
-    echo "Error: npm is required but not found."
-    echo "Install Node.js from https://nodejs.org"
-    exit 1
-fi
-
-npm install
-npm run build
-
-cd "$SCRIPT_DIR"
-
-echo ""
-echo "Flight Deck frontend build complete."
-echo ""
 
 # ── Step 2: Install Electron dependencies ────────────────────────
 echo "Step 2: Installing Electron dependencies..."
@@ -141,18 +143,42 @@ if [[ ! -f "$BACKEND_DIR/$FD_EXE_NAME" ]]; then
     exit 1
 fi
 
+# The Electron shell must match the backend's CPU: PyInstaller builds for
+# this machine only, so an x64 shell around arm64 binaries runs under
+# Rosetta on Apple silicon and can't start its backend on an Intel Mac.
+if [[ "$PLATFORM" == "mac" ]] && command -v lipo &>/dev/null; then
+    BACKEND_ARCH="$(lipo -archs "$BACKEND_DIR/$FD_EXE_NAME")"
+else
+    BACKEND_ARCH="$(uname -m)"
+fi
+case "$BACKEND_ARCH" in
+    arm64|aarch64) ARCH_FLAG="--arm64" ;;
+    x86_64|amd64)  ARCH_FLAG="--x64" ;;
+    *)
+        echo "Error: unsupported backend architecture: $BACKEND_ARCH"
+        exit 1
+        ;;
+esac
+
 echo "  Backend binary: $BACKEND_DIR/$EXE_NAME"
 echo "  Flight Deck binary: $BACKEND_DIR/$FD_EXE_NAME"
+echo "  Architecture: $BACKEND_ARCH"
 echo ""
 
 # ── Step 4: Package with electron-builder ────────────────────────
 echo "Step 4: Packaging Electron app..."
 echo "─────────────────────────────────"
 
+# electron-builder never empties its output folder: installers from an
+# earlier build (another arch, an older backend) would sit next to the new ones.
+# An open Finder window can re-create .DS_Store mid-delete; the folder staying
+# behind with only that in it is harmless.
+rm -rf "$SCRIPT_DIR/dist/desktop" 2>/dev/null || true
+
 case "$PLATFORM" in
-    mac)    npm run dist:mac ;;
-    win)    npm run dist:win ;;
-    linux)  npm run dist:linux ;;
+    mac)    npm run dist:mac -- "$ARCH_FLAG" ;;
+    win)    npm run dist:win -- "$ARCH_FLAG" ;;
+    linux)  npm run dist:linux -- "$ARCH_FLAG" ;;
 esac
 
 cd "$SCRIPT_DIR"

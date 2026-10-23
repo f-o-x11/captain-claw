@@ -41,7 +41,7 @@ import logging
 
 from captain_claw.config import without_retired_tools
 from captain_claw.flight_deck.auth import (
-    decode_access_token, get_current_user, get_managed_user, get_optional_managed_user,
+    _fd_desktop_deck, decode_access_token, get_current_user, get_managed_user, get_optional_managed_user,
     get_optional_user, get_ws_user, set_auth_db,
 )
 from captain_claw.flight_deck.db import FlightDeckDB
@@ -8637,6 +8637,9 @@ async def auth_status():
         "instance_description": cfg.get("instance_description") or "",
         "instance_logo": logo,
         "show_powered_by": cfg.get("show_powered_by") is not False,
+        # The desktop app's own deck (auth._fd_desktop_deck): sign-in off, yet
+        # Google and Microsoft connect — through the system browser.
+        "desktop_deck": _fd_desktop_deck(),
     }
 
 
@@ -9266,6 +9269,9 @@ def main():
     # another deck. A different agent-facing URL (e.g. through a local proxy)
     # is what FD_INTERNAL_URL is for.
     os.environ["FD_PORT"] = str(args.port)
+    # Likewise the bound host: the desktop deck (auth._fd_desktop_deck) only
+    # counts as one while it listens on loopback.
+    os.environ["FD_BIND_HOST"] = args.host
 
     if not args.dev and not STATIC_DIR.is_dir():
         print(f"Warning: Static files not found at {STATIC_DIR}")
@@ -9289,4 +9295,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # Frozen (PyInstaller) builds: a multiprocessing helper re-runs this
+    # binary — without this it starts another full server instead.
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()
