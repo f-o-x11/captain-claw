@@ -9,7 +9,7 @@
 //             double-click on an answer = hear it again (also Menu → Replay answer)
 //   Back      (PaperColor B only)
 //             click = an answer: the home screen · home: the answer · else back
-//             hold = home screen
+//             hold = Wi-Fi & settings (the setup hotspot; hold B again there to leave)
 //   StickS3 and PaperColor: the talk button isn't held — a press starts the
 //   recording and the next press (or 2.5 s of quiet) sends it; a quick double
 //   press replays.
@@ -46,7 +46,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.12.8"
+#define FW_VERSION "0.12.9"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -2506,18 +2506,16 @@ void loop() {
     if (!sideClickWoke && mode == sideClickMode) sideClick();
   }
 
-  // Third button (PaperColor C): back · hold = the home screen.
+  // Third button (PaperColor B): back · hold = Wi-Fi & settings, the setup
+  // hotspot (the paper has no menu row for it; Options needs Wi-Fi already).
   if (board::kBackPin >= 0) {
     if (backBtn().wasHold()) {
       touch();
       if (mode == Mode::Ask) {
         answerAsk(false);
-      } else if (inMenu || mode == Mode::Link) {
-        backToMain();
-      } else if (mode != Mode::Listening) {
-        mode = Mode::Home;
-        ui::drawNow();
-        redraw();
+      } else if (mode != Mode::Listening && !prerollOn) {
+        ui::flush();
+        runSetupPortal("Wi-Fi & settings");  // saving (or holding B again) restarts it
       }
     } else if (backBtn().wasClicked()) {
       touch();

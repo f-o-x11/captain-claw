@@ -12,9 +12,9 @@ One source tree builds both devices (`src/board.h` holds what differs):
 | | StickS3 | StopWatch | PaperColor |
 |---|---|---|---|
 | screen | 240×135 LCD (`ui_stick.cpp`) | 466×466 round AMOLED (`ui_round.cpp`) | 4" colour e-paper, 400×600, six inks (`ui_paper.cpp`) |
-| talk button (A) | front | yellow | A |
-| other button (B) | side | the second button | B |
-| third button (C) | — | — | C: back · hold = home screen |
+| talk button | front (A) | yellow (A) | top (C) |
+| other button | side (B) | the second button (B) | A: next · status · hold = Options |
+| third button | — | — | B: back · home · hold = Wi-Fi & settings |
 | extras | — | vibration (buzz before speech, on talk), clock | two status lights, room temperature + humidity, keeps its screen asleep |
 | build | `pio run -e sticks3` | `pio run -e stopwatch` | `pio run -e papercolor` |
 
@@ -60,7 +60,8 @@ Without Wi-Fi at switch-on they carry on offline (and keep looking for it)
 instead of opening the setup hotspot. They look first: when none of the
 saved networks is in reach, they're note takers within a couple of seconds
 instead of trying for 30. Setup is a switch-on with the talk
-button held, or Menu → *Wi-Fi & settings*.
+button held, or Menu → *Wi-Fi & settings* (PaperColor: hold B). Holding B
+(the side button) on the setup screen leaves it without saving.
 
 ## Talk from sleep
 
@@ -113,7 +114,7 @@ at all. So it's voice-first and redraws when you put it down:
 | | C (top) | A | B |
 |---|---|---|---|
 | click | talk, click again to send · while it speaks: stop · on Options: update | home: status · answer: next page (after the last, the first) · Options: done | answer: home screen · home: the answer · back |
-| hold | | Options (QR code; hold again closes) | home screen |
+| hold | | Options (QR code; hold again closes) | Wi-Fi & settings (the setup hotspot; hold B again to leave) |
 | double-click | hear the last answer again | (on an answer) hear it again | |
 
 To see every paper screen without the device (Mac, SDL2 from Homebrew):
