@@ -139,6 +139,7 @@ int main(int argc, char** argv) {
 
   bar("ready", kGreen);
   ui::Home home{true, "All good", kGreen, "Hold the yellow button to talk", {}};
+  home.battery = "≈ 2 h 10 min left";
   ui::showHome(home);
   save("01_home");
 
@@ -223,6 +224,7 @@ int main(int argc, char** argv) {
   st.deck = true, st.deckHost = "glasses.captain-claw.com", st.rttMs = 38;
   st.agent = "Captain Claw", st.agentLinked = true;
   st.batteryPct = 82, st.batteryMv = 3980, st.charging = false, st.usb = false;
+  st.minutesLeft = 130;
   st.uptime = "1h 12m", st.turns = 7, st.lastAnswerMin = 2;
   st.voice = "female", st.volumePct = 75, st.boostDb = 6, st.speak = true, st.textSize = 1;
   st.deviceId = "watch-a1b2c3", st.fw = "0.16.0", st.freeKb = 7480;

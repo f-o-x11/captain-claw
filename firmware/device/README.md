@@ -217,6 +217,14 @@ button is held, the paper on its top button). Flight Deck now counts the
 voice's places in UTF-8 bytes, as the firmware does, so letters like č and
 đ no longer put the lit sentence and the page turns behind the voice.
 
+0.17.0: the battery's time. There's no fuel gauge to ask, so the watch and the
+stick keep the level over the clock — through sleeps too, in RTC memory, a
+sample a minute awake and one before sleep — and once the window spans five
+minutes and two per cent, say "≈ 2 h 10 min left" (or "full in ≈ 45 min"
+while charging). The watch shows it under the character on the clock face
+in place of the agent's name; the stick in its status, the watch on its
+Power page too. A change of charging state starts the window over.
+
 *Tap to talk* (Menu, or the settings page; off by default) puts a record
 button on the screen: under the name at home, under an answer or the
 character. Tap it and talk; the button turns into a stop square, and a second

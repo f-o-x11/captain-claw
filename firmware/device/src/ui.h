@@ -75,6 +75,17 @@ struct Row {
 // count. The title shows on the first page only.
 int showPanel(const char* title, uint16_t titleColor, const std::vector<Row>& rows, int page = 0);
 
+// "2 h 10 min", "45 min", "3 d 4 h".
+inline String timeSpan(int minutes) {
+  if (minutes < 60) return String(max(1, minutes)) + " min";
+  if (minutes < 24 * 60) {
+    const int h = minutes / 60, m = minutes % 60;
+    return m ? String(h) + " h " + String(m) + " min" : String(h) + " h";
+  }
+  const int d = minutes / (24 * 60), h = (minutes / 60) % 24;
+  return h ? String(d) + " d " + String(h) + " h" : String(d) + " d";
+}
+
 // What the status screens show. The round screen draws it as gauges over
 // three pages; the others as rows (statusRows).
 struct Status {
@@ -88,6 +99,7 @@ struct Status {
   bool agentLinked = false;
   int batteryPct = -1, batteryMv = 0;
   bool charging = false, usb = false;
+  int minutesLeft = -1, minutesToFull = -1;  // from the level over the clock (-1: not known yet; 0 to full: full)
   String uptime;
   int turns = 0, lastAnswerMin = -1;
   bool climate = false;
@@ -118,7 +130,9 @@ inline std::vector<Row> statusRows(const Status& s) {
                   s.agentLinked ? green : (s.deck ? yellow : red)});
   char volts[16];
   snprintf(volts, sizeof(volts), "%.2f V", s.batteryMv / 1000.0f);
-  rows.push_back({"Battery", String(s.batteryPct) + "%  " + volts + (s.charging ? "  charging" : ""),
+  String time = s.charging ? (s.minutesToFull == 0 ? String("  full") : s.minutesToFull > 0 ? "  full in ~" + timeSpan(s.minutesToFull) : String(""))
+                           : (s.minutesLeft >= 0 ? "  ~" + timeSpan(s.minutesLeft) + " left" : String(""));
+  rows.push_back({"Battery", String(s.batteryPct) + "%  " + volts + (s.charging ? "  charging" : s.usb ? "  on USB" : "") + time,
                   s.batteryPct >= 40 ? green : s.batteryPct >= 20 ? yellow : red});
   if (s.climate) {
     char room[32];
@@ -152,7 +166,9 @@ struct Home {
   String hint;             // "hold the yellow button to talk", "waiting for agent"…
   std::vector<Row> rows;   // device, Wi-Fi, deck, agent
   uint8_t character = 0;   // e-paper: shown when there's no answer to keep
+  String battery;          // the round screen: "≈ 2 h 10 min left" / "full in ≈ 45 min" under the character
 };
+
 void showHome(const Home& home);
 
 // Conversation views (text mode).

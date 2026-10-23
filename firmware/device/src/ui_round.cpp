@@ -959,8 +959,15 @@ void showHome(const Home& home) {
     font(vlw::Digits);
     text(clock, CX, 180, kText);
     drawCharacter(home.character, home.ready ? face::Pose::Idle : face::Pose::Sad, 0, 278, 0.7f);
-    font(vlw::Title);
-    text(fit(name, lineRoom(334, 366)), CX, 350, kText);
+    // Under it: how long the battery has, or until it's full (the agent's
+    // name only where the board has nothing to say about the battery).
+    if (home.battery.length()) {
+      font(vlw::BodyS);
+      text(fit(home.battery, lineRoom(336, 364)), CX, 350, kText);
+    } else {
+      font(vlw::Title);
+      text(fit(name, lineRoom(334, 366)), CX, 350, kText);
+    }
   } else {
     drawBadge(tone, name, Glyph::Initials);
     font(vlw::Title);
@@ -1040,7 +1047,11 @@ static void statusPower(const Status& s) {
   char volts[16];
   snprintf(volts, sizeof(volts), "%.2f V", s.batteryMv / 1000.0f);
   font(vlw::Small);
-  text(String(volts) + (s.charging ? " · charging" : s.usb ? " · on USB" : " · on battery"), CX, 236, bc);
+  String line = String(volts) + (s.charging ? " · charging" : s.usb ? " · on USB" : " · on battery");
+  if (s.charging && s.minutesToFull == 0) line += " · full";
+  else if (s.charging && s.minutesToFull > 0) line += " · full in ≈ " + timeSpan(s.minutesToFull);
+  else if (!s.charging && s.minutesLeft >= 0) line += " · ≈ " + timeSpan(s.minutesLeft) + " left";
+  text(fit(line, lineRoom(224, 248)), CX, 236, bc);
   statusTile(290, kText, "Up " + s.uptime,
              String(s.turns) + (s.turns == 1 ? " answer" : " answers") +
                  (s.lastAnswerMin >= 0 ? " · last " + String(s.lastAnswerMin) + " min ago" : String("")),
