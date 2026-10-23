@@ -58,8 +58,10 @@ import { isUntrustedFile } from '../../utils/untrustedContent'
 //
 // Every file your agents made, in one place: Flight Deck reads each new or
 // changed file, writes a title and a short summary, sorts it into a category
-// and tags it. Search finds a file by any of that or by its text; filters
-// narrow it to a category, an agent or a kind of file. Opening the library
+// and tags it (a picture is looked at, a recording or video transcribed).
+// Search finds a file by any of that or by its text, a picture's description
+// or what's said in a recording; filters narrow it to a category, an agent
+// or a kind of file. Opening the library
 // looks for new files in the background; the list fills in as they're read.
 
 const PAGE = 60
@@ -440,7 +442,7 @@ export function FileLibrary({ phone = false, initialAgent, onClose, onOpenAgent,
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={phone ? 'Search files…' : 'Search titles, summaries, tags and the text inside…'}
+          placeholder={phone ? 'Search files…' : 'Search summaries, tags, the text inside and what\'s said in recordings…'}
           className="w-full rounded-lg border border-zinc-800 bg-zinc-900 py-2 pl-8 pr-8 text-sm text-zinc-200 placeholder-zinc-500 focus:border-violet-500/60 focus:outline-none"
         />
         {query && (

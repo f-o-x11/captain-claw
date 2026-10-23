@@ -6453,7 +6453,8 @@ _WORKSPACE_ALLOWED_EXTS: set[str] = {
     # Images
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico",
     # Audio / video
-    ".mp3", ".wav", ".ogg", ".mp4", ".webm",
+    ".mp3", ".wav", ".ogg", ".oga", ".opus", ".m4a", ".aac", ".flac", ".amr",
+    ".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi", ".3gp",
     # Archives
     ".zip", ".tar", ".gz",
     # Config / misc text
