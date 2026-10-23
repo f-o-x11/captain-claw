@@ -313,7 +313,8 @@ async def _forward_agent_msg(ch: "_ChannelState", data: dict) -> None:
         # /new created the session and the person heard nothing back.
         text = str(data.get("content", "")).strip()
         if text:
-            await _broadcast(ch, {"type": "agent", "text": text, "notice": True, "ts": _now_iso()})
+            await _broadcast(ch, {"type": "agent", "text": text, "notice": True,
+                                  "command": str(data.get("command", "") or ""), "ts": _now_iso()})
     elif mtype == "chat_message":
         if data.get("role", "") == "assistant":
             event = {

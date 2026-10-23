@@ -702,3 +702,62 @@ async def test_notes_wait_while_the_user_is_over_their_limit(monkeypatch):
     conn = _conn()
     await conn.deliver_notes([_note("a")])  # nothing transcribed (the stand-in has no audio)
     assert [m["type"] for m in conn.ws.sent if isinstance(m, dict)] == ["notes_failed"]
+
+
+# ── a spoken "new topic" ───────────────────────────────────────────────
+
+
+def test_a_new_topic_said_alone_is_told_apart():
+    assert db.cue_alone("New topic.") and db.cue_alone("nova tema")
+    assert not db.cue_alone("New topic, how warm is it in here?")
+    assert not db.cue_alone("nova tema za blog") and not db.cue_alone("what's new?")
+
+
+def _relay(conn, name):
+    from captain_claw.flight_deck import glasses_bridge as gb
+
+    ch = gb._ChannelState(channel_id=name)
+    ch.callback_subscribers.append(conn.on_bus)
+
+    async def frame(data):
+        await gb._forward_agent_msg(ch, data)
+
+    return frame
+
+
+_NEW_SESSION = {"type": "command_result", "command": "/new",
+                "content": "New session created: **web-session** (`3f2a9c1b`)"}
+
+
+@pytest.mark.asyncio
+async def test_a_new_topic_goes_straight_to_the_answer():
+    conn = _conn(speak=True)
+    _bound(conn)
+    frame = _relay(conn, "t-new-topic")
+    await conn.send_to_agent("New topic, how warm is it in here?", None)
+    await frame(_NEW_SESSION)
+    await frame({"type": "chat_message", "role": "assistant", "content": "23 °C."})
+    await conn.on_bus({"type": "status", "status": "ready"})
+    assert [m["text"] for m in conn.ws.sent if m["type"] == "reply"] == ["23 °C."]
+    assert conn._audio_q.get_nowait() == ("tts", "23 °C.") and conn._audio_q.empty()
+    assert conn.pending is False
+
+
+@pytest.mark.asyncio
+async def test_a_new_topic_said_alone_gets_a_short_line():
+    conn = _conn(speak=True)
+    _bound(conn)
+    frame = _relay(conn, "t-new-topic-alone")
+    await conn.send_to_agent("New topic.", None)
+    await frame(_NEW_SESSION)
+    assert conn.ws.sent[1:] == [{"type": "reply", "text": db.NEW_TOPIC_REPLY, "proactive": False},
+                                {"type": "state", "state": "ready"}]
+    assert conn._audio_q.get_nowait() == ("tts", db.NEW_TOPIC_REPLY)
+    assert conn.pending is False
+
+
+@pytest.mark.asyncio
+async def test_a_new_session_outside_a_device_turn_stays_off_the_device():
+    conn = _conn()
+    await _relay(conn, "t-new-elsewhere")(_NEW_SESSION)
+    assert conn.ws.sent == []
