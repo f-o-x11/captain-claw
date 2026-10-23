@@ -989,3 +989,23 @@ async def test_speech_end_follows_the_last_sound():
             break
     conn._audio_worker.cancel()
     assert conn.ws.sent == [{"type": "speech_end"}]
+
+
+@pytest.mark.asyncio
+async def test_only_the_answer_streams_to_devices():
+    from captain_claw.flight_deck import glasses_bridge as gb
+
+    seen: list = []
+    ch = gb._ChannelState(channel_id="t-stream-labels")
+
+    async def _cb(payload):
+        seen.append(payload)
+
+    ch.callback_subscribers.append(_cb)
+    await gb._forward_agent_msg(ch, {"type": "response_stream", "text": "Check bag.hr and bug.hr for ", "label": "task_rephrase"})
+    await gb._forward_agent_msg(ch, {"type": "response_stream", "text": "Tech news from bug.hr", "label": "session_title"})
+    await gb._forward_agent_msg(ch, {"type": "response_stream", "text": "Bag.hr wouldn't load, ", "label": "conversation"})
+    await gb._forward_agent_msg(ch, {"type": "response_stream", "text": "so this is from Bug.hr."})  # an older agent: no label
+    assert [e["text"] for e in seen] == ["Bag.hr wouldn't load, ", "so this is from Bug.hr."]
+    assert all(e["type"] == "agent_delta" for e in seen)
+    assert not ch.recent  # live only, never replayed
