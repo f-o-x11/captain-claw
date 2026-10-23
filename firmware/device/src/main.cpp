@@ -40,6 +40,7 @@
 #include "ota.h"
 #include "portal.h"
 #include "settings.h"
+#include "battery.h"
 #include "telemetry.h"
 #include "ui.h"
 
@@ -47,7 +48,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.16.2"
+#define FW_VERSION "0.17.0"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -424,6 +425,17 @@ static ui::TapButton tapButtonKind() {
 
 static void syncTapButton() { ui::setTapButton(tapButtonKind()); }
 
+// The battery as a line for the home screen: how long it has, or until full.
+static String batteryLine() {
+  if (battery::charging()) {
+    const int m = battery::minutesToFull();
+    return m == 0 ? String("full") : m > 0 ? "full in ≈ " + ui::timeSpan(m) : String("charging");
+  }
+  if (telemetry::onUsbPower()) return "full · on USB";
+  const int m = battery::minutesLeft();
+  return m >= 0 ? "≈ " + ui::timeSpan(m) + " left" : String("on battery");
+}
+
 // What the status screens show now.
 static ui::Status statusNow() {
   ui::Status s;
@@ -442,6 +454,8 @@ static ui::Status statusNow() {
   s.batteryMv = M5.Power.getBatteryVoltage();
   s.charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
   s.usb = telemetry::onUsbPower();
+  s.minutesLeft = battery::minutesLeft();
+  s.minutesToFull = battery::minutesToFull();
   s.uptime = uptime();
   s.turns = turns;
   s.lastAnswerMin = lastReplyMs ? (int)((millis() - lastReplyMs) / 60000) : -1;
@@ -490,6 +504,7 @@ static void showIdle() {
   home.rows.push_back({"Agent", agentLinked ? agentName : (wsUp ? String("waiting for agent") : String("-")),
                        agentLinked ? kGreen : kYellow});
   home.character = settings.character;
+  home.battery = batteryLine();
   ui::showHome(home);
 }
 
@@ -2070,6 +2085,7 @@ static void paperLights(bool on) {
   } else {
     esp_sleep_enable_ext0_wakeup(board::kTalkPin, 0);  // the talk button pulls low
   }
+  battery::sample();  // the long end of the next wake's window
   esp_deep_sleep_start();
 }
 
@@ -2418,6 +2434,7 @@ void setup() {
   ui::brightness(kBright);
   ui::setTextSize(settings.textSize);
   telemetry::begin();
+  battery::begin();
   leds::begin();
   leds::setLevel(settings.ledLevel);
 #if defined(BOARD_PAPERCOLOR)
@@ -2854,6 +2871,7 @@ void loop() {
   }
   keepWifi();
   PERF_T(pfTelMax, telemetry::poll());
+  battery::poll();
   pumpPreroll();
   pumpUpload();
   if (phoneSettingsActive()) {
