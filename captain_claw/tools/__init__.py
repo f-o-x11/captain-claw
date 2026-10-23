@@ -57,6 +57,7 @@ from captain_claw.tools.bat_ask import AskHumanTool
 from captain_claw.tools.code_session import CodeSessionTool
 from captain_claw.tools.hosting import HostingTool
 from captain_claw.tools.public_link import PublicLinkTool
+from captain_claw.tools.watch_background import WatchBackgroundTool
 from captain_claw.tools.termux import TermuxTool
 from captain_claw.tools.playbooks import PlaybooksTool
 from captain_claw.tools.botport import BotPortTool
@@ -136,6 +137,7 @@ __all__ = [
     "CodeSessionTool",
     "HostingTool",
     "PublicLinkTool",
+    "WatchBackgroundTool",
     "TermuxTool",
     "PlaybooksTool",
     "BotPortTool",

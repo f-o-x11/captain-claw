@@ -2672,6 +2672,10 @@ class AgentContextMixin:
             # when this agent wasn't spawned by a Flight Deck).
             from captain_claw.tools.public_link import PublicLinkTool
             self.tools.register(PublicLinkTool())
+            # The StopWatch's background picture — Flight Deck crops, darkens
+            # and sends it (clear error when not spawned by a Flight Deck).
+            from captain_claw.tools.watch_background import WatchBackgroundTool
+            self.tools.register(WatchBackgroundTool())
             # Payments — bill pay by barcode. Hidden unless the owner's Flight
             # Deck has payments on (FD_PAYMENTS), refreshed per turn — see the
             # registry. Captain never moves money; the user pays in their bank app.

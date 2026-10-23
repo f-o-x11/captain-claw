@@ -150,6 +150,16 @@ with nothing said at all it's dropped.
 Text uses Inter (`fonts/`, made by `tools/make_fonts.py`; SIL OFL, see
 `fonts/OFL.txt`), laid out to the circle.
 
+**Background picture** (0.13.0). Send your agent a picture and ask for it as the
+watch background: its `watch_background` tool hands it to Flight Deck
+(`flight_deck/device_backgrounds.py`), which crops it to fill the circle,
+darkens it so the text stays readable and keeps it. Every screen is drawn on it
+instead of black — except a picture the agent shows, which stays on black. The
+watch keeps it in flash (`/background.jpg`), names it in `prefs` (`"bg": id`), and
+Flight Deck sends the owner's (`{"type":"background","id","size"}`, then 0x04
+parts and a 0x05 last part) whenever it's another one; size 0 clears it. Ask the
+agent to clear it to go back to black.
+
 To see every screen without the watch (Mac, SDL2 from Homebrew):
 
 ```bash

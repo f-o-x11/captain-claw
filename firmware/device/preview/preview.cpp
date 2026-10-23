@@ -290,5 +290,37 @@ int main(int argc, char** argv) {
   bar("ready", kGreen);
   ui::showAsk("Saved voice notes", "3 voice notes recorded offline (1:24). Send them to the agent?", "send", "later");
   save("30_ask_notes");
+
+  // A background picture behind every screen (flight_deck/device_backgrounds.py).
+  auto bgJpg = readFile(gOut + "/background.jpg");
+  if (!bgJpg.empty()) {
+    ui::setBackground(bgJpg.data(), bgJpg.size());
+    bar("ready", kGreen);
+    ui::showHome(home);
+    save("31_bg_home");
+    bar("12s · 3 steps", kYellow);
+    ui::showWorking("What's on my calendar tomorrow, and can you move the dentist to Friday afternoon?",
+                    {"Reading the calendar", "google_calendar · list events", "Looking for a free slot on Friday"},
+                    "Checking Friday afternoon", 12400, 3);
+    save("32_bg_working");
+    bar("speaking", kCyan);
+    gPlaying = true;
+    ui::setReply("Tomorrow you have three meetings: stand-up at 9:30, lunch with Ana at 12:00 and the dentist at "
+                 "16:00. I moved the dentist to Friday at 15:00.");
+    ui::showReply();
+    ui::showSpeaking(70);
+    save("33_bg_reply_speaking");
+    gPlaying = false;
+    bar("menu", kText);
+    ui::showPicker(items, 2, -1);
+    save("34_bg_menu");
+    ui::setReply("");
+    bar("ready", kGreen);
+    ui::showFace(0, face::Pose::Idle, 0);
+    save("35_bg_icon");
+    ui::showMessage("Answer lost", "The connection dropped while the agent was working. Ask again.", kOrange);
+    save("36_bg_notice");
+    ui::setBackground(nullptr, 0);
+  }
   return 0;
 }

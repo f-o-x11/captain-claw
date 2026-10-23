@@ -127,6 +127,9 @@ void showCharPick(uint8_t kind, face::Pose pose, int level, int index);
 void storeImage(uint8_t* jpg, size_t len);
 bool hasImage();
 void showStoredImage();
+// A picture behind every screen (the round one; the others ignore it): a JPEG
+// of the screen's size, darkened by Flight Deck. nullptr / 0 clears it.
+void setBackground(const uint8_t* jpg, size_t len);
 
 // One entry of a menu or list. The stick shows `label` as one line; the
 // round screen shows a card: `badge` big in a glowing badge (a value like

@@ -1310,6 +1310,8 @@ void storeImage(uint8_t* jpg, size_t len) {
 
 bool hasImage() { return imgLen > 0; }
 
+void setBackground(const uint8_t*, size_t) {}  // a round screen's (ui_round.cpp)
+
 void showStoredImage() {
   if (!imgLen) return;
   ask(Kind::Picture, String((uint32_t)imgLen) + ":" + String((uint32_t)replyWhen), "", [=] {

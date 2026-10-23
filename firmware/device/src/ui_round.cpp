@@ -66,6 +66,11 @@ static int replyPage = 0;
 static bool replyCentred = false;  // one short page: the block sits mid-screen
 static uint8_t* imgBuf = nullptr;
 static size_t imgLen = 0;
+static M5Canvas backdrop;          // the background picture (setBackground), PSRAM
+static bool hasBackdrop = false;
+// The characters' own backdrop while there's a picture: see-through (their
+// eyes and mouths are real black).
+static constexpr uint16_t kSeeThrough = 0x0821;
 static TapButton tapMode = TapButton::Off;
 static int tapX = 0, tapY = 0, tapR = 0;  // the button on the screen now (tapR 0: none)
 
@@ -96,12 +101,14 @@ uint32_t g_perfDrawUs = 0, g_perfDrawMax = 0, g_perfPushUs = 0, g_perfPushMax = 
 static uint32_t frameT0 = 0;
 #endif
 
-// Every screen starts here: a black canvas.
-static void beginFrame() {
+// Every screen starts here: the background picture, else black (*plain*:
+// black all the same — a picture of the agent's own is shown on it).
+static void beginFrame(bool plain = false) {
 #ifdef CLAW_PERF
   frameT0 = micros();
 #endif
-  canvas.fillScreen(kBlack);
+  if (hasBackdrop && !plain) backdrop.pushSprite(&canvas, 0, 0);
+  else canvas.fillScreen(kBlack);
   tapR = 0;
 }
 
@@ -397,7 +404,8 @@ void showSpeaking(int level) {
     strip.setColorDepth(16);
     if (!strip.createSprite(kSpeakW, kSpeakH)) return;
   }
-  strip.fillSprite(kBlack);
+  if (hasBackdrop) backdrop.pushSprite(&strip, -kSpeakX, -kSpeakY);  // its piece of the picture
+  else strip.fillSprite(kBlack);
   int len = 14 + min(level, 100) * (kSpeakW - 14) / 100;
   strip.fillSmoothRoundRect((kSpeakW - len) / 2, 2, len, 4, 2, kCyan);
   strip.pushSprite(&M5.Display, kSpeakX, kSpeakY);
@@ -575,7 +583,7 @@ static String initials(const String& name) {
 // wide for the badge font drops to the title font, then the small one.
 static void drawBadge(Tone tone, const String& name, Glyph glyph, int cy = kBadgeY) {
   M5Canvas* s = badgeSprite(tone);
-  if (s) s->pushSprite(&canvas, CX - kGlowR, cy - kGlowR);
+  if (s) s->pushSprite(&canvas, CX - kGlowR, cy - kGlowR, kBlack);  // its glow's black: see-through
   else canvas.fillSmoothCircle(CX, cy, kBadgeR, rgb(kTones[tone].a[0], kTones[tone].a[1], kTones[tone].a[2]));
   if (glyph != Glyph::None && glyph != Glyph::Initials) {
     drawGlyph(glyph, CX, cy);
@@ -977,10 +985,11 @@ bool onLastPage() { return replyPage + 1 >= (int)replyPages.size(); }
 // Characters are drawn for the stick's 240×135 screen (under its 16 px bar),
 // then scaled up smoothly into the middle of the round one.
 static void drawCharacter(uint8_t kind, face::Pose pose, int level, int cy) {
-  faceSprite.fillScreen(kBlack);
+  faceSprite.fillScreen(hasBackdrop ? kSeeThrough : kBlack);
   face::draw(faceSprite, kind, pose, level, millis(), 120, 76);
   faceSprite.setPivot(120, 76);
-  faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f);
+  if (hasBackdrop) faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f, kSeeThrough);
+  else faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f);
 }
 
 void showFace(uint8_t kind, face::Pose pose, int level) {
@@ -1028,10 +1037,25 @@ bool hasImage() { return imgLen > 0; }
 
 void showStoredImage() {
   if (!imgLen) return;
-  beginFrame();
+  beginFrame(true);
   // Centred; a picture made for a smaller screen is shown at its own size.
   canvas.drawJpg(imgBuf, imgLen, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center);
   push();
+}
+
+void setBackground(const uint8_t* jpg, size_t len) {
+  hasBackdrop = false;
+  if (!jpg || !len) {
+    backdrop.deleteSprite();
+    return;
+  }
+  if (!backdrop.width()) {
+    backdrop.setPsram(true);
+    backdrop.setColorDepth(16);
+    if (!backdrop.createSprite(W, H)) return;
+  }
+  backdrop.fillScreen(kBlack);
+  hasBackdrop = backdrop.drawJpg(jpg, len, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center);
 }
 
 void showPicker(const std::vector<Item>& items, int selected, int current, const char*) {
