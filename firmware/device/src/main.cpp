@@ -22,6 +22,7 @@
 // text, 24 kHz PCM speech and JPEG pictures down.
 
 #include <ArduinoJson.h>
+#include <LittleFS.h>
 #include <M5Unified.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
@@ -46,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.12.10"
+#define FW_VERSION "0.13.0"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -148,6 +149,15 @@ static int rttMs = -1;
 static uint32_t lastPingMs = 0, lastReplyMs = 0, turns = 0;
 static uint8_t* imgPart = nullptr;  // a picture arriving in parts (PSRAM)
 static size_t imgPartLen = 0;
+// The background picture (round screens): Flight Deck sends the owner's when
+// the one the watch names in "prefs" isn't it (flight_deck/device_backgrounds.py).
+static constexpr const char* kBgFile = "/background.jpg";
+static constexpr const char* kBgIdFile = "/background.id";
+static String bgId;                 // the one shown ("" none)
+static String bgIncomingId;         // the one arriving in parts (0x04 … 0x05)
+static size_t bgIncomingSize = 0;
+static uint8_t* bgPart = nullptr;
+static size_t bgPartLen = 0;
 static uint32_t talkTapMs = 0;      // when the talk button was last tapped (double-click = replay)
 static uint32_t buzzOffMs = 0;       // vibration motor runs until then (0 = off)
 static uint32_t turnBusyMs = 0;      // last moment a turn was under way (Wi-Fi stays fully awake)
@@ -260,6 +270,7 @@ static void sendPrefs() {
   d["type"] = "prefs";
   d["voice"] = settings.femaleVoice ? "female" : "male";
   d["speak"] = settings.speak;
+  if (board::kRound) d["bg"] = bgId;  // the background it shows: the deck sends the owner's if it differs
   sendJson(d);
 }
 
@@ -683,6 +694,8 @@ static void sayRow() {
 static void backToMain();
 static void startInstall();
 static void connectServer();
+static void dropBackgroundPart();
+static void setBackground(const uint8_t* jpg, size_t len, const String& id);
 static void sendNotesNow();
 static void replayAnswer();
 static String phoneUrl;  // "settings on phone" address while it's open
@@ -1571,6 +1584,11 @@ static void onText(const char* payload, size_t len) {
     }
   } else if (type == "pong") {
     if (doc["t"].is<uint32_t>()) rttMs = millis() - doc["t"].as<uint32_t>();
+  } else if (type == "background") {
+    dropBackgroundPart();
+    bgIncomingId = doc["id"] | "";
+    bgIncomingSize = doc["size"] | 0;
+    if (!bgIncomingSize) setBackground(nullptr, 0, "");  // cleared: back to black
   } else if (type == "error") {
     touch();
     buzz(250);
@@ -1587,6 +1605,62 @@ static void dropImagePart() {
 
 // A picture: 0x03 frames are parts with more to come, 0x02 is the last (or
 // only) part. A WebSocket frame here carries at most ~15 KB.
+static void dropBackgroundPart() {
+  free(bgPart);
+  bgPart = nullptr;
+  bgPartLen = 0;
+}
+
+// Shown, and kept in flash for the next boot (nullptr: back to black).
+static void setBackground(const uint8_t* jpg, size_t len, const String& id) {
+  ui::setBackground(jpg, len);
+  bgId = len ? id : "";
+  if (notes::ready()) {
+    if (len) {
+      File f = LittleFS.open(kBgFile, "w");
+      const bool ok = f && f.write(jpg, len) == len;
+      f.close();
+      File idf = LittleFS.open(kBgIdFile, "w");
+      if (idf) idf.print(ok ? id : "");
+    } else {
+      LittleFS.remove(kBgFile);
+      LittleFS.remove(kBgIdFile);
+    }
+  }
+  if (mode != Mode::Listening && !flashing) redraw();
+}
+
+// At boot: the background kept from last time.
+static void loadBackground() {
+  if (!board::kRound || !notes::ready() || !LittleFS.exists(kBgFile)) return;
+  File f = LittleFS.open(kBgFile, "r");
+  const size_t len = f ? f.size() : 0;
+  uint8_t* buf = len && len <= kMaxImage ? (uint8_t*)ps_malloc(len) : nullptr;
+  if (buf && f.read(buf, len) == len) {
+    ui::setBackground(buf, len);
+    File idf = LittleFS.open(kBgIdFile, "r");
+    bgId = idf ? idf.readString() : String();
+    bgId.trim();
+  }
+  free(buf);
+}
+
+static void backgroundData(const uint8_t* data, size_t len, bool last) {
+  const size_t need = bgPartLen + len;
+  uint8_t* grown = bgIncomingSize && need <= kMaxImage ? (uint8_t*)ps_realloc(bgPart, need) : nullptr;
+  if (!grown) {
+    dropBackgroundPart();
+    return;
+  }
+  memcpy(grown + bgPartLen, data, len);
+  bgPart = grown;
+  bgPartLen = need;
+  if (!last) return;
+  if (bgPartLen == bgIncomingSize) setBackground(bgPart, bgPartLen, bgIncomingId);
+  dropBackgroundPart();
+  bgIncomingSize = 0;
+}
+
 static void imageData(const uint8_t* data, size_t len, bool last) {
   size_t need = imgPartLen + len;
   uint8_t* grown = need <= kMaxImage ? (uint8_t*)ps_realloc(imgPart, need) : nullptr;
@@ -1618,6 +1692,8 @@ static void onBinary(const uint8_t* data, size_t len) {
     else audio::playFeed(data + 1, len - 1);
   } else if (data[0] == 0x02 || data[0] == 0x03) {
     imageData(data + 1, len - 1, data[0] == 0x02);
+  } else if (board::kRound && (data[0] == 0x04 || data[0] == 0x05)) {
+    backgroundData(data + 1, len - 1, data[0] == 0x05);
   }
 }
 
@@ -1642,6 +1718,8 @@ static void onWs(WStype_t type, uint8_t* payload, size_t length) {
         if (audio::micActive()) audio::micStop([](const int16_t*, size_t) {});
         audio::playStop();
         dropImagePart();
+        dropBackgroundPart();  // sent again in full on the next link (prefs names the old one)
+        bgIncomingSize = 0;
         deckReplay = false;
         asideOpen = false;
         if (prerollOn) {  // the deck dropped that recording: send it all again on the next link
@@ -2165,6 +2243,7 @@ void setup() {
     }
   }
   notes::begin();
+  loadBackground();
   probation = ota::onProbation();
   Serial.printf("[claw] boot %s fw %s%s%s: %d network(s), server '%s'\n", deviceId().c_str(), FW_VERSION,
                 probation ? " (on probation)" : "", talking ? " (talking)" : "", settings.netCount,

@@ -1449,6 +1449,7 @@ from captain_claw.flight_deck.app_code_routes import router as app_code_router
 from captain_claw.flight_deck.glasses_bridge import router as glasses_router
 from captain_claw.flight_deck.device_bridge import router as device_router
 from captain_claw.flight_deck.device_firmware import router as device_firmware_router
+from captain_claw.flight_deck.device_backgrounds import router as device_backgrounds_router
 from captain_claw.flight_deck.face_routes import router as face_router
 from captain_claw.flight_deck.messenger_bridge import router as messenger_router
 from captain_claw.flight_deck.whatsapp_bridge import router as whatsapp_router
@@ -1534,6 +1535,8 @@ app.include_router(glasses_router)
 app.include_router(device_router)
 # Over-the-air firmware for the devices (docs/device-ota-plan.md).
 app.include_router(device_firmware_router)
+# A picture behind the StopWatch's screens, sent by the owner's agent.
+app.include_router(device_backgrounds_router)
 # Smart-glasses HUD (/hud/*, /fd/hud/config). Must precede spa_catch_all.
 app.include_router(hud_router)
 app.include_router(face_router)
