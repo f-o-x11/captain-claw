@@ -116,4 +116,13 @@ constexpr bool kChunkedImages = false;
 
 #endif
 
+// The PaperColor built the "B" way (env papercolor_b): the screen is a
+// dashboard redrawn every half hour, the lights and the voice carry the
+// rest; C talks, A shows the options code, B shows the last answer.
+#if defined(PAPER_B)
+constexpr bool kPaperB = true;
+#else
+constexpr bool kPaperB = false;
+#endif
+
 }  // namespace board

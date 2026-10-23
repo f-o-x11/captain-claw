@@ -42,7 +42,7 @@ void Settings::load() {
   tapTalk = board::kHasTouch && p.getBool("taptalk", false);
   talks = p.getUShort("talks", 0);
   textSize = min<uint8_t>(p.getUChar("tsize", 0), 2);
-  autoUpdate = p.getBool("autoupd", false);
+  autoUpdate = p.getBool("autoupd", board::kPaperB);  // the B paper: on unless turned off on the phone page
   lastFw = p.getString("lastfw", "");
   tz = p.getString("tz", kDefaultTz);
   if (tz.isEmpty()) tz = kDefaultTz;
