@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import itertools
 import json
 import logging
 import math
@@ -130,6 +131,15 @@ MAX_NOTES_PER_BATCH = 20         # offline voice notes taken in one upload
 MAX_NOTE_SECONDS = 120
 # "New topic" said with nothing after it: no answer follows the new session.
 NEW_TOPIC_REPLY = "New topic — go ahead."
+TURN_KEEP_S = 600.0              # a turn (its answer) waits this long for its device to come back
+RESUME_GRACE_S = 1.5             # a reconnect's talk-from-sleep recording starts within this
+HEARD_AFTER_S = 2.0              # a device message this long after an answer: it got there
+
+# The device turn per channel, kept across reconnects (weak Wi-Fi drops the
+# link mid-turn): open from the send until "ready", and its answer until the
+# device is heard from after it. A reconnect carries on with it.
+_turns: dict[str, dict] = {}
+_conn_serials = itertools.count(1)
 
 # Offline voice notes already handed to the agent, per device channel: a
 # batch sent again (its notes_done lost with the link) is acknowledged, not
@@ -467,6 +477,8 @@ class _DeviceConn:
         self._image_lock = asyncio.Lock()  # one picture's parts at a time
         self.ch: gb._ChannelState | None = None
         self.agent: dict | None = None
+        self.serial = next(_conn_serials)
+        self.closed = False  # the link is gone; a turn still open keeps listening
         self._send_lock = asyncio.Lock()
         self.recording = False
         self.rec_rate = 16000
@@ -500,10 +512,14 @@ class _DeviceConn:
 
     # ── wire ──
     async def send_json(self, obj: dict) -> None:
+        if self.closed:
+            return
         async with self._send_lock:
             await self.ws.send_text(json.dumps(obj, default=str))
 
     async def send_bin(self, kind: int, payload: bytes) -> None:
+        if self.closed:
+            return
         async with self._send_lock:
             await self.ws.send_bytes(bytes([kind]) + payload)
 
@@ -549,6 +565,7 @@ class _DeviceConn:
             proactive = bool(ev.get("proactive")) and not ev.get("fd_delivers")
             if not (self.pending or proactive):
                 return  # a turn from another surface on the same agent
+            turn = _turns.get(self.channel_id) if self.pending else None
             text = str(ev.get("text", "") or "")
             closes = False
             if ev.get("command") == "/new":
@@ -557,20 +574,12 @@ class _DeviceConn:
                 # follows — a short line closes the turn instead.
                 if not (self.pending and self.cue_alone):
                     return
-                self.pending = self.cue_alone = False
+                self.cue_alone = False
+                self._end_turn()
                 text, closes = NEW_TOPIC_REPLY, True
             if not text.strip():
                 return
-            self.last_reply_at = time.monotonic()
-            # Round screens (the StopWatch) and e-paper use Inter, which has Đ.
-            await self.send_json({"type": "reply", "text": screen_text(text, has_dj=self.round_screen or self.paper),
-                                  "proactive": proactive})
-            sounds = _answers[self.channel_id] = []  # a new answer
-            if self.speak:
-                spoken = speakable(text)
-                if spoken:
-                    sounds.append(("tts", spoken))
-                    await self._audio_q.put(("tts", spoken))
+            await self._show_reply(text, proactive, turn)
             if closes:
                 await self.send_json({"type": "state", "state": "ready"})
         elif etype == "narration":
@@ -588,7 +597,7 @@ class _DeviceConn:
             if status == "thinking" and self.pending:
                 await self.send_json({"type": "state", "state": "thinking"})
             elif status == "ready" and self.pending:
-                self.pending = False
+                self._end_turn()
                 await self.send_json({"type": "state", "state": "ready"})
             elif status == "agent_connected":
                 await self.send_json({"type": "state", "state": "connected"})
@@ -597,12 +606,12 @@ class _DeviceConn:
                 await self.send_json({"type": "status", "text": "Reconnecting to agent…"})
         elif etype == "error":
             if self.pending:
-                self.pending = False
+                self._end_turn()
                 text = ("The agent is busy — try again in a moment." if ev.get("retryable")
                         else str(ev.get("text", "") or "Agent error"))
                 await self.send_json({"type": "error", "text": text[:300]})
         elif etype == "media":
-            if not (self.pending or time.monotonic() - self.last_reply_at < MEDIA_WINDOW_S):
+            if self.closed or not (self.pending or time.monotonic() - self.last_reply_at < MEDIA_WINDOW_S):
                 return
             for item in ev.get("items") or []:
                 kind = str(item.get("kind", ""))
@@ -618,6 +627,72 @@ class _DeviceConn:
             return
         self._last_activity = line
         await self.send_json({"type": "activity", "text": line, "tool": tool})
+
+    async def _show_reply(self, text: str, proactive: bool, turn: dict | None = None) -> None:
+        """An answer on the screen and spoken; a turn's answer is also kept
+        until the device is heard from after it (a dropped link loses it)."""
+        if turn is not None:
+            turn.update(answer={"text": text, "proactive": proactive}, via=self.serial,
+                        sent_at=time.monotonic(), heard=False)
+        if self.closed:
+            return  # the reconnect brings it
+        self.last_reply_at = time.monotonic()
+        # Round screens (the StopWatch) and e-paper use Inter, which has Đ.
+        await self.send_json({"type": "reply", "text": screen_text(text, has_dj=self.round_screen or self.paper),
+                              "proactive": proactive})
+        sounds = _answers[self.channel_id] = []  # a new answer
+        if self.speak:
+            spoken = speakable(text)
+            if spoken:
+                sounds.append(("tts", spoken))
+                await self._audio_q.put(("tts", spoken))
+
+    # ── a turn across reconnects ──
+    def _end_turn(self) -> None:
+        self.pending = False
+        turn = _turns.get(self.channel_id)
+        if turn is not None:
+            turn["open"] = False
+        if self.closed:
+            self.unbind()  # nothing more to keep for the reconnect
+
+    def _kept_turn(self) -> dict | None:
+        turn = _turns.get(self.channel_id)
+        if turn and time.monotonic() - max(turn["at"], turn["sent_at"]) <= TURN_KEEP_S:
+            return turn
+        return None
+
+    def take_over(self) -> None:
+        """A device back after a dropped link: the turn still running on its
+        channel is this connection's now, so its answer comes here."""
+        turn = self._kept_turn()
+        if turn and turn["open"]:
+            self.pending = True
+
+    async def resume(self) -> None:
+        """After take_over: the answer the device may have missed comes
+        again, or a turn still running shows as thinking again."""
+        turn = self._kept_turn()
+        if turn is None:
+            return
+        await asyncio.sleep(RESUME_GRACE_S)  # woken by talking: that recording goes first
+        if self.recording or _turns.get(self.channel_id) is not turn:
+            return  # they're asking something new
+        answer = turn.get("answer")
+        if answer and not turn["heard"] and turn["via"] != self.serial:
+            await self._show_reply(answer["text"], answer["proactive"], turn)
+            if not turn["open"]:
+                await self.send_json({"type": "state", "state": "ready"})
+        elif turn["open"] and not answer:
+            await self.send_json({"type": "state", "state": "thinking"})
+
+    def heard(self) -> None:
+        """Something came from the device: the answer sent to it a moment
+        before got there."""
+        turn = _turns.get(self.channel_id)
+        if (turn and turn.get("answer") and turn["via"] == self.serial
+                and time.monotonic() - turn["sent_at"] >= HEARD_AFTER_S):
+            turn["heard"] = True
 
     # ── device → agent ──
     def system_context(self) -> str:
@@ -669,6 +744,8 @@ class _DeviceConn:
                 return False
         self.pending = True
         self.cue_alone = cue_alone(text)
+        _turns[self.channel_id] = {"at": time.monotonic(), "open": True, "answer": None,
+                                   "via": 0, "sent_at": 0.0, "heard": False}
         self._last_activity = ""
         try:
             await self.send_json({"type": "state", "state": "thinking"})
@@ -953,7 +1030,9 @@ class _DeviceConn:
             await proc.wait()
 
     async def close(self) -> None:
-        self.unbind()
+        self.closed = True
+        if not self.pending:
+            self.unbind()  # (a turn still running keeps listening: its answer waits for the reconnect)
         await self.stop_audio()
         if self._audio_worker is not None:
             self._audio_worker.cancel()
@@ -1000,12 +1079,15 @@ async def device_ws(ws: WebSocket) -> None:
     conn.start_audio_worker()
     _live.add(conn)
     try:
-        await conn.bind(q.get("agent", ""))
+        conn.take_over()  # before bind: from here on, the running turn's answer is ours
+        if await conn.bind(q.get("agent", "")):
+            conn._spawn(conn.resume())
         await conn.offer_update()
         while True:
             msg = await ws.receive()
             if msg.get("type") == "websocket.disconnect":
                 break
+            conn.heard()
             data = msg.get("bytes")
             if data is not None:
                 if conn.recording:

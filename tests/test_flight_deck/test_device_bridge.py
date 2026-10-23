@@ -761,3 +761,123 @@ async def test_a_new_session_outside_a_device_turn_stays_off_the_device():
     conn = _conn()
     await _relay(conn, "t-new-elsewhere")(_NEW_SESSION)
     assert conn.ws.sent == []
+
+
+# ── a turn across a dropped link ───────────────────────────────────────
+
+
+@pytest.fixture
+def deck(monkeypatch):
+    """One device channel on the real bus (registry, bind), with a stand-in
+    agent link; ``frame`` feeds agent frames through the glasses bridge."""
+    import types
+
+    from captain_claw.flight_deck import glasses_bridge as gb
+
+    monkeypatch.setattr(db, "_turns", {})
+    monkeypatch.setattr(db, "_answers", {})
+    monkeypatch.setattr(db, "RESUME_GRACE_S", 0)
+    monkeypatch.setattr(gb, "_channels", {})
+    monkeypatch.setattr(db, "_pick_agent", lambda user_id, selector: {"name": "A", "slug": "a", "port": 1})
+
+    async def _link(ch, host, port):
+        ch.agent_ws = _AgentWS()
+        ch.context_sent = True
+
+    monkeypatch.setattr(gb, "_ensure_agent_binding", _link)
+
+    async def frame(data):
+        await gb._forward_agent_msg(gb._channels["device:u1:stick"], data)
+
+    async def connect(speak=True):
+        conn = _conn(speak=speak)
+        conn.take_over()  # as device_ws does
+        assert await conn.bind("")
+        return conn
+
+    return types.SimpleNamespace(frame=frame, connect=connect)
+
+
+def _after_bound(conn):
+    return [m for m in conn.ws.sent if m["type"] != "bound"]
+
+
+@pytest.mark.asyncio
+async def test_an_answer_landing_while_the_link_is_down_comes_on_the_reconnect(deck):
+    old = await deck.connect()
+    await old.send_to_agent("koliko je sati?", None)
+    await old.close()  # the deck saw the link go
+    await deck.frame({"type": "chat_message", "role": "assistant", "content": "**Tri** sata."})
+    await deck.frame({"type": "status", "status": "ready"})
+    assert _after_bound(old) == [{"type": "state", "state": "thinking"}]
+    new = await deck.connect()
+    assert new.pending is False  # that turn is over
+    await new.resume()
+    assert _after_bound(new) == [{"type": "reply", "text": "Tri sata.", "proactive": False},
+                                 {"type": "state", "state": "ready"}]
+    assert new._audio_q.get_nowait() == ("tts", "Tri sata.")
+
+
+@pytest.mark.asyncio
+async def test_an_answer_sent_into_a_dead_link_comes_again(deck):
+    old = await deck.connect()
+    await old.send_to_agent("koliko je sati?", None)
+    await deck.frame({"type": "chat_message", "role": "assistant", "content": "Tri sata."})
+    await deck.frame({"type": "status", "status": "ready"})
+    assert [m["type"] for m in _after_bound(old)] == ["state", "reply", "state"]  # never heard after
+    new = await deck.connect()
+    await new.resume()
+    assert [m.get("text") for m in _after_bound(new) if m["type"] == "reply"] == ["Tri sata."]
+
+
+@pytest.mark.asyncio
+async def test_an_answer_the_device_got_is_not_repeated(deck):
+    old = await deck.connect()
+    await old.send_to_agent("koliko je sati?", None)
+    await deck.frame({"type": "chat_message", "role": "assistant", "content": "Tri sata."})
+    await deck.frame({"type": "status", "status": "ready"})
+    db._turns[old.channel_id]["sent_at"] -= db.HEARD_AFTER_S
+    old.heard()  # its next ping
+    new = await deck.connect()
+    await new.resume()
+    assert _after_bound(new) == []
+
+
+@pytest.mark.asyncio
+async def test_a_turn_still_running_carries_on_after_the_reconnect(deck):
+    old = await deck.connect()
+    await old.send_to_agent("koliko je sati?", None)
+    await old.close()
+    new = await deck.connect()
+    assert new.pending is True
+    await new.resume()
+    assert _after_bound(new) == [{"type": "state", "state": "thinking"}]
+    await deck.frame({"type": "chat_message", "role": "assistant", "content": "Tri sata."})
+    await deck.frame({"type": "status", "status": "ready"})
+    assert [m["type"] for m in _after_bound(new)] == ["state", "reply", "state"]
+    assert _after_bound(old) == [{"type": "state", "state": "thinking"}]  # nothing to the old link
+
+
+@pytest.mark.asyncio
+async def test_a_new_recording_on_the_reconnect_is_left_alone(deck):
+    old = await deck.connect()
+    await old.send_to_agent("koliko je sati?", None)
+    await old.close()
+    await deck.frame({"type": "chat_message", "role": "assistant", "content": "Tri sata."})
+    await deck.frame({"type": "status", "status": "ready"})
+    new = await deck.connect()
+    new.recording = True  # woken by talking: asking something new
+    await new.resume()
+    assert _after_bound(new) == []
+
+
+@pytest.mark.asyncio
+async def test_an_old_turn_is_not_brought_back(deck):
+    old = await deck.connect()
+    await old.send_to_agent("koliko je sati?", None)
+    await old.close()
+    db._turns[old.channel_id]["at"] -= db.TURN_KEEP_S + 1
+    new = await deck.connect()
+    assert new.pending is False
+    await new.resume()
+    assert _after_bound(new) == []
