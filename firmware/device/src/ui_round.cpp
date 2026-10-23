@@ -44,6 +44,11 @@ static constexpr uint16_t kCyan = rgb(60, 210, 245), kBlue = rgb(90, 150, 255);
 
 static M5Canvas canvas(&M5.Display);
 static M5Canvas faceSprite;  // characters draw at the stick's size, then scale up
+static M5Canvas prevFrame;   // the screen before a slide (PSRAM)
+enum class Fx : uint8_t { None, SlideOn, SlideBack, Fade };
+static Fx nextFx = Fx::None;        // how the next push() brings its screen in
+static uint8_t curBright = 0;       // what brightness() last set (dark or dim: no fades)
+static constexpr int kSlideFrames = 4;
 
 static lgfx::VLWfont fontSet[vlw::Count];
 static lgfx::PointerWrapper fontData[vlw::Count];
@@ -63,7 +68,13 @@ static Health hWifi = Down, hAgent = Down;
 
 static String replyText;
 static std::vector<std::vector<String>> replyPages;
+static std::vector<std::vector<std::pair<int, int>>> lineSpans;  // each line's [from, to) in replyText
+static std::vector<int> pageEnds;                                  // where each page's text ends
 static int replyPage = 0;
+static int spokenAt = -1, litFrom = -1, litTo = -1;  // the voice's place, and the sentence round it
+static bool autoFollow = true;                       // the page turns with the voice (off once paged by hand)
+static bool replayable = false;                      // the small replay button under the answer
+static int rpX = 0, rpY = 0, rpR = 0;                // where it is (rpR 0: none)
 static bool replyCentred = false;  // one short page: the block sits mid-screen
 static uint8_t* imgBuf = nullptr;
 static size_t imgLen = 0;
@@ -106,19 +117,32 @@ uint32_t g_perfDrawUs = 0, g_perfDrawMax = 0, g_perfPushUs = 0, g_perfPushMax = 
 static uint32_t frameT0 = 0;
 #endif
 
+// The screen as it is, kept for a slide.
+static bool keepFrame() {
+  if (!prevFrame.width()) {
+    prevFrame.setPsram(true);
+    prevFrame.setColorDepth(16);
+    if (!prevFrame.createSprite(W, H)) return false;
+  }
+  memcpy(prevFrame.getBuffer(), canvas.getBuffer(), (size_t)W * H * 2);
+  return true;
+}
+
 // Every screen starts here: the background picture, else black (*plain*:
 // black all the same — a picture of the agent's own is shown on it).
 static void beginFrame(bool plain = false) {
 #ifdef CLAW_PERF
   frameT0 = micros();
 #endif
+  if ((nextFx == Fx::SlideOn || nextFx == Fx::SlideBack) && !keepFrame()) nextFx = Fx::None;
   if (hasBackdrop && !plain) backdropDim.pushSprite(&canvas, 0, 0);
   else canvas.fillScreen(kBlack);
   tapR = 0;
+  rpR = 0;
   askShown = false;
 }
 
-static void push() {
+static void pushNow() {
 #ifdef CLAW_PERF
   uint32_t t = micros();
   uint32_t draw = t - frameT0;
@@ -133,6 +157,47 @@ static void push() {
   canvas.pushSprite(0, 0);
 #endif
 }
+
+// The old screen leaves and the new one follows it in, eased, in a few
+// frames — each a screen's worth of pixels (~50 ms on the AMOLED).
+static void slideIn(bool forward) {
+  const int dir = forward ? -1 : 1;
+  for (int k = 1; k < kSlideFrames; ++k) {
+    float t = k / (float)kSlideFrames;
+    t = t * t * (3 - 2 * t);
+    const int off = ((int)(W * t)) & ~1;  // even: the panel's rule
+    prevFrame.pushSprite(&M5.Display, dir * off, 0);
+    canvas.pushSprite(dir * (off - W), 0);
+  }
+  pushNow();
+}
+
+// Through black: the panel's brightness steps down, the new screen goes up
+// unlit and the brightness comes back — read as a fade, at no drawing cost.
+static void fadeIn() {
+  const uint8_t b = curBright;
+  for (int k = 2; k >= 1; --k) {
+    M5.Display.setBrightness(b * k / 3);
+    delay(28);
+  }
+  M5.Display.setBrightness(0);
+  pushNow();
+  for (int k = 1; k <= 3; ++k) {
+    delay(28);
+    M5.Display.setBrightness(b * k / 3);
+  }
+}
+
+static void push() {
+  const Fx fx = nextFx;
+  nextFx = Fx::None;
+  if (fx == Fx::SlideOn || fx == Fx::SlideBack) slideIn(fx == Fx::SlideOn);
+  else if (fx == Fx::Fade && curBright > 24) fadeIn();  // (not from a dark or dimmed screen)
+  else pushNow();
+}
+
+void slide(bool forward) { nextFx = forward ? Fx::SlideOn : Fx::SlideBack; }
+void fade() { nextFx = Fx::Fade; }
 
 static int tw(const String& s) { return canvas.textWidth(s.c_str()); }
 
@@ -282,6 +347,17 @@ static bool clockText(char* out, size_t n) {
   return true;
 }
 
+// "Fri 23 Oct"
+static String dateText() {
+  time_t now = time(nullptr);
+  struct tm tm;
+  localtime_r(&now, &tm);
+  char wday[8], mon[8];
+  strftime(wday, sizeof(wday), "%a", &tm);
+  strftime(mon, sizeof(mon), "%b", &tm);
+  return String(wday) + " " + String(tm.tm_mday) + " " + mon;
+}
+
 static void drawBatteryAt(int y, bool force) {
   bool chg = false;
   int pct = batteryPct(&chg);
@@ -304,11 +380,11 @@ static void drawBatteryAt(int y, bool force) {
 
 // Clock with the Wi-Fi dot left of it and the agent dot right of it; a low
 // battery shows its percentage underneath on every screen.
-static void drawChrome(bool lowBattery = true) {
+static void drawChrome(bool lowBattery = true, bool withClock = true) {
   char clock[8];
   font(vlw::Small);
   int half = 10;
-  if (clockText(clock, sizeof(clock))) {
+  if (withClock && clockText(clock, sizeof(clock))) {
     text(clock, CX, kChromeY, kText);
     half = tw(clock) / 2 + 14;
   }
@@ -383,7 +459,9 @@ static void ringListening(uint32_t elapsedMs, int level) {
 
 // Working: an amber comet circling; tool steps as ticks inside the ring.
 static void ringWorking(int steps) {
-  ringTrack(kAmber);
+  // The track breathes while the agent works: one breath in 2.4 s.
+  const float breath = 0.5f + 0.5f * sinf(millis() * (6.2832f / 2400));
+  ringArc(0, 360, mix(kBlack, kAmber, 0.12f + 0.22f * breath));
   float head = fmodf(millis() * 0.225f, 360.0f);  // one turn in 1.6 s
   const int segs = 9;
   for (int i = 0; i < segs; ++i) {
@@ -674,7 +752,10 @@ void begin() {
   badgeSprite(TBlue);  // the common one, ready before the first screen
 }
 
-void brightness(uint8_t level) { M5.Display.setBrightness(level); }
+void brightness(uint8_t level) {
+  curBright = level;
+  M5.Display.setBrightness(level);
+}
 
 bool animated() { return true; }
 
@@ -847,21 +928,54 @@ int showPanel(const char* title, uint16_t titleColor, const std::vector<Row>& ro
   return pages;
 }
 
+// The agent's badge, small: the glow and all, scaled down, its initials in it.
+static void drawSmallBadge(Tone tone, const String& name, int cy) {
+  M5Canvas* s = badgeSprite(tone);
+  const float z = 0.42f;
+  if (s) s->pushRotateZoomWithAA(&canvas, CX, cy, 0, z, z, kBlack);
+  else canvas.fillSmoothCircle(CX, cy, kBadgeR * z, rgb(kTones[tone].a[0], kTones[tone].a[1], kTones[tone].a[2]));
+  font(vlw::Small);
+  text(initials(name), CX, cy + 1, kWhite);
+}
+
+// Idle: a watch first — the date, the time large, the agent's badge small
+// with its name, then the hint (or what's wrong), the battery as an arc at
+// the bottom of the ring and in words. Before the clock is known, the badge
+// takes the middle as it used to.
 void showHome(const Home& home) {
   beginFrame();
   Tone tone = home.ready ? TBlue : barState == "offline" ? TGrey : TAmber;
   String name = barAgent.length() ? barAgent : String("Captain Claw");
-  drawBadge(tone, name, Glyph::Initials);
-  drawChrome(false);
-  font(vlw::Title);
-  text(fit(name, lineRoom(kTitleY - 20, kTitleY + 20)), CX, kTitleY, kText);
-  if (tapMode == TapButton::Talk) {
-    drawTapButton(kTapY, kTapR);  // in place of "hold the yellow button…"
+  char clock[8];
+  const bool face = clockText(clock, sizeof(clock));
+  drawChrome(false, !face);
+  if (face) {
+    font(vlw::Small);
+    text(dateText(), CX, 104, kDim);
+    font(vlw::Digits);
+    text(clock, CX, 180, kText);
+    drawSmallBadge(tone, name, 282);
+    font(vlw::Title);
+    text(fit(name, lineRoom(324, 358)), CX, 342, kText);
   } else {
+    drawBadge(tone, name, Glyph::Initials);
+    font(vlw::Title);
+    text(fit(name, lineRoom(kTitleY - 20, kTitleY + 20)), CX, kTitleY, kText);
+  }
+  if (tapMode == TapButton::Talk) {
+    drawTapButton(face ? 398 : kTapY, face ? kTapLowR : kTapR);  // in place of "hold the yellow button…"
+  } else if (home.hint.length()) {
     font(vlw::Small);
     int first = 0;
-    auto lines = wrapCentred(home.hint, kNoteY - 16, kNoteY + 46, 28, 2, &first);
+    const int top = face ? 364 : kNoteY - 16;
+    auto lines = wrapCentred(home.hint, top, top + 62, 28, 2, &first);
     drawLines(lines, first, 28, home.ready ? kDim : home.color);
+  }
+  bool chg = false;
+  const int pct = batteryPct(&chg);
+  if (face && pct >= 0) {  // the level as an arc at the bottom of the ring
+    ringArc(150, 60, mix(kBlack, kText, 0.12f), 6, R - 2);
+    ringArc(150, max(2, 60 * pct / 100), batteryColor(pct), 6, R - 2);
   }
   drawBatteryAt(kBatteryY, true);
   push();
@@ -935,8 +1049,9 @@ void showWorking(const String& heard, const std::vector<String>& activity, const
   }
   if (status.length()) {
     font(vlw::Small);
-    text(fit(status, lineRoom(392, 418)), CX, 404, kDim);
+    text(fit(status, lineRoom(374, 398)), CX, 386, kDim);
   }
+  if (tapMode == TapButton::Stop) drawTapButton(424, 18);  // stop the agent (above the step ticks)
   push();
 }
 
@@ -966,6 +1081,91 @@ static void layoutReply() {
     }
   }
   if (replyPage >= (int)replyPages.size()) replyPage = 0;  // re-wrapped into fewer pages
+  // Where each line sits in the text (lines are its pieces, in order), so a
+  // sentence can be lit and the voice's place tells which page it's on.
+  lineSpans.clear();
+  pageEnds.clear();
+  const char* all = replyText.c_str();
+  int cursor = 0;
+  for (const auto& page : replyPages) {
+    lineSpans.emplace_back();
+    for (const String& l : page) {
+      const char* p = l.length() ? strstr(all + cursor, l.c_str()) : nullptr;
+      const int from = p ? (int)(p - all) : cursor;
+      cursor = from + (int)l.length();
+      lineSpans.back().push_back({from, cursor});
+    }
+    pageEnds.push_back(cursor);
+  }
+}
+
+// The sentence round character *at*: [from, to). A sentence ends at a full
+// stop, ! or ? (or …) followed by a space or the end, or at a line break.
+static void sentenceAt(int at, int* from, int* to) {
+  const char* s = replyText.c_str();
+  const int n = replyText.length();
+  int start = 0;
+  for (int i = 0; i < n; ++i) {
+    const unsigned char c = s[i];
+    bool end = c == '\n';
+    if (!end && (c == '.' || c == '!' || c == '?')) {
+      const char nx = i + 1 < n ? s[i + 1] : ' ';
+      end = nx == ' ' || nx == '\n' || nx == '"' || nx == ')';
+    } else if (!end && c == 0xE2 && i + 2 < n && (unsigned char)s[i + 1] == 0x80 && (unsigned char)s[i + 2] == 0xA6) {
+      i += 2;  // …
+      end = i + 1 >= n || s[i + 1] == ' ' || s[i + 1] == '\n';
+    }
+    if (!end) continue;
+    int stop = i + 1;
+    if (at < stop) {
+      *from = start;
+      *to = stop;
+      return;
+    }
+    while (stop < n && (s[stop] == ' ' || s[stop] == '\n')) ++stop;
+    start = stop;
+    i = stop - 1;
+  }
+  *from = start;
+  *to = n;
+}
+
+bool setSpoken(int at) {
+  if (at < 0) {
+    const bool was = litTo >= 0;
+    spokenAt = litFrom = litTo = -1;
+    return was;
+  }
+  spokenAt = min(at, (int)replyText.length());
+  int from = 0, to = 0;
+  sentenceAt(spokenAt, &from, &to);
+  bool changed = from != litFrom || to != litTo;
+  litFrom = from;
+  litTo = to;
+  if (autoFollow && replyPage + 1 < (int)replyPages.size() && replyPage < (int)pageEnds.size() &&
+      spokenAt >= pageEnds[replyPage]) {
+    ++replyPage;  // the voice has gone on to the next page
+    nextFx = Fx::SlideOn;
+    changed = true;
+  }
+  return changed;
+}
+
+void setReplayable(bool on) { replayable = on; }
+
+// A small circle arrow in a ring, like the tap button's.
+static void drawReplay(int cx, int cy, int r) {
+  canvas.fillSmoothCircle(cx, cy, r, mix(kBlack, kText, 0.85f));
+  canvas.fillSmoothCircle(cx, cy, r - 3, kBlack);
+  canvas.fillArc(cx, cy, r - 11, r - 8, 270, 360, kText);
+  canvas.fillArc(cx, cy, r - 11, r - 8, 0, 200, kText);
+  canvas.fillTriangle(cx - 5, cy - (r - 10), cx + 2, cy - (r - 10) - 5, cx + 2, cy - (r - 10) + 5, kText);
+  rpX = cx, rpY = cy, rpR = r;
+}
+
+bool replayHit(int x, int y) {
+  const int dx = x - rpX, dy = y - rpY, reach = rpR + 24;
+  return rpR && dx * dx + dy * dy <= reach * reach;
 }
 
 void setQuestion(const String&) {}
@@ -977,7 +1177,14 @@ bool restoreAnswer() { return false; }
 void setReply(const String& t) {
   replyText = t;
   replyPage = 0;
+  spokenAt = litFrom = litTo = -1;
+  autoFollow = true;
   layoutReply();
+}
+
+void growReply(const String& t) {
+  replyText = t;
+  layoutReply();  // the page stays (within the pages there are now)
 }
 
 void setTextSize(uint8_t size) {
@@ -995,14 +1202,25 @@ void showReply() {
     const auto& lines = replyPages[replyPage];
     int line = ts().line;
     int top = replyCentred ? kTop + ((replyBottom() - kTop) - (int)lines.size() * line) / 2 : kTop;
-    drawLines(lines, top, line, kText);
+    // While it's spoken, the sentence the voice is in is lit, the rest dimmed.
+    const auto* spans = replyPage < (int)lineSpans.size() ? &lineSpans[replyPage] : nullptr;
+    for (int i = 0; i < (int)lines.size(); ++i) {
+      uint16_t col = kText;
+      if (litTo >= 0 && spans && i < (int)spans->size()) {
+        const auto& sp = (*spans)[i];
+        col = sp.second > litFrom && sp.first < litTo ? kText : kDim;
+      }
+      text(lines[i], CX, top + i * line + line / 2, col);
+    }
     drawPageDots(replyPages.size(), replyPage, replyBottom() + 22);
   }
   if (answerButton()) drawTapButton(kTapLowY, kTapLowR);
+  if (replayable) drawReplay(answerButton() ? CX - 74 : CX, kTapLowY, 20);
   push();
 }
 
 bool nextPage() {
+  autoFollow = false;  // paged by hand: the voice no longer turns the pages
   if (replyPages.empty()) return false;
   replyPage = (replyPage + 1) % replyPages.size();
   showReply();
@@ -1010,6 +1228,7 @@ bool nextPage() {
 }
 
 bool prevPage() {
+  autoFollow = false;
   if (replyPage == 0) return false;
   --replyPage;
   showReply();
@@ -1017,6 +1236,7 @@ bool prevPage() {
 }
 
 bool onLastPage() { return replyPage + 1 >= (int)replyPages.size(); }
+bool onFirstPage() { return replyPage == 0; }
 
 // Characters are drawn for the stick's 240×135 screen (under its 16 px bar),
 // then scaled up smoothly into the middle of the round one.
@@ -1035,15 +1255,34 @@ void showFace(uint8_t kind, face::Pose pose, int level) {
   else if (pose == face::Pose::Thinking) ringWorking(0);
 
   drawChrome();
-  font(vlw::Title);
-  String name = barAgent.length() ? barAgent : String("Captain Claw");
-  text(fit(name, lineRoom(342, 378)), CX, 360, kText);
+  // The sentence being spoken, as a subtitle in place of the name: the two
+  // lines round where the voice is in it; else the name.
+  const bool subtitle = pose == face::Pose::Speaking && litTo > litFrom;
+  if (subtitle) {
+    font(vlw::BodyS);
+    const int room = lineRoom(330, 390);
+    auto ls = wrap(replyText.substring(litFrom, litTo), [&](int) { return room; });
+    const int want = max(0, spokenAt - litFrom);
+    int at = 0, seen = 0;
+    for (int i = 0; i < (int)ls.size(); ++i) {
+      at = i;
+      seen += ls[i].length() + 1;
+      if (want < seen) break;
+    }
+    const int first = min(at, max(0, (int)ls.size() - 2));
+    const int n = min(2, (int)ls.size() - first);
+    for (int i = 0; i < n; ++i) text(ls[first + i], CX, 344 + i * 30, kText);
+  } else {
+    font(vlw::Title);
+    String name = barAgent.length() ? barAgent : String("Captain Claw");
+    text(fit(name, lineRoom(342, 378)), CX, 360, kText);
+  }
   // The tap button takes the state line's place: to talk, or to stop.
   const bool listening = pose == face::Pose::Listening;
   if ((answerButton() && !listening && pose != face::Pose::Thinking) ||
-      (tapMode == TapButton::Stop && listening)) {
+      (tapMode == TapButton::Stop && (listening || pose == face::Pose::Thinking))) {
     drawTapButton(kTapLowY, kTapLowR);
-  } else {
+  } else if (!subtitle) {
     font(vlw::Small);
     text(fit(barState, lineRoom(382, 410)), CX, 396, pose == face::Pose::Idle ? kDim : barColor);
   }
@@ -1105,6 +1344,61 @@ void showStoredImage() {
   push();
 }
 
+static constexpr int kFrost = 4;  // the blur's radius: a light frost, the picture still shows through
+
+static void* bigAlloc(size_t n) {
+#if defined(ESP_PLATFORM)
+  return ps_malloc(n);
+#else
+  return malloc(n);
+#endif
+}
+
+// A box blur along one line of *n* values *stride* apart, edges held.
+static void blurLine(const uint8_t* in, uint8_t* out, int n, int stride, int r) {
+  int sum = 0;
+  for (int j = -r; j <= r; ++j) sum += in[constrain(j, 0, n - 1) * stride];
+  for (int i = 0; i < n; ++i) {
+    out[i * stride] = sum / (2 * r + 1);
+    sum += in[min(i + r + 1, n - 1) * stride] - in[max(i - r, 0) * stride];
+  }
+}
+
+// *dst* = *src* (W×H RGB565, byte-swapped) blurred a little (two box passes
+// each way ≈ a soft Gaussian) and darkened by kBackdropDim/256. False when
+// the planes can't be had.
+static bool frost(const uint16_t* src, uint16_t* dst) {
+  const int N = W * H;
+  auto* plane = (uint8_t*)bigAlloc((size_t)N * 3);
+  auto* tmp = (uint8_t*)bigAlloc((size_t)N);
+  if (!plane || !tmp) {
+    free(plane);
+    free(tmp);
+    return false;
+  }
+  for (int i = 0; i < N; ++i) {
+    const uint16_t c = __builtin_bswap16(src[i]);
+    plane[i] = (c >> 11) << 3;
+    plane[N + i] = ((c >> 5) & 63) << 2;
+    plane[2 * N + i] = (c & 31) << 3;
+  }
+  for (int ch = 0; ch < 3; ++ch) {
+    uint8_t* p = plane + ch * N;
+    for (int pass = 0; pass < 2; ++pass) {
+      for (int y = 0; y < H; ++y) blurLine(p + y * W, tmp + y * W, W, 1, kFrost);
+      for (int x = 0; x < W; ++x) blurLine(tmp + x, p + x, H, W, kFrost);
+    }
+  }
+  for (int i = 0; i < N; ++i) {
+    const int r = (plane[i] * kBackdropDim) >> 11, g = (plane[N + i] * kBackdropDim) >> 10,
+              b = (plane[2 * N + i] * kBackdropDim) >> 11;
+    dst[i] = __builtin_bswap16((uint16_t)(r << 11 | g << 5 | b));
+  }
+  free(plane);
+  free(tmp);
+  return true;
+}
+
 void setBackground(const uint8_t* jpg, size_t len) {
   hasBackdrop = false;
   if (!jpg || !len) {
@@ -1120,14 +1414,17 @@ void setBackground(const uint8_t* jpg, size_t len) {
   }
   backdrop.fillScreen(kBlack);
   if (!backdrop.drawJpg(jpg, len, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center)) return;
-  // Darkened once, pixel by pixel (the sprites keep RGB565 byte-swapped).
+  // The copy the screens draw on: frosted (a light blur) and darkened, once.
   const auto* src = (const uint16_t*)backdrop.getBuffer();
   auto* dst = (uint16_t*)backdropDim.getBuffer();
-  for (int i = 0; i < W * H; ++i) {
-    const uint16_t c = __builtin_bswap16(src[i]);
-    const uint16_t r = ((c >> 11) * kBackdropDim) >> 8, g = (((c >> 5) & 63) * kBackdropDim) >> 8,
-                   b = ((c & 31) * kBackdropDim) >> 8;
-    dst[i] = __builtin_bswap16((uint16_t)(r << 11 | g << 5 | b));
+  if (!frost(src, dst)) {
+    // No room for the blur's planes: darkened only (the sprites keep RGB565 byte-swapped).
+    for (int i = 0; i < W * H; ++i) {
+      const uint16_t c = __builtin_bswap16(src[i]);
+      const uint16_t r = ((c >> 11) * kBackdropDim) >> 8, g = (((c >> 5) & 63) * kBackdropDim) >> 8,
+                     b = ((c & 31) * kBackdropDim) >> 8;
+      dst[i] = __builtin_bswap16((uint16_t)(r << 11 | g << 5 | b));
+    }
   }
   hasBackdrop = true;
 }

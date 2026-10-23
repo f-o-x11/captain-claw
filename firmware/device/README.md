@@ -154,6 +154,45 @@ step or a page, a double tick at the end, a longer one for a choice, three
 for something that went wrong. The home screen's "Hold the yellow button to
 talk" goes away after the first five recordings.
 
+Screens move (0.14.1): a page, a picker row or a status page slides in from
+the side it came from (four eased frames, ~200 ms); going somewhere else —
+home, the menu, a notice, the picture alone, the status — fades through black
+(the panel's brightness, so it costs no drawing). An answer arriving still
+cuts in, so nothing delays it. While the agent works, the ring's track
+breathes under the moving head.
+
+The text follows the voice (0.14.2). While an answer is spoken, the sentence
+being said is lit and the rest dimmed, the page turns by itself when the
+voice reaches the next one (until you page by hand), and in character mode
+the sentence shows as a subtitle under the face. No word timings are
+needed: the watch knows how far into the speech the speaker is (the mouth
+uses the same estimate); once the speech has all arrived, that fraction of
+the text is the place, and before that the pace learned from the last answer
+carries it (the deck says how many characters it speaks: `"spoken"` in the
+reply). After the speech, a small replay button sits under the text — tap it
+to hear the answer again.
+
+The answer comes as it's written (0.15.0). Flight Deck follows the model's
+text as it streams and, each time a sentence completes, shows the answer so
+far (`reply_part`) and reads that sentence aloud, so the first words are heard
+while the rest is still being written; the complete answer (`reply`) replaces
+the text in place and only what wasn't read yet is spoken. The sounds of one
+answer follow each other without a cue (`"cont"` on `audio_start`), and the
+closing chime waits for `speech_end`. Text the model writes before a tool call
+isn't the answer: `speech_reset` takes the watch back to the working screen.
+While the agent works, the button under the timer is a **stop**: the agent
+stops after its current step.
+
+A watch first (0.15.1): idle, the screen is a clock face — the date, the time
+large, the agent's badge small with its name, the hint while it's new, the
+battery as an arc at the bottom of the ring. **Raise to wake**: a wrist raise
+lights a dark or dimmed screen, lowering the wrist on an idle screen puts it
+out (the watch still sleeps on its *Power off* timer — set it to 3 min to stay
+wakeable longer; a raise can't wake it from sleep, only the buttons can). The
+background behind text screens is **frosted** — a light blur, then darkened —
+so a busy photo doesn't fight the words; the picture-only screen keeps it
+sharp.
+
 *Tap to talk* (Menu, or the settings page; off by default) puts a record
 button on the screen: under the name at home, under an answer or the
 character. Tap it and talk; the button turns into a stop square, and a second

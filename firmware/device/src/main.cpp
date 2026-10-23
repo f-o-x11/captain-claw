@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.14.0"
+#define FW_VERSION "0.15.1"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -167,6 +167,14 @@ static uint8_t buzzMore = 0;
 static uint16_t buzzOnMs = 0, buzzGapMs = 0;
 static uint32_t buzzAgainMs = 0;
 static uint32_t pendingTapMs = 0;    // a single tap on a picture acts once it can't become a double tap
+// Following the voice through the answer's text: how much of it the deck
+// speaks, how long the text is, and the speaking pace learned from the last
+// answer whose speech had all arrived (characters a second).
+static int spokenChars = 0, replyChars = 0;
+static float charsPerSec = 14.0f;
+static bool paceLearned = false;
+static bool streamedReply = false;  // this answer is coming in parts (reply_part)
+static bool speechMore = false;     // the deck has more of the answer's voice to send: no closing chime yet
 static constexpr uint16_t kHintTurns = 5;  // the home screen's "hold … to talk" goes after this many
 static uint32_t turnBusyMs = 0;      // last moment a turn was under way (Wi-Fi stays fully awake)
 static bool wifiAwake = false;
@@ -392,6 +400,7 @@ static String notesCount() {
 // its sound plays, else Tap to talk's record / stop button.
 static ui::TapButton tapButtonKind() {
   if (!board::kHasTouch) return ui::TapButton::Off;
+  if (mode == Mode::Waiting) return ui::TapButton::Stop;  // stop the agent
   if ((mode == Mode::Reply || mode == Mode::Idle) && audio::playing() && !tapRec) {
     return audio::paused() ? ui::TapButton::Play : ui::TapButton::Pause;
   }
@@ -531,7 +540,9 @@ static String asleepLabel() {
 }
 
 static String powerOffLabel() {
-  return board::kEpaper ? String(settings.powerOffMin) + " min" : String(settings.powerOffS) + " s";
+  if (board::kEpaper) return String(settings.powerOffMin) + " min";
+  return settings.powerOffS >= 60 && settings.powerOffS % 60 == 0 ? String(settings.powerOffS / 60) + " min"
+                                                                  : String(settings.powerOffS) + " s";
 }
 
 static constexpr uint8_t kVolumeSteps[] = {64, 128, 191, 255};  // 25 / 50 / 75 / 100 %
@@ -758,6 +769,7 @@ static String phoneUrl;  // "settings on phone" address while it's open
 static void redraw() {
   setBarState();
   syncTapButton();
+  ui::setReplayable((mode == Mode::Reply || mode == Mode::Idle) && canReplay() && !audio::playing());
   switch (mode) {
     case Mode::Listening:
       if (settings.iconMode) ui::showFace(settings.character, face::Pose::Listening, 0);
@@ -831,6 +843,7 @@ static void redraw() {
 }
 
 static void notice(const char* title, const String& body, uint16_t color) {
+  ui::fade();
   mode = Mode::Notice;
   setBarState();
   ui::showMessage(title, body, color);
@@ -843,6 +856,7 @@ static void backToMain() {
 
 // From the picture alone back to the home screen (even with an answer kept).
 static void leaveBackdrop() {
+  ui::fade();
   mode = ui::hasReply() ? Mode::Home : Mode::Idle;
   redraw();
 }
@@ -852,6 +866,7 @@ static void openMenu() {
   menuSel = board::kEpaper ? MPhone : canReplay() ? MReplay : MStatus;
   menuOpenedMs = millis();
   mode = Mode::Menu;
+  ui::fade();
   redraw();
   sayRow();
 }
@@ -889,12 +904,14 @@ static void chooseMenuRow() {
   menuOpenedMs = millis();
   switch (menuSel) {
     case MReplay:
+      ui::fade();
       backToMain();
       replayAnswer();
       return;
     case MMore:
     case MBack:
       menuMore = menuSel == MMore;
+      ui::slide(menuMore);  // into Settings, or back out
       menuSel = menuMore ? 0 : MMore;
       while (!rowShown(menuSel)) ++menuSel;  // the level's first row
       redraw();
@@ -904,6 +921,7 @@ static void chooseMenuRow() {
       statusPage = 0;
       mode = Mode::Status;
       ui::drawNow();  // asked to see it
+      ui::fade();
       redraw();
       return;
     case MAgent:
@@ -967,6 +985,7 @@ static void chooseMenuRow() {
     case MCharacter:
       charSel = settings.character;
       mode = Mode::CharPick;
+      ui::slide(true);
       redraw();
       sayRow();
       return;
@@ -981,7 +1000,7 @@ static void chooseMenuRow() {
     case MScreenOff: settings.screenOffS = settings.screenOffS == 5 ? 10 : settings.screenOffS == 10 ? 15 : 5; break;
     case MPowerOff:
       if (board::kEpaper) settings.powerOffMin = settings.powerOffMin == 1 ? 3 : settings.powerOffMin == 3 ? 10 : 1;
-      else settings.powerOffS = settings.powerOffS == 15 ? 30 : settings.powerOffS == 30 ? 60 : 15;
+      else settings.powerOffS = settings.powerOffS == 15 ? 30 : settings.powerOffS == 30 ? 60 : settings.powerOffS == 60 ? 180 : 15;
       break;
     case MUpdate:
       updateSoftware();
@@ -1046,6 +1065,7 @@ static void startTalking() {
   d["type"] = "rec_start";
   d["rate"] = audio::kMicRate;
   sendJson(d);
+  speechMore = false;
   recStartMs = millis();
   mode = Mode::Listening;
   buzz(35);
@@ -1084,8 +1104,8 @@ static void stopTalking(bool send) {
 
 // ── speech cue: beep + flash, then the speech ────────────────────────
 
-static void startSpeech(uint32_t rate) {
-  bool quiet = quietSpeech;  // a replay the user asked for needs no cue
+static void startSpeech(uint32_t rate, bool cont = false) {
+  bool quiet = quietSpeech || cont;  // a replay the user asked for, or the answer's next sound: no cue
   bool cue = !quiet && (settings.cueBeep || settings.cueFlash);
   bool buzzCue = !quiet && board::kHasMotor && settings.cueBuzz;
   bool goesOn = audio::playBegin(rate, (cue || buzzCue) ? settings.cueLeadS * 1000UL : 0);
@@ -1327,6 +1347,7 @@ static void askNotes() {
   askedMs = millis();
   touch();
   buzz(60);
+  ui::fade();
   mode = Mode::Ask;
   ui::drawNow();  // the e-paper too: a question waits for nobody
   redraw();
@@ -1596,12 +1617,57 @@ static void onText(const char* payload, size_t len) {
     Serial.printf("[claw] reply; loop stack never below %u bytes free\n", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
     lastReplyMs = millis();
     String said = doc["text"] | "";
-    ui::setReply(said);
+    spokenChars = doc["spoken"] | 0;
+    replyChars = said.length();
+    paceLearned = false;
+    if (streamedReply) {
+      ui::growReply(said);  // the rest of it, in place
+      streamedReply = false;
+    } else {
+      ui::setReply(said);
+      audio::newClip();  // this answer's sound replaces the last one's
+    }
     face::setText(said);
-    audio::newClip();  // this answer's sound replaces the last one's
     deckReplay = quietSpeech = false;
     mode = Mode::Reply;
     if (!flashing) redraw();
+  } else if (type == "reply_part") {
+    // The answer as the model writes it, a sentence at a time: shown now.
+    touch();
+    String said = doc["text"] | "";
+    replyChars = said.length();
+    if (!streamedReply) {
+      streamedReply = true;
+      lastReplyMs = millis();
+      spokenChars = 0;
+      paceLearned = false;
+      ui::setReply(said);
+      audio::newClip();
+      deckReplay = quietSpeech = false;
+      mode = Mode::Reply;
+    } else {
+      ui::growReply(said);
+    }
+    face::setText(said);
+    if (!flashing) redraw();
+  } else if (type == "speech_reset") {
+    // What the model wrote before a tool call wasn't the answer: back to the
+    // working screen; the answer's sound starts afresh.
+    audio::newClip();
+    streamedReply = false;
+    if (mode == Mode::Reply) {
+      ui::setReply("");
+      mode = Mode::Waiting;
+      workDirty = true;
+      redraw();
+    }
+  } else if (type == "speech_end") {
+    speechMore = false;
+    audio::markSpeechEnd();
+    if (!audio::playing() && settings.cueBeep && !quietSpeech) {  // it finished before this came
+      closeAtMs = millis() + 350;
+      if (!closeAtMs) closeAtMs = 1;
+    }
   } else if (type == "audio_start" && (doc["aside"] | false)) {
     asideOpen = true;  // a menu row read aloud: apart from the answer
     audio::asideBegin(doc["rate"] | 24000);
@@ -1614,7 +1680,8 @@ static void onText(const char* payload, size_t len) {
       deckReplay = false;
       audio::newClip();
     }
-    startSpeech(doc["rate"] | 24000);
+    speechMore = true;  // until speech_end
+    startSpeech(doc["rate"] | 24000, doc["cont"] | false);
     setBarState();
   } else if (type == "audio_end") {
     audio::playEnd();
@@ -2075,6 +2142,14 @@ static void noteSideClick(bool wokeOnly) {
 // One side click: next row / page, or back to the main screen.
 static void sideClick() {
   ui::drawNow();  // a page, the status: asked to see it (the e-paper draws it now)
+  if (mode == Mode::Menu || mode == Mode::CharPick || (mode == Mode::Agents && !agentsLoading) ||
+      (mode == Mode::Status && statusPage + 1 < statusPages) ||
+      (mode == Mode::Reply && !(audio::playing() && settings.iconMode))) {
+    ui::slide(true);  // a step on
+  } else if (mode == Mode::Ask || mode == Mode::Status || mode == Mode::Image || mode == Mode::Notice ||
+             mode == Mode::Link || mode == Mode::Idle || mode == Mode::Home || mode == Mode::Backdrop) {
+    ui::fade();  // another place
+  }
   if (mode == Mode::Ask) {
     answerAsk(false);
   } else if (mode == Mode::Menu) {
@@ -2123,6 +2198,13 @@ static void sideClick() {
 // out to the main screen; from the home screen, to the answer.
 static void backClick() {
   ui::drawNow();  // back, the answer, the home screen: asked to see it
+  if (mode == Mode::Menu || mode == Mode::CharPick || (mode == Mode::Agents && !agentsLoading) ||
+      (mode == Mode::Status && statusPage > 0)) {
+    ui::slide(false);  // a step back
+  } else if (mode == Mode::Ask || mode == Mode::Status || mode == Mode::Reply || mode == Mode::Image ||
+             mode == Mode::Notice || mode == Mode::Link || (mode == Mode::Home && ui::hasReply())) {
+    ui::fade();
+  }
   if (mode == Mode::Ask) {
     answerAsk(false);
   } else if (mode == Mode::Menu) {
@@ -2476,7 +2558,10 @@ static void stopOnSilence() {
 // picture, if it came with one, then the text's pages. No wrapping round.
 static void swipeAnswer(bool forward) {
   if (mode == Mode::Image) {
-    if (forward) backToMain();  // on to the text
+    if (forward) {  // on to the text
+      ui::slide(true);
+      backToMain();
+    }
     return;
   }
   if (settings.iconMode && audio::playing()) {  // the character speaking: the text, as a side click does
@@ -2484,14 +2569,19 @@ static void swipeAnswer(bool forward) {
     return;
   }
   if (forward) {
-    if (ui::onLastPage()) hapticBump();  // nothing after this
-    else {
+    if (ui::onLastPage()) {
+      hapticBump();  // nothing after this
+    } else {
+      ui::slide(true);
       ui::nextPage();
       hapticTick();
     }
-  } else if (ui::prevPage()) {
+  } else if (!ui::onFirstPage()) {
+    ui::slide(false);
+    ui::prevPage();
     hapticTick();
   } else if (ui::hasImage()) {  // before the first page: the picture
+    ui::slide(false);
     mode = Mode::Image;
     redraw();
     hapticTick();
@@ -2509,13 +2599,24 @@ static void goHome() {
     leaveBackdrop();
   } else if (mode == Mode::Home || (mode == Mode::Idle && !ui::hasReply())) {
     if (!ui::hasBackground()) return;  // home already, and nothing behind it to show
+    ui::fade();
     mode = Mode::Backdrop;
     redraw();
   } else {
+    ui::fade();
     mode = Mode::Home;
     redraw();
   }
   hapticTick();
+}
+
+// The stop button while the agent works: it stops after its current step
+// (its "ready" ends the turn).
+static void stopAgent() {
+  sendType("stop_agent");
+  hapticConfirm();
+  statusLine = "Stopping…";
+  workDirty = true;
 }
 
 // The talk button in a picker: this row, agent or character.
@@ -2524,6 +2625,7 @@ static void pickCharacter() {
   settings.save();
   mode = Mode::Menu;
   menuOpenedMs = millis();
+  ui::slide(false);
   redraw();
 }
 static void chooseHere() {
@@ -2591,6 +2693,11 @@ static void pollTouch(bool dark) {
     answerAsk(hit == 1);
     return;
   }
+  if ((mode == Mode::Reply || mode == Mode::Idle) && ui::replayHit(x, y)) {
+    hapticConfirm();
+    replayAnswer();
+    return;
+  }
   const ui::TapButton button = tapButtonKind();
   if (button == ui::TapButton::Off || !ui::tapButtonHit(x, y)) {
     static uint32_t lastTapMs = 0;  // taps on the button act at once, so only these count
@@ -2603,6 +2710,10 @@ static void pollTouch(bool dark) {
       if (!lastTapMs) lastTapMs = 1;
       if (mode == Mode::Image) pendingTapMs = lastTapMs;  // a single tap, unless a second follows
     }
+    return;
+  }
+  if (button == ui::TapButton::Stop && mode == Mode::Waiting) {
+    stopAgent();
     return;
   }
   if (button == ui::TapButton::Pause || button == ui::TapButton::Play) {
@@ -2625,6 +2736,24 @@ static void pollTouch(bool dark) {
     return;
   }
   if (wasSpeaking) sendType("stop");
+}
+
+// Where the voice is in the answer's text, as a character index (-1: not
+// speaking). Once the speech has all arrived its length is known and the
+// place is the played fraction of it; before that, the pace of the last
+// answer (learned here) carries the estimate.
+static int spokenCharAt() {
+  if (!audio::playing()) return -1;
+  const size_t total = audio::speechTotal(), at = audio::speechAt();
+  const int chars = spokenChars > 0 ? min(spokenChars, replyChars) : replyChars;
+  if (audio::speechEnded() && total) {
+    if (!paceLearned) {
+      paceLearned = true;
+      charsPerSec = constrain(chars * (float)audio::playRateHz() / total, 6.0f, 30.0f);
+    }
+    return (int)((uint64_t)chars * at / total);
+  }
+  return (int)(at * charsPerSec / audio::playRateHz());
 }
 
 // A turn the link dropped in the middle of (see turnDropMs): over when the
@@ -2660,6 +2789,15 @@ void loop() {
   }
   if (wsUp != wasUp) linkChangeMs = millis();
   holdTurn();
+  // Raise to wake: a wrist raise lights a dark or dimmed screen; lowering
+  // the wrist on an idle screen puts it out (the watch sleeps on its timer
+  // as before — set Power off to 3 min to keep it wakeable longer).
+  if (telemetry::raised() && (screenOff || dimmed)) touch();
+  if (telemetry::lowered() && !screenOff && !board::kEpaper &&
+      (mode == Mode::Idle || mode == Mode::Home || mode == Mode::Backdrop) && !audio::playing() && !flashing) {
+    ui::brightness(0);
+    screenOff = dimmed = true;
+  }
   keepWifi();
   PERF_T(pfTelMax, telemetry::poll());
   pumpPreroll();
@@ -2747,6 +2885,7 @@ void loop() {
       menuOpenedMs = millis();
       redraw();
     } else if (inMenu || (board::kEpaper && mode == Mode::Link)) {
+      ui::fade();
       backToMain();
     } else if (mode != Mode::Listening) {
       if (board::kEpaper) openOptions();  // the paper's whole menu
@@ -2850,6 +2989,7 @@ void loop() {
     if (mode == Mode::Image) {  // a single tap on a picture: all of it, or the middle again
       ui::toggleImageFit();
       hapticTick();
+      ui::fade();
       redraw();
     }
   }
@@ -2871,7 +3011,7 @@ void loop() {
   audio::playPoll();
   // The answer's sound played to its end: the cue again, the other way round
   // — a moment later, so an agent-made sound that follows comes first.
-  if (audio::takeFinished() && settings.cueBeep && !quietSpeech) {
+  if (audio::takeFinished() && settings.cueBeep && !quietSpeech && !speechMore) {
     closeAtMs = millis() + 350;
     if (!closeAtMs) closeAtMs = 1;
   }
@@ -2879,7 +3019,10 @@ void loop() {
     closeAtMs = 0;
     if (!audio::playing() && !audio::micActive() && !prerollOn) audio::cueEnd();
   }
-  if (wasPlaying != audio::playing() && (mode == Mode::Reply || mode == Mode::Idle) && !flashing) redraw();
+  if (wasPlaying != audio::playing() && (mode == Mode::Reply || mode == Mode::Idle) && !flashing) {
+    if (!audio::playing()) ui::setSpoken(-1);  // done: the whole text lit again
+    redraw();
+  }
 
   if (!flashing && !screenOff) {
     uint32_t since = millis() - lastDrawMs;
@@ -2899,10 +3042,12 @@ void loop() {
                since > frameGap(min<uint32_t>(60, face::frameMs(settings.character)))) {
       lastDrawMs = millis();
       setBarState();
+      ui::setSpoken(spokenCharAt());  // the subtitle
       ui::showFace(settings.character, face::Pose::Speaking, audio::outputLevel());
     } else if (!settings.iconMode && ui::animated() && mode == Mode::Reply && audio::sounding() && since > 80) {
-      lastDrawMs = millis();  // the speaking line follows the voice (its strip only)
-      ui::showSpeaking(audio::sounding() ? audio::outputLevel() : 0);
+      lastDrawMs = millis();
+      if (ui::setSpoken(spokenCharAt())) redraw();  // the sentence or the page changed: the whole screen
+      else ui::showSpeaking(audio::outputLevel());  // else the speaking line follows the voice (its strip only)
     } else if (settings.iconMode && mode == Mode::Idle && !ui::hasReply() && since > frameGap(face::frameMs(settings.character))) {
       lastDrawMs = millis();  // blinking, rain, bouncing…
       redraw();

@@ -157,6 +157,12 @@ int main(int argc, char** argv) {
                   {"Reading the calendar", "google_calendar · list events", "Looking for a free slot on Friday"},
                   "Checking Friday afternoon", 12400, 3);
   save("04_working");
+  ui::setTapButton(ui::TapButton::Stop);  // the stop button while the agent works
+  ui::showWorking("What's on my calendar tomorrow, and can you move the dentist to Friday afternoon?",
+                  {"Reading the calendar", "google_calendar · list events", "Looking for a free slot on Friday"},
+                  "Checking Friday afternoon", 12400, 3);
+  save("04b_working_stop");
+  ui::setTapButton(ui::TapButton::Off);
 
   bar("speaking", kCyan);
   gPlaying = true;
@@ -177,6 +183,19 @@ int main(int argc, char** argv) {
   save("06_reply_long_p1");
   ui::nextPage();
   save("07_reply_long_p2");
+  ui::prevPage();
+  ui::setSpoken(120);  // the voice in the second sentence: lit, the rest dimmed
+  bar("speaking", kCyan);
+  ui::showReply();
+  save("07b_reply_lit");
+  ui::showFace(1, face::Pose::Speaking, 70);  // the character: that sentence as a subtitle
+  save("07c_icon_subtitle");
+  ui::setSpoken(-1);
+  bar("ready", kGreen);
+  ui::setReplayable(true);  // after the speech: hear it again
+  ui::showReply();
+  save("07d_reply_replay");
+  ui::setReplayable(false);
 
   auto items = menu();
   bar("menu", kText);
