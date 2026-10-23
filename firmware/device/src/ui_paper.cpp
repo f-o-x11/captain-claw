@@ -855,7 +855,7 @@ void showSetup(const char* reason, const char* apName, const char* ip) {
                      {"2. Then open:", vlw::Small, kInk},
                      {String("http://") + addr, vlw::BodyS, kBlue}});
     font(vlw::Small);
-    text("Saving restarts it.", W / 2, H - 38, kInk, top_center);
+    text("Saving restarts it. Hold B to leave.", W / 2, H - 38, kInk, top_center);
   });
   flush();  // the portal loop doesn't tick
 }
