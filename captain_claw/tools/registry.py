@@ -25,6 +25,27 @@ _SHELL_SEPARATOR_TOKENS = {";", "&&", "||", "|", "&"}
 _SHELL_WRAPPER_TOKENS = {"sudo", "command", "builtin", "nohup", "time"}
 
 
+_LOGGED_ARG_CHARS = 300
+
+
+def _loggable_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    """The call's own arguments, each cut short, for the "Executing tool" line.
+
+    Leaves out the runtime's injected ``_``-keys: ``_session`` alone is the
+    whole conversation, and printing it on every call grew one agent's
+    process.log to 3.7 GB.
+    """
+    out: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if str(key).startswith("_"):
+            continue
+        text = value if isinstance(value, str) else repr(value)
+        if len(text) > _LOGGED_ARG_CHARS:
+            value = f"{text[:_LOGGED_ARG_CHARS]}… ({len(text)} chars)"
+        out[key] = value
+    return out
+
+
 def _normalize_tool_name(value: str) -> str:
     """Normalize tool names for policy comparisons."""
     return str(value or "").strip().lower()
@@ -878,7 +899,7 @@ class ToolRegistry:
         bridge_task: asyncio.Task[None] | None = None
         tool_abort_event = asyncio.Event()
         try:
-            log.info("Executing tool", tool=name, args=arguments)
+            log.info("Executing tool", tool=name, args=_loggable_args(arguments))
             timeout_seconds = float(getattr(tool, "timeout_seconds", 30.0) or 30.0)
             timeout_override = arguments.get("timeout")
             if timeout_override is not None:

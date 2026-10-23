@@ -47,6 +47,26 @@ def sample_picture(path: Path) -> None:
     canvas.save(path, "JPEG", quality=85)
 
 
+def sample_background(path: Path) -> None:
+    """A picture made the way Flight Deck makes a background
+    (flight_deck/device_backgrounds.prepare): filling the circle (the watch
+    darkens it behind its screens itself)."""
+    w = h = D
+    im = Image.new("RGB", (w, h))
+    px = im.load()
+    for y in range(h):
+        t = y / h
+        for x in range(w):
+            px[x, y] = (int(40 + 200 * t), int(90 + 60 * t + 30 * (x / w)), int(200 - 90 * t))
+    d = ImageDraw.Draw(im)
+    d.ellipse((w * 0.6, h * 0.16, w * 0.6 + 90, h * 0.16 + 90), fill=(255, 236, 170))
+    d.polygon([(0, h), (0, h * 0.6), (w * 0.3, h * 0.4), (w * 0.55, h * 0.62), (w * 0.8, h * 0.44),
+               (w, h * 0.58), (w, h)], fill=(60, 50, 110))
+    d.polygon([(0, h), (0, h * 0.78), (w * 0.4, h * 0.64), (w * 0.7, h * 0.8), (w, h * 0.72), (w, h)],
+              fill=(25, 30, 60))
+    im.save(path, "JPEG", quality=88)
+
+
 def framed(ppm: Path) -> Image.Image:
     """The frame as seen on the watch: round, inside a dark bezel."""
     screen = Image.open(ppm).convert("RGB")
@@ -132,6 +152,8 @@ def main() -> None:
     for old in out.glob("*.ppm"):
         old.unlink()
     (sample_paper_picture if paper else sample_picture)(out / "sample.jpg")
+    if not paper:
+        sample_background(out / "background.jpg")
     program = ROOT / ".pio" / "build" / ("preview_paper" if paper else "preview") / "program"
     subprocess.run([str(program), str(out), str(ROOT)], check=True, stdout=subprocess.DEVNULL)
     frames = []

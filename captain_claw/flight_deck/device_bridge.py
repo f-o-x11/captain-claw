@@ -116,6 +116,8 @@ _DEVICE_SYSTEM_CONTEXT = (
 BIN_AUDIO = 0x01
 BIN_JPEG = 0x02        # a picture, or the last part of one
 BIN_JPEG_PART = 0x03   # a part of a picture, more follow (devices that ask: img=chunks)
+BIN_BG_PART = 0x04     # a part of the background picture, more follow
+BIN_BG = 0x05          # the background picture's last part
 
 PCM_CHUNK = 4096                 # bytes per audio frame sent to the device
 TTS_RATE = gb._STREAM_SAMPLE_RATE
@@ -480,6 +482,7 @@ class _DeviceConn:
         self.serial = next(_conn_serials)
         self.closed = False  # the link is gone; a turn still open keeps listening
         self.opened_at = self.last_heard_at = time.monotonic()
+        self.bg_id: str | None = None  # the background it has ("" none); None: it can't show one
         self._send_lock = asyncio.Lock()
         self.recording = False
         self.rec_rate = 16000
@@ -852,6 +855,27 @@ class _DeviceConn:
         await self.send_json({"type": "transcript", "text": text})
         await self.send_to_agent(text, ctx)
 
+    # ── the background picture (device_backgrounds.py) ──
+    async def sync_background(self) -> int:
+        """The owner's background when the device has another one, or its
+        removal when they cleared it; 1 when something went."""
+        if self.bg_id is None or self.closed:
+            return 0
+        from captain_claw.flight_deck import device_backgrounds
+
+        have = device_backgrounds.current(self.user_id, self.hw)
+        want, jpeg = device_backgrounds.for_device(have[1], self.fw) if have else ("", b"")
+        if want == self.bg_id:
+            return 0
+        if jpeg is None:  # firmware that shows it as it comes: darkened here
+            jpeg = await asyncio.to_thread(device_backgrounds.darken, have[1])
+        async with self._image_lock:  # never between an answer's picture parts
+            await self.send_json({"type": "background", "id": want, "size": len(jpeg)})
+            for kind, part in (jpeg_frames(jpeg) if jpeg else []):
+                await self.send_bin(BIN_BG if kind == BIN_JPEG else BIN_BG_PART, part)
+        self.bg_id = want
+        return 1
+
     # ── pictures ──
     async def _fetch_from_agent(self, path: str) -> bytes:
         import httpx
@@ -1048,6 +1072,19 @@ class _DeviceConn:
 _live: set[_DeviceConn] = set()
 
 
+async def push_background(user_id: str, hw: str) -> int:
+    """The owner's background (or its removal) to their connected devices of
+    kind ``hw``; how many got it."""
+    sent = 0
+    for conn in list(_live):
+        if conn.user_id == str(user_id) and conn.hw == hw:
+            try:
+                sent += await conn.sync_background()
+            except Exception as exc:
+                log.warning("device background send failed: %s", exc)
+    return sent
+
+
 async def offer_to_connected(hw: str) -> int:
     """Offer the newest build to every connected device of kind ``hw``."""
     offered = 0
@@ -1162,6 +1199,9 @@ async def device_ws(ws: WebSocket) -> None:
                     conn.voice = voice_name(str(obj.get("voice", "")))
                 if "speak" in obj:
                     conn.speak = bool(obj.get("speak"))
+                if "bg" in obj:  # firmware that shows a background names the one it has
+                    conn.bg_id = re.sub(r"[^0-9a-f]", "", str(obj.get("bg") or ""))[:32]
+                    conn._spawn(conn.sync_background())
             elif mtype == "update_check":
                 await conn.offer_update(reply_none=True)
             elif mtype == "ping":

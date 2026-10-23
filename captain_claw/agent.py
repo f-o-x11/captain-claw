@@ -643,6 +643,7 @@ class Agent(
             return await super().complete(user_input)
         finally:
             member_privacy.exit_turn(self)
+            self._flush_write_compactions()
 
     async def stream(
         self,
@@ -683,6 +684,7 @@ class Agent(
             self._set_runtime_status("waiting")
         finally:
             member_privacy.exit_turn(self)
+            self._flush_write_compactions()
 
     def _mrav_runtime_instance(self) -> Any:
         cached = getattr(self, "_mrav_runtime_cache", None)

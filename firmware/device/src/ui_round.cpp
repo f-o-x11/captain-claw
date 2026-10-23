@@ -66,6 +66,13 @@ static int replyPage = 0;
 static bool replyCentred = false;  // one short page: the block sits mid-screen
 static uint8_t* imgBuf = nullptr;
 static size_t imgLen = 0;
+static M5Canvas backdrop;          // the background picture as it is (setBackground), PSRAM
+static M5Canvas backdropDim;       // the same darkened: what the screens draw on
+static bool hasBackdrop = false;
+static constexpr int kBackdropDim = 108;  // of 256 (0.42): white text stays readable on it
+// The characters' own backdrop while there's a picture: see-through (their
+// eyes and mouths are real black).
+static constexpr uint16_t kSeeThrough = 0x0821;
 static TapButton tapMode = TapButton::Off;
 static int tapX = 0, tapY = 0, tapR = 0;  // the button on the screen now (tapR 0: none)
 
@@ -96,12 +103,14 @@ uint32_t g_perfDrawUs = 0, g_perfDrawMax = 0, g_perfPushUs = 0, g_perfPushMax = 
 static uint32_t frameT0 = 0;
 #endif
 
-// Every screen starts here: a black canvas.
-static void beginFrame() {
+// Every screen starts here: the background picture, else black (*plain*:
+// black all the same — a picture of the agent's own is shown on it).
+static void beginFrame(bool plain = false) {
 #ifdef CLAW_PERF
   frameT0 = micros();
 #endif
-  canvas.fillScreen(kBlack);
+  if (hasBackdrop && !plain) backdropDim.pushSprite(&canvas, 0, 0);
+  else canvas.fillScreen(kBlack);
   tapR = 0;
 }
 
@@ -397,7 +406,8 @@ void showSpeaking(int level) {
     strip.setColorDepth(16);
     if (!strip.createSprite(kSpeakW, kSpeakH)) return;
   }
-  strip.fillSprite(kBlack);
+  if (hasBackdrop) backdropDim.pushSprite(&strip, -kSpeakX, -kSpeakY);  // its piece of the picture
+  else strip.fillSprite(kBlack);
   int len = 14 + min(level, 100) * (kSpeakW - 14) / 100;
   strip.fillSmoothRoundRect((kSpeakW - len) / 2, 2, len, 4, 2, kCyan);
   strip.pushSprite(&M5.Display, kSpeakX, kSpeakY);
@@ -575,7 +585,7 @@ static String initials(const String& name) {
 // wide for the badge font drops to the title font, then the small one.
 static void drawBadge(Tone tone, const String& name, Glyph glyph, int cy = kBadgeY) {
   M5Canvas* s = badgeSprite(tone);
-  if (s) s->pushSprite(&canvas, CX - kGlowR, cy - kGlowR);
+  if (s) s->pushSprite(&canvas, CX - kGlowR, cy - kGlowR, kBlack);  // its glow's black: see-through
   else canvas.fillSmoothCircle(CX, cy, kBadgeR, rgb(kTones[tone].a[0], kTones[tone].a[1], kTones[tone].a[2]));
   if (glyph != Glyph::None && glyph != Glyph::Initials) {
     drawGlyph(glyph, CX, cy);
@@ -977,10 +987,11 @@ bool onLastPage() { return replyPage + 1 >= (int)replyPages.size(); }
 // Characters are drawn for the stick's 240×135 screen (under its 16 px bar),
 // then scaled up smoothly into the middle of the round one.
 static void drawCharacter(uint8_t kind, face::Pose pose, int level, int cy) {
-  faceSprite.fillScreen(kBlack);
+  faceSprite.fillScreen(hasBackdrop ? kSeeThrough : kBlack);
   face::draw(faceSprite, kind, pose, level, millis(), 120, 76);
   faceSprite.setPivot(120, 76);
-  faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f);
+  if (hasBackdrop) faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f, kSeeThrough);
+  else faceSprite.pushRotateZoomWithAA(&canvas, CX, cy, 0, 1.6f, 1.6f);
 }
 
 void showFace(uint8_t kind, face::Pose pose, int level) {
@@ -1028,9 +1039,44 @@ bool hasImage() { return imgLen > 0; }
 
 void showStoredImage() {
   if (!imgLen) return;
-  beginFrame();
+  beginFrame(true);
   // Centred; a picture made for a smaller screen is shown at its own size.
   canvas.drawJpg(imgBuf, imgLen, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center);
+  push();
+}
+
+void setBackground(const uint8_t* jpg, size_t len) {
+  hasBackdrop = false;
+  if (!jpg || !len) {
+    backdrop.deleteSprite();
+    backdropDim.deleteSprite();
+    return;
+  }
+  for (M5Canvas* s : {&backdrop, &backdropDim}) {
+    if (s->width()) continue;
+    s->setPsram(true);
+    s->setColorDepth(16);
+    if (!s->createSprite(W, H)) return;
+  }
+  backdrop.fillScreen(kBlack);
+  if (!backdrop.drawJpg(jpg, len, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center)) return;
+  // Darkened once, pixel by pixel (the sprites keep RGB565 byte-swapped).
+  const auto* src = (const uint16_t*)backdrop.getBuffer();
+  auto* dst = (uint16_t*)backdropDim.getBuffer();
+  for (int i = 0; i < W * H; ++i) {
+    const uint16_t c = __builtin_bswap16(src[i]);
+    const uint16_t r = ((c >> 11) * kBackdropDim) >> 8, g = (((c >> 5) & 63) * kBackdropDim) >> 8,
+                   b = ((c & 31) * kBackdropDim) >> 8;
+    dst[i] = __builtin_bswap16((uint16_t)(r << 11 | g << 5 | b));
+  }
+  hasBackdrop = true;
+}
+
+bool hasBackground() { return hasBackdrop; }
+
+void showBackdrop() {
+  beginFrame(true);  // black when there's none
+  if (hasBackdrop) backdrop.pushSprite(&canvas, 0, 0);  // as it is: nothing over it to read
   push();
 }
 

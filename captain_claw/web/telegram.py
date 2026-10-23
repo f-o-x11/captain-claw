@@ -23,7 +23,14 @@ from captain_claw.instructions import InstructionLoader
 from captain_claw.logging import get_logger
 from captain_claw.session import Session, get_session_manager
 from captain_claw.next_steps import extract_next_steps, next_steps_to_dicts
-from captain_claw.telegram_bridge import TelegramBridge, TelegramCallbackQuery, TelegramMessage
+from captain_claw import telegram_groups
+from captain_claw.telegram_bridge import (
+    TelegramBridge,
+    TelegramCallbackQuery,
+    TelegramGroupEvent,
+    TelegramMessage,
+)
+from captain_claw.web import telegram_group_chat
 
 if TYPE_CHECKING:
     from captain_claw.agent import Agent
@@ -177,6 +184,7 @@ async def start_telegram(server: WebServer) -> None:
             server, "telegram_pending_pairings"
         )
         server._telegram_user_sessions = await _tg_load_user_sessions(server)
+        await telegram_group_chat.load(server)
         _tg_cleanup_expired(server)
         await _tg_save_state(server)
     server._telegram_poll_task = asyncio.create_task(_telegram_poll_loop(server))
@@ -246,6 +254,12 @@ async def _telegram_worker(server: WebServer) -> None:
             update = await server._telegram_queue.get()
             if isinstance(update, TelegramCallbackQuery):
                 asyncio.create_task(_handle_telegram_callback_query(server, update))
+            elif isinstance(update, TelegramGroupEvent):
+                # In order, before the group's next message (the add-to-group
+                # link's "/start@bot agent" follows the join at once).
+                await telegram_group_chat.handle_event(server, update)
+            elif getattr(update, "chat_type", "private") in telegram_groups.GROUP_KINDS:
+                asyncio.create_task(telegram_group_chat.handle_message(server, update))
             else:
                 asyncio.create_task(_handle_telegram_message(server, update))
         except asyncio.CancelledError:
@@ -558,12 +572,17 @@ async def _handle_telegram_message(server: WebServer, message: TelegramMessage) 
             await _tg_send(
                 server, message.chat_id,
                 "Send any text to chat with your session.\n"
-                "Commands: /new, /clear, /history, /compact, /config, /session, /cron, /basna\n"
+                "Commands: /new, /clear, /history, /compact, /config, /session, /cron, /basna, /group\n"
                 "/new starts a fresh session (the old one is kept in history).\n"
                 "/basna <task> runs a parallel multi-agent research ensemble.\n"
+                "/group adds me to a Telegram group.\n"
                 "Each Telegram user has a dedicated session.",
                 reply_to_message_id=message.message_id,
             )
+            return
+        # Bots can't use a group's invite link: offer the add-to-group button.
+        if telegram_group_chat.wants_group_link(text):
+            await telegram_group_chat.offer_add_link(server, message)
             return
 
         if text.startswith("/"):
@@ -655,6 +674,8 @@ async def _handle_telegram_callback_query(server: WebServer, cbq: TelegramCallba
         pass
 
     try:
+        if cbq.chat_id < 0:
+            return  # a group: its answers carry no buttons
         user_id_key = str(cbq.user_id)
         if not _tg_is_approved(server, user_id_key):
             if not getattr(server, "_telegram_relay", False):

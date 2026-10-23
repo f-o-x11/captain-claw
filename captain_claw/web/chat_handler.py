@@ -116,9 +116,20 @@ async def _generate_task_name(
                 {"role": "user", "content": user_block},
             ],
             max_tokens=25,
-            temperature=0.0,
             timeout=8,
         )
+        # Same temperature rules as the agent's own calls: a model known to
+        # reject the value (Claude Haiku 5.5: "`temperature` is deprecated")
+        # gets none, instead of failing the naming call every turn.
+        from captain_claw.llm import (
+            _is_temperature_rejected_error,
+            _normalize_temperature_for_model,
+            _remember_temperature_unsupported,
+        )
+        _provider = model.split("/", 1)[0] if "/" in (model or "") else ""
+        temperature = _normalize_temperature_for_model(_provider, model, 0.0)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:
@@ -126,7 +137,14 @@ async def _generate_task_name(
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
 
-        resp = await acompletion(**kwargs)
+        try:
+            resp = await acompletion(**kwargs)
+        except Exception as e:
+            if "temperature" not in kwargs or not _is_temperature_rejected_error(str(e).lower()):
+                raise
+            _remember_temperature_unsupported(model)
+            kwargs.pop("temperature")
+            resp = await acompletion(**kwargs)
         name = (resp.choices[0].message.content or "").strip().strip('"\'.')
         # Safety: truncate if the model got chatty
         if len(name) > 60:

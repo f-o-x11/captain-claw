@@ -93,8 +93,8 @@ _JOINED = (
     "private copy of the messages here for them and won't post. Remove the bot to stop it."
 )
 _REFUSED = (
-    "This bot only joins groups for people who turned on the Telegram inbox in Flight "
-    "Deck. Leaving."
+    "This bot only joins groups for people who connected it in Flight Deck (Connections → "
+    "Telegram). Leaving."
 )
 _LEAVING = "👋 Nobody keeps this group in their inbox any more — leaving."
 
@@ -406,8 +406,9 @@ async def _subscribe(db, user_id: str, chat: dict) -> None:
 
 
 async def _leave_if_unused(db, chat_id: str) -> bool:
-    """Leave a group nobody collects any more. True if the bot left."""
-    if await db.tg_inbox_group_subscribers(chat_id):
+    """Leave a group nobody collects any more — and no agent answers in
+    (telegram_agent_groups). True if the bot left."""
+    if await db.tg_inbox_group_subscribers(chat_id) or str(chat_id) in ts._state.groups:
         return False
     await _say(chat_id, _LEAVING)
     await _leave(chat_id)

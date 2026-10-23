@@ -918,6 +918,15 @@ class FlightDeckDB:
                 ON telegram_links(tg_user_id) WHERE tg_user_id != '';
             CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_links_code
                 ON telegram_links(link_code) WHERE link_code != '';
+            -- Telegram groups the shared bot answers in for a user's agent
+            -- (telegram_agent_groups.py): who brought it in; their link names
+            -- the agent. The title is sealed (fd_crypto) when it can be.
+            CREATE TABLE IF NOT EXISTS telegram_agent_groups (
+                chat_id  TEXT PRIMARY KEY,
+                user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                title    TEXT NOT NULL DEFAULT '',
+                added_at TEXT NOT NULL
+            );
             -- Telegram inbox (telegram_inbox.py): a read-only copy of a user's
             -- Telegram chats that their agents read — private chats through a
             -- Chat Automation (business) connection to the shared bot, groups
@@ -3686,6 +3695,42 @@ class FlightDeckDB:
         cur = await self._db.execute("DELETE FROM telegram_links WHERE user_id = ?", (user_id,))
         await self._db.commit()
         return (cur.rowcount or 0) > 0
+
+    # ── Shared-bot groups (telegram_agent_groups.py) ───────────────────
+
+    async def list_tg_agent_groups(self, user_id: str | None = None) -> list[dict]:
+        assert self._db is not None
+        if user_id is None:
+            rows = await self._db.execute_fetchall(
+                "SELECT * FROM telegram_agent_groups ORDER BY added_at")
+        else:
+            rows = await self._db.execute_fetchall(
+                "SELECT * FROM telegram_agent_groups WHERE user_id = ? ORDER BY added_at", (user_id,))
+        return [dict(r) for r in rows]
+
+    async def set_tg_agent_group(self, chat_id: str, user_id: str, title: str) -> None:
+        assert self._db is not None
+        await self._db.execute(
+            "INSERT INTO telegram_agent_groups (chat_id, user_id, title, added_at) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(chat_id) DO UPDATE SET user_id = excluded.user_id, title = excluded.title",
+            (chat_id, user_id, title, _utcnow()),
+        )
+        await self._db.commit()
+
+    async def delete_tg_agent_group(self, chat_id: str) -> bool:
+        assert self._db is not None
+        cur = await self._db.execute("DELETE FROM telegram_agent_groups WHERE chat_id = ?", (chat_id,))
+        await self._db.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def move_tg_agent_group(self, old_chat_id: str, new_chat_id: str) -> None:
+        """The group became a supergroup (a new id)."""
+        assert self._db is not None
+        await self._db.execute(
+            "UPDATE OR REPLACE telegram_agent_groups SET chat_id = ? WHERE chat_id = ?",
+            (new_chat_id, old_chat_id),
+        )
+        await self._db.commit()
 
     async def list_admin_ids(self) -> list[str]:
         assert self._db is not None
