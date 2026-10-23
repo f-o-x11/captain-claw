@@ -29,6 +29,7 @@ static uint32_t soundStartMs = 0;         // when the speaker last started from 
 static size_t soundStartPos = 0;          // …and from which sample
 static int carry = -1;                    // odd byte waiting for its pair
 static bool replaying = false;            // the clip is playing again (replay())
+static bool onHold = false;               // pause(): the stream stays open, nothing is fed
 static bool finished = false;             // it played to its end by itself (takeFinished())
 
 // ── a line spoken aside: its own small buffer and speaker channel ──
@@ -237,10 +238,11 @@ void playStop() {
   streamOpen = false;
   streamEnded = false;
   started = false;
+  onHold = false;
 }
 
 void playPoll() {
-  if (!streamOpen) return;
+  if (!streamOpen || onHold) return;
   size_t avail = writePos - playPos;
   size_t queued = M5.Speaker.isPlaying(0);
   if (!started) {
@@ -274,7 +276,26 @@ void playPoll() {
 
 bool playing() { return streamOpen; }
 
-bool sounding() { return streamOpen && started; }
+bool sounding() { return streamOpen && started && !onHold; }
+
+void pause() {
+  if (!sounding()) return;
+  // Where the speaker is now (gapless since it last started from silence):
+  // the pieces queued past it are dropped, and resume() goes on from there.
+  size_t at = soundStartPos + (size_t)((millis() - soundStartMs) * (uint64_t)playRate / 1000);
+  M5.Speaker.stop(0);
+  playPos = min(at, playPos);
+  onHold = true;
+}
+
+void resume() {
+  if (!onHold) return;
+  speakerOn();  // the mic may have had the codec meanwhile
+  onHold = false;
+  holdUntilMs = millis();
+}
+
+bool paused() { return streamOpen && onHold; }
 
 bool takeFinished() {
   bool f = finished;
@@ -342,6 +363,7 @@ void replay() {
   speakerOn();
   playPos = 0;
   replaying = true;
+  onHold = false;
   if (!arriving) carry = -1;
   streamOpen = true;
   streamEnded = !arriving;
