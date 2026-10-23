@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.16.0"
+#define FW_VERSION "0.16.1"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -3092,10 +3092,10 @@ void loop() {
       setBarState();
       ui::setSpoken(spokenCharAt());  // the subtitle
       ui::showFace(settings.character, face::Pose::Speaking, audio::outputLevel());
-    } else if (!settings.iconMode && ui::animated() && mode == Mode::Reply && audio::sounding() && since > 80) {
+    } else if (!settings.iconMode && mode == Mode::Reply && audio::sounding() && since > 80) {
       lastDrawMs = millis();
       if (ui::setSpoken(spokenCharAt())) redraw();  // the sentence or the page changed: the whole screen
-      else ui::showSpeaking(audio::outputLevel());  // else the speaking line follows the voice (its strip only)
+      else if (ui::animated()) ui::showSpeaking(audio::outputLevel());  // the speaking line follows the voice (its strip only)
     } else if ((settings.iconMode || board::kRound) && ((mode == Mode::Idle && !ui::hasReply()) || mode == Mode::Home) &&
                since > frameGap(face::frameMs(settings.character))) {
       lastDrawMs = millis();  // blinking, rain, bouncing…
