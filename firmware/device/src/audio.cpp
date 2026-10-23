@@ -14,6 +14,7 @@ static int nextBlock = 0;
 static bool micOn = false;
 static int lastLevel = 0;
 static uint32_t micStartMs = 0, voiceMs = 0;
+static int floorPeak = 0, maxPeak = 0;  // this recording's quietest and loudest block so far
 static int loudRun = 0;  // loud blocks in a row (kVoiceRun of them = a voice)
 
 // ── speaker: one append-only PSRAM buffer holds the last answer's clip ──
@@ -126,8 +127,18 @@ static void drainDone(size_t inflight, void (*sink)(const int16_t*, size_t)) {
     int peak = 0;
     for (size_t i = 0; i < kBlock; ++i) peak = max(peak, abs((int)blk[i]));
     lastLevel = min(100, peak * 100 / 12000);
-    loudRun = peak >= kVoicePeak ? loudRun + 1 : 0;
-    if (loudRun >= kVoiceRun && millis() - micStartMs > 300) voiceMs = millis();  // (not the mic's start-up)
+    // A voice is a block clearly above this recording's own quiet: louder
+    // than kVoicePeak and, once something loud has been heard, a third of
+    // the way from the quietest block to the loudest — a mic whose floor sits
+    // above kVoicePeak (the StickS3's) would otherwise never go quiet.
+    const bool settled = millis() - micStartMs > 300;  // (not the mic's start-up)
+    if (settled) {
+      floorPeak = floorPeak ? min(floorPeak, peak) : peak;
+      maxPeak = max(maxPeak, peak);
+    }
+    const int thr = max((int)kVoicePeak, floorPeak + (maxPeak - floorPeak) * 3 / 10);
+    loudRun = peak >= thr ? loudRun + 1 : 0;
+    if (loudRun >= kVoiceRun && settled) voiceMs = millis();
     sink(blk, kBlock);
     for (int i = 1; i < fifoLen; ++i) fifo[i - 1] = fifo[i];
     --fifoLen;
@@ -144,6 +155,7 @@ void micStart() {
   micStartMs = millis();
   voiceMs = 0;
   loudRun = 0;
+  floorPeak = maxPeak = 0;
   micOn = true;
   submitNext();
   submitNext();

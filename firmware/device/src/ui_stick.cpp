@@ -38,10 +38,38 @@ static Health hWifi = Down, hAgent = Down;
 
 static std::vector<String> lines;
 static int page = 0;
+static std::vector<int> pageEnds;  // where each page's text ends: the voice's place tells its page
+static int spokenAt = -1;          // the voice's place in the text (-1: not speaking)
+static bool autoFollow = true;     // the page turns with the voice (off once paged by hand)
 static uint8_t* imgBuf = nullptr;
 static size_t imgLen = 0;
 
 static int linesPerPage() { return (H - BAR - PAD) / ts().line; }
+static int pagesNow() {
+  const int per = linesPerPage();
+  return max(1, ((int)lines.size() + per - 1) / per);
+}
+
+// Where each page's text ends (the lines are the text's pieces, in order).
+static void indexPages() {
+  pageEnds.clear();
+  const char* all = replyText.c_str();
+  const int per = linesPerPage();
+  int cursor = 0;
+  for (int i = 0; i < (int)lines.size(); ++i) {
+    const char* p = lines[i].length() ? strstr(all + cursor, lines[i].c_str()) : nullptr;
+    cursor = (p ? (int)(p - all) : cursor) + (int)lines[i].length();
+    if ((i + 1) % per == 0 || i + 1 == (int)lines.size()) pageEnds.push_back(cursor);
+  }
+  if (pageEnds.empty()) pageEnds.push_back(0);
+}
+
+static int pageOf(int at) {
+  for (int i = 0; i < (int)pageEnds.size(); ++i) {
+    if (at < pageEnds[i]) return i;
+  }
+  return (int)pageEnds.size() - 1;
+}
 
 void begin() {
   M5.Display.setRotation(1);
@@ -334,11 +362,43 @@ void setReply(const String& text) {
   replyText = text;
   lines = wrap(text, W - 2 * PAD - 4);
   page = 0;
+  spokenAt = -1;
+  autoFollow = true;
+  indexPages();
+}
+
+void growReply(const String& t) {  // more of it, in place: the page stays
+  replyText = t;
+  lines = wrap(t, W - 2 * PAD - 4);
+  indexPages();
+  page = min(page, pagesNow() - 1);
+}
+
+bool setSpoken(int at) {
+  if (at < 0) {
+    spokenAt = -1;
+    return false;
+  }
+  spokenAt = min(at, (int)replyText.length());
+  if (!autoFollow) return false;
+  const int p = pageOf(spokenAt);
+  if (p == page) return false;
+  page = p;  // the voice is on another page
+  return true;
+}
+
+void followVoice(int at) {
+  autoFollow = true;
+  spokenAt = min(max(0, at), (int)replyText.length());
+  page = pageOf(spokenAt);
 }
 
 void setTextSize(uint8_t size) {
   sizeIdx = size < sizeof(kSizes) / sizeof(kSizes[0]) ? size : 0;
-  if (replyText.length()) setReply(replyText);  // re-wrap for the new size
+  if (!replyText.length()) return;
+  lines = wrap(replyText, W - 2 * PAD - 4);  // re-wrap for the new size, keeping the place
+  indexPages();
+  page = autoFollow && spokenAt >= 0 ? pageOf(spokenAt) : min(page, pagesNow() - 1);
 }
 
 bool hasReply() { return !lines.empty(); }
@@ -366,9 +426,8 @@ void showReply() {
 }
 
 bool nextPage() {
-  int per = linesPerPage();
-  int pages = max(1, ((int)lines.size() + per - 1) / per);
-  page = (page + 1) % pages;
+  autoFollow = false;  // paged by hand: the voice no longer turns the pages
+  page = (page + 1) % pagesNow();
   showReply();
   return page != 0;
 }
@@ -376,14 +435,12 @@ bool nextPage() {
 bool onFirstPage() { return page == 0; }
 void slide(bool) {}  // the round screen's
 void fade() {}
-bool setSpoken(int) { return false; }
-void followVoice(int) {}
 int showStatus(const Status& s, int page) { return showPanel("", 0, statusRows(s), page); }
-void growReply(const String& t) { setReply(t); }
 void setReplayable(bool) {}
 bool replayHit(int, int) { return false; }
 
 bool prevPage() {
+  autoFollow = false;
   if (page == 0) return false;
   --page;
   showReply();

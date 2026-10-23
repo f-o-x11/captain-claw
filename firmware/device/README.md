@@ -204,6 +204,13 @@ it, the ring as the battery with uptime and use, then the firmware, voice,
 memory and notes; a replay, or play after a pause, goes to the page the
 voice is on and follows it again.
 
+0.16.1: on the StickS3 too, the page turns with the voice (no lit sentence on
+its small screen), and a replay or play after a pause goes to the voice's
+page; a text-size change re-wraps the answer and keeps the voice's page. A
+recording's silence stop now measures "quiet" against the recording's own
+quietest and loudest blocks, not a fixed level — the stick's mic sits above
+that level even in a quiet room, so it never went quiet.
+
 *Tap to talk* (Menu, or the settings page; off by default) puts a record
 button on the screen: under the name at home, under an answer or the
 character. Tap it and talk; the button turns into a stop square, and a second
