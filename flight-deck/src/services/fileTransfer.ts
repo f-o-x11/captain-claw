@@ -189,8 +189,8 @@ export function getFileCategory(file: AgentFile): string {
 export function getFileTypeGroup(file: AgentFile): string {
   const ext = file.extension.toLowerCase()
   if (['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.bmp'].includes(ext)) return 'image'
-  if (['.mp4', '.webm', '.avi', '.mov', '.mkv'].includes(ext)) return 'video'
-  if (['.mp3', '.wav', '.ogg', '.flac', '.aac'].includes(ext)) return 'audio'
+  if (['.mp4', '.webm', '.avi', '.mov', '.mkv', '.m4v', '.3gp'].includes(ext)) return 'video'
+  if (['.mp3', '.wav', '.ogg', '.oga', '.opus', '.flac', '.aac', '.m4a', '.amr'].includes(ext)) return 'audio'
   if (['.pdf'].includes(ext)) return 'pdf'
   if (['.html', '.htm'].includes(ext)) return 'html'
   if (['.md', '.markdown'].includes(ext)) return 'markdown'
