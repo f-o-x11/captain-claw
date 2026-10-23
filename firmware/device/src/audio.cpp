@@ -240,6 +240,8 @@ void markSpeechEnd() {
 }
 
 size_t speechTotal() { return firstEnded ? firstEnd : writePos; }
+size_t clipSamples() { return writePos; }
+bool streamArrived() { return !streamOpen || streamEnded; }
 bool speechEnded() { return firstEnded; }
 uint32_t playRateHz() { return playRate; }
 

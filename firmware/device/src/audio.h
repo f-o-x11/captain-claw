@@ -61,6 +61,8 @@ size_t speechAt();
 size_t speechTotal();
 bool speechEnded();
 void markSpeechEnd();
+size_t clipSamples();                      // samples in the answer's clip so far (where the next sound starts)
+bool streamArrived();                      // the sound now playing has all arrived (or none is)
 uint32_t playRateHz();
 void pause();                              // hold the sound where it is (the stream keeps arriving)
 void resume();                             // carry on from there
