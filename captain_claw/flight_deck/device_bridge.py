@@ -128,6 +128,8 @@ MAX_CHUNKED_JPEG_BYTES = 120_000  # a picture sent in parts (img=chunks)
 MAX_SAY_CHARS = 120              # a spoken menu row, not a reply
 MAX_NOTES_PER_BATCH = 20         # offline voice notes taken in one upload
 MAX_NOTE_SECONDS = 120
+# "New topic" said with nothing after it: no answer follows the new session.
+NEW_TOPIC_REPLY = "New topic — go ahead."
 
 # Offline voice notes already handed to the agent, per device channel: a
 # batch sent again (its notes_done lost with the link) is acknowledged, not
@@ -212,6 +214,17 @@ def activity_text(text: str, limit: int = 120) -> str:
     out = _NO_GLYPH.sub("", str(text or "")).replace("\n", " ")
     out = re.sub(r"\.\.\.$", "…", re.sub(r"\s{2,}", " ", out).strip())
     return out[:limit]
+
+
+def cue_alone(text: str) -> bool:
+    """*text* is only a new-topic cue ("New topic.", "Nova tema"): the agent
+    starts a new session and has nothing more to answer."""
+    try:
+        from captain_claw.web.slash_commands import rotation_cue
+
+        return rotation_cue(text) == ""
+    except Exception:
+        return False
 
 
 def round_fit(width: int, height: int, aspect: float) -> tuple[int, int]:
@@ -460,6 +473,7 @@ class _DeviceConn:
         self.rec = bytearray()
         # A device turn is open from our send until the agent says "ready".
         self.pending = False
+        self.cue_alone = False  # the open turn is a bare "new topic"
         self.last_reply_at = 0.0
         self._last_activity = ""
         self._audio_q: asyncio.Queue = asyncio.Queue()
@@ -536,6 +550,15 @@ class _DeviceConn:
             if not (self.pending or proactive):
                 return  # a turn from another surface on the same agent
             text = str(ev.get("text", "") or "")
+            closes = False
+            if ev.get("command") == "/new":
+                # A spoken "new topic, …": the device hears the answer that
+                # follows, not "New session created". Said alone, nothing
+                # follows — a short line closes the turn instead.
+                if not (self.pending and self.cue_alone):
+                    return
+                self.pending = self.cue_alone = False
+                text, closes = NEW_TOPIC_REPLY, True
             if not text.strip():
                 return
             self.last_reply_at = time.monotonic()
@@ -548,6 +571,8 @@ class _DeviceConn:
                 if spoken:
                     sounds.append(("tts", spoken))
                     await self._audio_q.put(("tts", spoken))
+            if closes:
+                await self.send_json({"type": "state", "state": "ready"})
         elif etype == "narration":
             if self.pending and ev.get("text"):
                 await self.send_json({"type": "status", "text": str(ev["text"])[:200]})
@@ -643,6 +668,7 @@ class _DeviceConn:
                 await self.send_json({"type": "error", "text": f"Send failed: {exc}"})
                 return False
         self.pending = True
+        self.cue_alone = cue_alone(text)
         self._last_activity = ""
         try:
             await self.send_json({"type": "state", "state": "thinking"})
