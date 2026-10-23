@@ -1,6 +1,7 @@
 """The StopWatch's background picture: Flight Deck prepares it (fills the
-circle, darkened, small enough for the device), keeps it per owner and device
-kind, and the device bridge sends it to watches that name another one."""
+circle, small enough for the device), keeps it per owner and device kind, and
+the device bridge sends it to watches that name another one — as it is to
+firmware that darkens it itself (0.13.1), darkened to 0.13.0."""
 
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ def store(monkeypatch, tmp_path):
     return tmp_path
 
 
-def test_a_picture_becomes_a_dark_round_screen_background():
+def test_a_picture_becomes_a_round_screen_background():
     wide = io.BytesIO()
     im = Image.new("RGB", (1200, 600), (0, 0, 255))
     im.paste((255, 0, 0), (450, 0, 750, 600))  # a red band in the middle
@@ -39,7 +40,9 @@ def test_a_picture_becomes_a_dark_round_screen_background():
     assert not out.info.get("progressive")       # the device's decoder takes baseline only
     assert len(jpeg) <= bgs.MAX_BYTES
     r, g, b = out.convert("RGB").getpixel((bgs.SIZE // 2, bgs.SIZE // 2))
-    assert r > b and r < 140                     # the middle kept (centre crop), darkened
+    assert r > 200 and b < 60                    # the middle kept (centre crop), as bright
+    dark = Image.open(io.BytesIO(bgs.darken(jpeg))).convert("RGB").getpixel((bgs.SIZE // 2, bgs.SIZE // 2))
+    assert 80 < dark[0] < 130                    # for 0.13.0: darkened here (0.42)
 
 
 def test_transparent_and_noisy_pictures_fit_too():
@@ -80,9 +83,9 @@ class _WS:
         self.sent.append(bytes(data))
 
 
-def _watch(user="u1", hw="stopwatch", bg=""):
+def _watch(user="u1", hw="stopwatch", bg="", fw="0.13.1"):
     conn = db._DeviceConn(_WS(), {"id": user}, "watch", lang="", speak=False, screen=(466, 466),
-                          round_screen=True, chunked=True, hw=hw)
+                          round_screen=True, chunked=True, hw=hw, fw=fw)
     conn.bg_id = bg
     return conn
 
@@ -99,6 +102,22 @@ async def test_a_watch_with_another_background_gets_the_owners(store):
     assert b"".join(f[1:] for f in frames) == jpeg
     assert conn.bg_id == pid
     assert await conn.sync_background() == 0  # it has it now
+
+
+@pytest.mark.asyncio
+async def test_firmware_that_shows_it_as_it_comes_gets_it_darkened(store):
+    jpeg = bgs.prepare(_png((800, 800), color=(240, 240, 240)))
+    pid = bgs.save("u1", "stopwatch", jpeg)
+    old = _watch(fw="0.13.0")
+    assert await old.sync_background() == 1
+    head = old.ws.sent[0]
+    assert head["id"] != pid and old.bg_id == head["id"]  # its own id: an update fetches it again
+    sent = b"".join(f[1:] for f in old.ws.sent[1:])
+    assert len(sent) == head["size"]
+    assert Image.open(io.BytesIO(sent)).convert("RGB").getpixel((233, 233))[0] < 120
+    assert await old.sync_background() == 0
+    upgraded = _watch(fw="0.13.1", bg=head["id"])
+    assert await upgraded.sync_background() == 1 and upgraded.ws.sent[0]["id"] == pid
 
 
 @pytest.mark.asyncio

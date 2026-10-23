@@ -66,8 +66,10 @@ static int replyPage = 0;
 static bool replyCentred = false;  // one short page: the block sits mid-screen
 static uint8_t* imgBuf = nullptr;
 static size_t imgLen = 0;
-static M5Canvas backdrop;          // the background picture (setBackground), PSRAM
+static M5Canvas backdrop;          // the background picture as it is (setBackground), PSRAM
+static M5Canvas backdropDim;       // the same darkened: what the screens draw on
 static bool hasBackdrop = false;
+static constexpr int kBackdropDim = 108;  // of 256 (0.42): white text stays readable on it
 // The characters' own backdrop while there's a picture: see-through (their
 // eyes and mouths are real black).
 static constexpr uint16_t kSeeThrough = 0x0821;
@@ -107,7 +109,7 @@ static void beginFrame(bool plain = false) {
 #ifdef CLAW_PERF
   frameT0 = micros();
 #endif
-  if (hasBackdrop && !plain) backdrop.pushSprite(&canvas, 0, 0);
+  if (hasBackdrop && !plain) backdropDim.pushSprite(&canvas, 0, 0);
   else canvas.fillScreen(kBlack);
   tapR = 0;
 }
@@ -404,7 +406,7 @@ void showSpeaking(int level) {
     strip.setColorDepth(16);
     if (!strip.createSprite(kSpeakW, kSpeakH)) return;
   }
-  if (hasBackdrop) backdrop.pushSprite(&strip, -kSpeakX, -kSpeakY);  // its piece of the picture
+  if (hasBackdrop) backdropDim.pushSprite(&strip, -kSpeakX, -kSpeakY);  // its piece of the picture
   else strip.fillSprite(kBlack);
   int len = 14 + min(level, 100) * (kSpeakW - 14) / 100;
   strip.fillSmoothRoundRect((kSpeakW - len) / 2, 2, len, 4, 2, kCyan);
@@ -1047,15 +1049,35 @@ void setBackground(const uint8_t* jpg, size_t len) {
   hasBackdrop = false;
   if (!jpg || !len) {
     backdrop.deleteSprite();
+    backdropDim.deleteSprite();
     return;
   }
-  if (!backdrop.width()) {
-    backdrop.setPsram(true);
-    backdrop.setColorDepth(16);
-    if (!backdrop.createSprite(W, H)) return;
+  for (M5Canvas* s : {&backdrop, &backdropDim}) {
+    if (s->width()) continue;
+    s->setPsram(true);
+    s->setColorDepth(16);
+    if (!s->createSprite(W, H)) return;
   }
   backdrop.fillScreen(kBlack);
-  hasBackdrop = backdrop.drawJpg(jpg, len, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center);
+  if (!backdrop.drawJpg(jpg, len, 0, 0, W, H, 0, 0, 1.0f, 1.0f, lgfx::datum_t::middle_center)) return;
+  // Darkened once, pixel by pixel (the sprites keep RGB565 byte-swapped).
+  const auto* src = (const uint16_t*)backdrop.getBuffer();
+  auto* dst = (uint16_t*)backdropDim.getBuffer();
+  for (int i = 0; i < W * H; ++i) {
+    const uint16_t c = __builtin_bswap16(src[i]);
+    const uint16_t r = ((c >> 11) * kBackdropDim) >> 8, g = (((c >> 5) & 63) * kBackdropDim) >> 8,
+                   b = ((c & 31) * kBackdropDim) >> 8;
+    dst[i] = __builtin_bswap16((uint16_t)(r << 11 | g << 5 | b));
+  }
+  hasBackdrop = true;
+}
+
+bool hasBackground() { return hasBackdrop; }
+
+void showBackdrop() {
+  beginFrame(true);  // black when there's none
+  if (hasBackdrop) backdrop.pushSprite(&canvas, 0, 0);  // as it is: nothing over it to read
+  push();
 }
 
 void showPicker(const std::vector<Item>& items, int selected, int current, const char*) {

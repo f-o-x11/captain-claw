@@ -320,6 +320,8 @@ int main(int argc, char** argv) {
     save("35_bg_icon");
     ui::showMessage("Answer lost", "The connection dropped while the agent was working. Ask again.", kOrange);
     save("36_bg_notice");
+    ui::showBackdrop();  // a double tap on home: the picture alone
+    save("37_bg_picture_only");
     ui::setBackground(nullptr, 0);
   }
   return 0;

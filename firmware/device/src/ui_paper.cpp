@@ -1311,6 +1311,8 @@ void storeImage(uint8_t* jpg, size_t len) {
 bool hasImage() { return imgLen > 0; }
 
 void setBackground(const uint8_t*, size_t) {}  // a round screen's (ui_round.cpp)
+bool hasBackground() { return false; }
+void showBackdrop() {}
 
 void showStoredImage() {
   if (!imgLen) return;

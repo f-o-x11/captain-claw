@@ -47,7 +47,7 @@
 #include <M5PM1.h>
 #endif
 
-#define FW_VERSION "0.13.0"
+#define FW_VERSION "0.13.1"
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
 // round and paper screens draw each glyph through a stack buffer — a timer
@@ -111,7 +111,9 @@ static void perfReport(uint32_t loopUs) {
 // Home: the PaperColor's home screen even while there's an answer (C hold).
 // Link: the "settings on your phone" address.
 // Ask: a yes/no question (send the voice notes kept offline?).
-enum class Mode { Idle, Listening, Waiting, Reply, Image, Menu, Agents, CharPick, Status, Notice, Home, Link, Ask };
+// Backdrop: the background picture alone (a double tap on the home screen).
+enum class Mode { Idle, Listening, Waiting, Reply, Image, Menu, Agents, CharPick, Status, Notice, Home, Link, Ask,
+                  Backdrop };
 
 static WebSocketsClient ws;
 static WiFiMulti wifiMulti;
@@ -695,6 +697,7 @@ static void backToMain();
 static void startInstall();
 static void connectServer();
 static void dropBackgroundPart();
+static void leaveBackdrop();
 static void setBackground(const uint8_t* jpg, size_t len, const String& id);
 static void sendNotesNow();
 static void replayAnswer();
@@ -757,6 +760,7 @@ static void redraw() {
       }
       break;
     case Mode::Home: showIdle(); break;
+    case Mode::Backdrop: ui::showBackdrop(); break;
     case Mode::Ask:
       ui::showAsk("Saved voice notes",
                   notesCount() + " recorded offline (" + clockLength(notes::seconds()) + "). Send " +
@@ -778,6 +782,12 @@ static void notice(const char* title, const String& body, uint16_t color) {
 
 static void backToMain() {
   mode = ui::hasReply() ? Mode::Reply : Mode::Idle;
+  redraw();
+}
+
+// From the picture alone back to the home screen (even with an answer kept).
+static void leaveBackdrop() {
+  mode = ui::hasReply() ? Mode::Home : Mode::Idle;
   redraw();
 }
 
@@ -1331,7 +1341,7 @@ static void pumpUpload() {
   // it and clears the batch, so each one is followed by a check.
   if (upNotes.empty()) {
     bool idle = mode == Mode::Idle || mode == Mode::Reply || mode == Mode::Home || mode == Mode::Image ||
-                mode == Mode::Notice;
+                mode == Mode::Notice || mode == Mode::Backdrop;
     if (!notes::count() || !agentLinked || !idle || (int32_t)(now - upRetryAtMs) < 0) return;
     if (!upAllowed) {
       if (!upAsked && notes::count() != notesDeclined) askNotes();
@@ -1578,7 +1588,7 @@ static void onText(const char* payload, size_t len) {
     upAwaitAck = false;
     upNotes.clear();
     upRetryAtMs = millis() + 600000;
-    if (mode == Mode::Idle || mode == Mode::Reply || mode == Mode::Home) {
+    if (mode == Mode::Idle || mode == Mode::Reply || mode == Mode::Home || mode == Mode::Backdrop) {
       notice("Offline notes not sent", String(doc["text"] | "Flight Deck couldn't take them.") + " They stay on the " +
                                            board::kNoun + ".", kOrange);
     }
@@ -1615,6 +1625,7 @@ static void dropBackgroundPart() {
 static void setBackground(const uint8_t* jpg, size_t len, const String& id) {
   ui::setBackground(jpg, len);
   bgId = len ? id : "";
+  if (!len && mode == Mode::Backdrop) mode = ui::hasReply() ? Mode::Home : Mode::Idle;  // nothing left to show
   if (notes::ready()) {
     if (len) {
       File f = LittleFS.open(kBgFile, "w");
@@ -2034,6 +2045,8 @@ static void sideClick() {
     statusPage = 0;
     mode = Mode::Status;
     redraw();
+  } else if (mode == Mode::Backdrop) {
+    leaveBackdrop();
   }
 }
 
@@ -2409,12 +2422,20 @@ static void swipeAnswer(bool forward) {
 }
 
 // A double tap off the tap button: the home screen, from an answer, a
-// picture, the menu or a notice (not while it records or the agent works).
+// picture, the menu or a notice (not while it records or the agent works);
+// on the home screen, the background picture alone, and from it home again.
 static void goHome() {
-  if (mode == Mode::Home || mode == Mode::Listening || mode == Mode::Waiting || mode == Mode::Ask) return;
-  if (mode == Mode::Idle && !ui::hasReply()) return;  // there already
-  mode = Mode::Home;
-  redraw();
+  if (mode == Mode::Listening || mode == Mode::Waiting || mode == Mode::Ask) return;
+  if (mode == Mode::Backdrop) {
+    leaveBackdrop();
+  } else if (mode == Mode::Home || (mode == Mode::Idle && !ui::hasReply())) {
+    if (!ui::hasBackground()) return;  // home already, and nothing behind it to show
+    mode = Mode::Backdrop;
+    redraw();
+  } else {
+    mode = Mode::Home;
+    redraw();
+  }
 }
 
 // The touch screen (StopWatch). Swipes page an answer: left or up goes on,
@@ -2436,7 +2457,7 @@ static void pollTouch(bool dark) {
   if (dist >= 45) {
     if (mode == Mode::Reply || mode == Mode::Image) {
       swipeAnswer(abs(dx) > abs(dy) ? dx < 0 : dy < 0);
-    } else if (mode == Mode::Home && ui::hasReply()) {
+    } else if ((mode == Mode::Home || mode == Mode::Backdrop) && ui::hasReply()) {
       backToMain();  // home → the answer again
     }
     return;
