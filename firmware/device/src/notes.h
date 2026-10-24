@@ -54,4 +54,14 @@ void remove(const String& id);
 // Set aside (renamed, never sent again): a file that can't be read as a note.
 void quarantine(const String& id);
 
+// A note written as it's recorded — no length limit but the room: begin,
+// each mic block as it comes (from the main loop), then end (kept, when
+// there's at least a second of it) or drop. Coded here; a writer task puts
+// it on the card or flash, so a slow write never holds the loop or the mic.
+bool beginNote(uint32_t rate, time_t when);
+void addNote(const int16_t* pcm, size_t samples);
+bool noteFull();  // its room is used up (or the writes failed): end it
+bool endNote();
+void dropNote();
+
 }  // namespace notes

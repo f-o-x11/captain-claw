@@ -167,6 +167,7 @@ struct Home {
   std::vector<Row> rows;   // device, Wi-Fi, deck, agent
   uint8_t character = 0;   // e-paper: shown when there's no answer to keep
   String battery;          // the round screen: "≈ 2 h 10 min left" / "full in ≈ 45 min" under the character
+  bool noteMode = false;   // the B paper: note-taking mode is on
 };
 
 void showHome(const Home& home);

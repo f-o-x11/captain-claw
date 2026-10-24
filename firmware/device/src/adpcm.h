@@ -6,6 +6,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 namespace adpcm {
 
@@ -70,5 +71,86 @@ static inline int16_t halved(const int16_t* in, size_t n, size_t i) {
   }
   return clamp16((acc + 16384) >> 15);
 }
+
+// A recording coded as it comes, block by block (a note written as it's
+// recorded): halved (16 → 8 kHz) over a sliding window — the same samples
+// halved() gives over the whole of it — then coded, two codes a byte, low
+// first; `out(bytes, n)` takes them. finish() ends it (an odd last code
+// alone in its byte), as a whole-recording coder would.
+struct StreamCoder {
+  bool halve = true;     // 16 kHz in (else coded as it comes)
+  State st;
+  int16_t win[1024];     // input not yet halved, from sample win0 on
+  size_t winLen = 0;
+  uint64_t win0 = 0;
+  uint64_t samples = 0;  // coded so far (the next halved sample's input is 2 * samples)
+  int pending = -1;      // a code waiting for its pair
+  uint8_t buf[256];
+  size_t bufLen = 0;
+
+  template <class Out> void push(const int16_t* pcm, size_t n, Out&& out) {
+    while (n) {
+      const size_t room = sizeof(win) / sizeof(win[0]) - winLen;
+      const size_t take = n < room ? n : room;
+      memcpy(win + winLen, pcm, take * sizeof(int16_t));
+      winLen += take;
+      pcm += take;
+      n -= take;
+      run(false, out);
+    }
+    flush(out);
+  }
+
+  template <class Out> void finish(Out&& out) {
+    run(true, out);
+    if (pending >= 0) {
+      put((uint8_t)pending, out);
+      pending = -1;
+    }
+    flush(out);
+  }
+
+ private:
+  template <class Out> void put(uint8_t b, Out& out) {
+    buf[bufLen++] = b;
+    if (bufLen == sizeof(buf)) flush(out);
+  }
+  template <class Out> void flush(Out& out) {
+    if (bufLen) out(buf, bufLen);
+    bufLen = 0;
+  }
+  template <class Out> void code(int16_t sample, Out& out) {
+    const uint8_t c = encode(st, sample);
+    if (pending < 0) {
+      pending = c;
+      return;
+    }
+    put((uint8_t)(pending | c << 4), out);
+    pending = -1;
+  }
+  template <class Out> void run(bool final, Out& out) {
+    if (!halve) {
+      for (size_t i = 0; i < winLen; ++i) code(win[i], out);
+      win0 += winLen;
+      samples += winLen;
+      winLen = 0;
+      return;
+    }
+    for (;;) {
+      const uint64_t c = 2 * samples, end = win0 + winLen;
+      if (final ? c >= end : c + 19 >= end) break;  // (the taps reach 19 either side)
+      code(halved(win, winLen, (size_t)(c - win0) / 2), out);
+      ++samples;
+    }
+    // Keep 20 before the next centre (even, so halved()'s index lines up).
+    const uint64_t keep = 2 * samples >= 20 ? 2 * samples - 20 : 0;
+    if (keep > win0) {
+      const size_t drop = (size_t)(keep - win0);
+      memmove(win, win + drop, (winLen - drop) * sizeof(int16_t));
+      winLen -= drop;
+      win0 = keep;
+    }
+  }
+};
 
 }  // namespace adpcm

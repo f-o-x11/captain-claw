@@ -40,6 +40,7 @@ struct Settings {
   bool tapTalk = false;     // touch screens: a record button — tap to talk, tap again to send
   uint16_t talks = 0;       // recordings sent so far: the home screen's "hold … to talk" goes after a few
   bool autoUpdate = false;  // install offered updates by itself (idle + USB power); the B paper defaults to on
+  bool noteMode = false;    // the B paper's note-taking mode: recordings are kept, sent when it's turned off
   String lastFw;            // the version that last ran (shows "Updated to …" once)
   uint8_t textSize = 0;     // reading text: 0 small, 1 medium, 2 large
   String tz;                // POSIX time zone for the clock ("" = kDefaultTz)

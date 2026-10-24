@@ -43,6 +43,7 @@ void Settings::load() {
   talks = p.getUShort("talks", 0);
   textSize = min<uint8_t>(p.getUChar("tsize", 0), 2);
   autoUpdate = p.getBool("autoupd", board::kPaperB);  // the B paper: on unless turned off on the phone page
+  noteMode = p.getBool("notemode", false);
   lastFw = p.getString("lastfw", "");
   tz = p.getString("tz", kDefaultTz);
   if (tz.isEmpty()) tz = kDefaultTz;
@@ -114,6 +115,7 @@ void Settings::save() const {
   p.putUChar("cuelead", cueLeadS);
   p.putUChar("tsize", textSize);
   p.putBool("autoupd", autoUpdate);
+  p.putBool("notemode", noteMode);
   p.putString("lastfw", lastFw);
   p.putString("tz", tz);
   p.putUChar("rot", rotation);

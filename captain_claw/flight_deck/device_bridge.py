@@ -161,9 +161,9 @@ _delivered_notes: dict[str, list[str]] = {}
 _notes_locks: dict[str, asyncio.Lock] = {}
 
 OFFLINE_NOTES_CONTEXT = (
-    "Offline voice notes: the user recorded these on the device while it had no connection to you, "
-    "each at the time shown. They weren't waiting for an answer then. Handle them now, in order — do "
-    "what each one asks, or keep it as a note when it is one — and answer once, briefly."
+    "Voice notes: the user recorded these on the device — while it had no connection to you, or in its "
+    "note-taking mode — each at the time shown. They weren't waiting for an answer then. Handle them "
+    "now, in order — do what each one asks, or keep it as a note when it is one — and answer once, briefly."
 )
 
 # The last answer's sounds per device channel, for a replay — kept here, not
@@ -433,8 +433,8 @@ def offline_notes_message(notes: list[dict]) -> str:
         when = _ctx_text(note.get("recorded"), 40) or "time unknown"
         secs = int(_num(note.get("seconds"), 0, 3600) or 0)
         lines.append(f"{i}. ({when}, {secs // 60}:{secs % 60:02d}) {str(note.get('text', '')).strip()}")
-    head = ("Voice notes I recorded while you were out of reach:" if len(notes) > 1
-            else "A voice note I recorded while you were out of reach:")
+    head = ("Voice notes I recorded on the device:" if len(notes) > 1
+            else "A voice note I recorded on the device:")
     return head + "\n" + "\n".join(lines)
 
 
