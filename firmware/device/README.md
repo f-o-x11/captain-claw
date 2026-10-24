@@ -147,18 +147,31 @@ speaking and trouble exactly as above; the voice carries the answers:
   picture through restarts, M5GFX starts it without one, and refreshes were
   several times slower; the 1.0.5–1.0.9 partial clock refresh (gone in
   1.0.11) also left the controller in its window without it.
-- **The answer** (1.0.11): goes on the paper as its voice starts, at the
-  largest of four sizes that fits it on one screen (the question in one line
-  above it, a picture on the first page), and again once it's whole and the
-  voice is over (it's spoken sentence by sentence as it's written). With
-  speaking off, when it arrives. Longer answers page at the smallest size; B
+- **Quick screen changes** (1.0.12): the refresh is the firmware's own
+  (`PaperPanel::refresh()`, the same steps as M5GFX's `display()`), so it
+  knows when the panel is in its waveform. Asking for another screen then —
+  the answer, its next page, the options, back — cuts that waveform short
+  with the same reset pulse and draws the new one at once, instead of
+  waiting for the old one to finish. (The same screen again, or the answer
+  redrawn once it's whole, waits.) Opening the options no longer waits for a
+  2–4 s Wi-Fi scan first (it runs in the background for the phone page's
+  network list), and A on the options goes back to the page it came from —
+  the answer or the dashboard.
+- **The answer** (1.0.11; 1.0.12 only from the answer page): when the
+  answer page is on the paper, a new answer goes there as its voice starts,
+  at the largest of four sizes that fits it on one screen (the question in
+  one line above it, a picture on the first page), and again once it's whole
+  and the voice is over (it's spoken sentence by sentence as it's written);
+  with speaking off, when it arrives. From the dashboard the paper stays on
+  the dashboard: B shows the answer. Longer answers page at the smallest size; B
   pages on, and after the last page B brings the dashboard back. It lives in
   flash: B after a sleep shows it. Hold B for the dashboard now.
 - **A talks** (1.0.11; C before): press, talk, press again — or 2.5 s of
   quiet sends it; a double press plays the last answer again.
 - **C: the options code** (1.0.11; A before) — the phone settings page; with
-  no Wi-Fi it opens the setup hotspot instead. On it, A goes back and C
-  installs the update on offer. Hold C for the hotspot (*Wi-Fi & settings*)
+  no Wi-Fi it opens the setup hotspot instead. On it, A goes back (to the
+  answer or the dashboard, where it was opened from) and C installs the
+  update on offer. Hold C for the hotspot (*Wi-Fi & settings*)
   at any time; a short press of A there leaves it.
 - **No asking:** voice notes kept offline go to the agent by themselves on
   the next link, and *Auto update* defaults to on (an update installs itself

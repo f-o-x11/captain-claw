@@ -398,10 +398,11 @@ static void waitPanel(uint32_t ms) {
 // ── the panel controller ───────────────────────────────────────────────
 
 #ifndef PREVIEW
-// The panel's bus and pins (M5GFX keeps them protected).
+// The panel's framebuffer, bus and pins (M5GFX keeps them protected).
 struct PaperPanel : lgfx::Panel_ED2208 {
   int width() const { return _cfg.panel_width; }
   int height() const { return _cfg.panel_height; }
+  const uint8_t* row(int y) const { return _lines_buffer[y]; }
 
   void cmd(uint8_t c) { _bus->writeCommand(c, 8); }
   void data(uint8_t d) { _bus->writeData(d, 8); }
@@ -411,6 +412,26 @@ struct PaperPanel : lgfx::Panel_ED2208 {
     uint32_t t0 = millis();
     while (!idle() && millis() - t0 < ms) delay(10);
   }
+  void begin() {
+    _bus->beginTransaction();
+    cs_control(false);
+  }
+  void end() {
+    _bus->wait();
+    cs_control(true);
+    _bus->endTransaction();
+  }
+
+  // The reset line alone (a GPIO: safe from any task — the main loop uses it
+  // to cut a running waveform short, see tick()).
+  static void pulse() {
+    lgfx::gpio_hi(kResetPin);
+    lgfx::pinMode(kResetPin, lgfx::pin_mode_t::output);
+    lgfx::gpio_lo(kResetPin);
+    delay(10);
+    lgfx::gpio_hi(kResetPin);
+    delay(10);
+  }
 
   // A reset pulse, then the set-up. With the paper keeping its picture
   // through restarts, M5GFX starts it without one (init_without_reset), so
@@ -418,12 +439,7 @@ struct PaperPanel : lgfx::Panel_ED2208 {
   // reset every refresh is whole, and several times faster. The PaperColor's
   // EPD reset is G12 (M5GFX pulses it at start; the panel's reset pin is not it).
   void reset() {
-    lgfx::gpio_hi(kResetPin);
-    lgfx::pinMode(kResetPin, lgfx::pin_mode_t::output);
-    lgfx::gpio_lo(kResetPin);
-    delay(10);
-    lgfx::gpio_hi(kResetPin);
-    delay(10);
+    pulse();
     for (uint32_t t0 = millis(); !idle() && millis() - t0 < 5000;) delay(10);
     reinit();
   }
@@ -454,6 +470,57 @@ struct PaperPanel : lgfx::Panel_ED2208 {
     cs_control(true);
     _bus->endTransaction();
   }
+
+  // A framebuffer pixel as the panel's 4-bit ink code: the nearest of the
+  // six, as M5GFX's own refresh picks them (the frame is in the inks already).
+  static uint8_t code(const lgfx::bgr888_t& p) {
+    static constexpr uint8_t kCodes[6] = {0x0, 0x1, 0x2, 0x3, 0x5, 0x6};  // black white yellow red blue green
+    uint32_t best = UINT32_MAX;
+    uint8_t out = 0x1;
+    for (int i = 0; i < 6; ++i) {
+      const int dr = p.r - kInkDefs[i].r, dg = p.g - kInkDefs[i].g, db = p.b - kInkDefs[i].b;
+      const uint32_t d = dr * dr + dg * dg + db * db;
+      if (d < best) best = d, out = kCodes[i];
+    }
+    return out;
+  }
+
+  // The whole frame, as M5GFX's display() sends it — the pixels, power on,
+  // the booster, the refresh — but with `*waveform` set while the panel runs
+  // its waveform (the long part), so the main loop can cut it short with a
+  // reset pulse when another screen is asked for, and the bus let go
+  // meanwhile (the microSD card shares it).
+  void refresh(volatile bool* waveform) {
+    const int w = width(), h = height();
+    static uint8_t line[200];
+    begin();
+    cmd(0x10);  // the pixels, two a byte
+    for (int y = 0; y < h; ++y) {
+      const lgfx::bgr888_t* px = reinterpret_cast<const lgfx::bgr888_t*>(row(y));
+      for (int x = 0; x < w; x += 2) line[x >> 1] = code(px[x]) << 4 | code(px[x + 1]);
+      _bus->writeBytes(line, w / 2, true, false);
+    }
+    _bus->wait();
+    cmd(0x04);  // power on
+    waitBusy(5000);
+    delay(200);
+    cmd(0x06);  // booster
+    for (uint8_t d : {0x6F, 0x1F, 0x17, 0x27}) data(d);
+    delay(200);
+    cmd(0x12);  // refresh
+    data(0x00);
+    end();
+    *waveform = true;
+    for (uint32_t t0 = millis(); !idle() && millis() - t0 < 45000;) delay(10);
+    *waveform = false;
+    delay(200);
+    begin();
+    cmd(0x02);  // power off
+    data(0x00);
+    waitBusy(5000);
+    delay(200);
+    end();
+  }
 };
 
 static PaperPanel* paperPanel() {
@@ -463,13 +530,21 @@ static PaperPanel* paperPanel() {
 
 #endif
 
+static volatile bool inWaveform = false;  // the panel is running a refresh's waveform
+
+// Every refresh starts from a reset controller, and runs as PaperPanel::
+// refresh() (so it can be cut short); off the board, M5GFX's own.
 static void pushToPanel() {
   waitPanel(45000);
   M5.Display.startWrite();
   canvas.pushSprite(&M5.Display, 0, 0);
   M5.Display.endWrite();
 #ifndef PREVIEW
-  if (PaperPanel* p = paperPanel()) p->reset();  // every refresh from a reset controller
+  if (PaperPanel* p = paperPanel()) {
+    p->reset();
+    p->refresh(&inWaveform);
+    return;
+  }
 #endif
   M5.Display.display();
   waitPanel(45000);
@@ -568,10 +643,13 @@ void drawNow() {
 }
 bool waiting() { return false; }
 
+static bool cutShort = false;  // a different screen was asked for while one draws
+
 static void draw(Kind kind, std::function<void()> fn) {
   want.kind = kind;
   want.draw = std::move(fn);
   want.active = true;
+  if (refreshing && kind != Kind::Reply && kind != shownKind) cutShort = true;  // (pages: askReplyPage)
 }
 
 static void commit() {
@@ -595,7 +673,17 @@ static void commit() {
 static void dashTick();
 
 void tick() {
+#ifndef PREVIEW
+  // Another screen wanted while one draws: its waveform is cut short with a
+  // reset pulse, and the new one starts at once rather than after it. Only
+  // during the waveform — mid-transfer the frame would be half-sent.
+  if (refreshing && cutShort && inWaveform) {
+    PaperPanel::pulse();
+    cutShort = false;
+  }
+#endif
   if (refreshing) return;
+  cutShort = false;
   if (want.active) commit();
   else dashTick();
 }
@@ -1072,7 +1160,7 @@ void setReply(const String& t) {
   imgBuf = nullptr;
   imgLen = 0;
   viewing = sounding = false;
-  answerDue = t.length() && !restoring;
+  answerDue = t.length() && !restoring && shownKind == Kind::Reply;  // (on the answer page: the new one comes there)
   if (t.length() && !restoring) saveLast();
 }
 
@@ -1094,11 +1182,13 @@ static void ensureLayout() {
 }
 
 static void askReplyPage() {
+  const bool other = !(shownKind == Kind::Reply && shownPage == replyPage);  // another screen, or page
   draw(Kind::Reply, [] {
     shownGen = replyGen;
     shownPage = replyPage;
     drawReplyPage();
   });
+  if (refreshing && other) cutShort = true;
 }
 
 // Only while it's on the paper, and only when the page there isn't this one
@@ -1115,12 +1205,14 @@ void showReply() {
   askReplyPage();
 }
 
-// The answer's voice has started (or it came with speaking off): it's on
-// the paper now, its first page, without waiting for B.
+// The answer's voice has started (or it came with speaking off): on the
+// paper now, its first page — when the answer page is what the paper shows.
+// From the dashboard it stays the dashboard: B shows the answer.
 void answerStarted() {
   ensureLayout();
+  const bool onAnswer = shownKind == Kind::Reply || (want.active && want.kind == Kind::Reply);
   answerDue = false;
-  if (replyPages.empty()) return;
+  if (replyPages.empty() || !onAnswer) return;
   viewing = sounding = true;
   replyPage = 0;
   forceNext = false;
@@ -1243,14 +1335,22 @@ void showSetup(const char* reason, const char* apName, const char* ip) {
   flush();  // the portal loop doesn't tick
 }
 
-// A: the options code (the settings page on a phone on the same Wi-Fi),
+static bool linkFromAnswer = false;  // the options were opened from the answer page
+static int linkFromPage = 0;
+
+// C: the options code (the settings page on a phone on the same Wi-Fi),
 // with what the paper is and what it has.
 // (Asked again every 30 s while it's open: drawn once, unless it changes.)
 void showLink(const char* title, const String& url, const String& note) {
   String t = title;
   forceNext = false;
   const String key = t + "\n" + url;
-  if (key == linkShown && ((want.active && want.kind == Kind::Link) || shownKind == Kind::Link)) return;
+  const bool open = (want.active && want.kind == Kind::Link) || shownKind == Kind::Link;
+  if (key == linkShown && open) return;
+  if (!open) {  // where back goes to
+    linkFromAnswer = shownKind == Kind::Reply || (want.active && want.kind == Kind::Reply);
+    linkFromPage = shownPage;
+  }
   linkShown = key;
   draw(Kind::Link, [=] {
     drawHeader();
@@ -1259,6 +1359,20 @@ void showLink(const char* title, const String& url, const String& note) {
     drawQrWithLines(url, 4, kHeadH + 70, H - kFootH - 12, {{url, vlw::Small, kBlue}, {note, vlw::BodyS, kInk}});
     drawFooter({{board::kTalkKey, "back"}, {board::kSideKey, "update"}});
   });
+}
+
+// A on the options: back to the page they were opened from — the answer
+// (the page that was showing) or the dashboard.
+void leaveOptions() {
+  ensureLayout();
+  if (linkFromAnswer && !replyPages.empty()) {
+    viewing = true;
+    replyPage = min(linkFromPage, (int)replyPages.size() - 1);
+    forceNext = false;
+    askReplyPage();
+  } else {
+    drawNow();
+  }
 }
 
 // ── everything else: the lights and the voice carry it ─────────────────

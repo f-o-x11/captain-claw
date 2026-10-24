@@ -45,8 +45,8 @@ static String esc(const String& s) {
   return o;
 }
 
-static void scanNetworks() {
-  int n = WiFi.scanNetworks(false, false);
+// The networks in reach as the page's list (from a scan's `n` results).
+static void listNetworks(int n) {
   scanOptions = "";
   for (int i = 0; i < n; ++i) {
     String ssid = WiFi.SSID(i);
@@ -55,6 +55,20 @@ static void scanNetworks() {
                    " dBm)</option>";
   }
   WiFi.scanDelete();
+}
+
+static void scanNetworks() { listNetworks(WiFi.scanNetworks(false, false)); }
+
+// The phone page's scan runs in the background: opening the options doesn't
+// wait 2–4 s for it before the paper starts drawing.
+static bool scanPending = false;
+
+static void collectScan() {
+  if (!scanPending) return;
+  const int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return;
+  scanPending = false;
+  if (n >= 0) listNetworks(n);
 }
 
 static const char kStyle[] PROGMEM = R"(
@@ -370,7 +384,9 @@ String phoneSettingsBegin() {
     snprintf(key, sizeof(key), "%06lx%06lx", (unsigned long)(esp_random() & 0xFFFFFF),
              (unsigned long)(esp_random() & 0xFFFFFF));
     accessKey = key;
-    scanNetworks();
+    scanOptions = "";
+    WiFi.scanNetworks(true, false);  // in the background (collectScan)
+    scanPending = true;
     static bool routed = false;  // the server keeps its routes across stop/begin
     if (!routed) {
       routed = true;
@@ -385,7 +401,9 @@ String phoneSettingsBegin() {
 }
 
 void phoneSettingsPoll() {
-  if (phoneOn) server.handleClient();
+  if (!phoneOn) return;
+  collectScan();
+  server.handleClient();
 }
 
 void phoneSettingsEnd() {
