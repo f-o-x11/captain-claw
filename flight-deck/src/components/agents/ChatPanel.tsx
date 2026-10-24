@@ -1918,7 +1918,7 @@ const MessageBubble = memo(function MessageBubble({ message, sourceName, agentId
             <MarkdownMessage content={processImagePaths(message.content, agentConn?.host, agentConn?.port, agentConn?.auth)} />
           </div>
           <span className="mt-1 block text-right text-[10px] text-zinc-500">
-            {message.via && <span className="mr-1.5 text-zinc-400">via {viaLabel(message.via)}</span>}
+            {message.via && <span className="mr-1.5 text-zinc-400">via {message.sourceLabel || viaLabel(message.via)}</span>}
             {formatTime(message.timestamp)}
           </span>
         </div>

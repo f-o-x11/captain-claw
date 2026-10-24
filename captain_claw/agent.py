@@ -565,6 +565,8 @@ class Agent(
         (``msg_origin.hint_turn_provenance``) fills in. The hint is consumed."""
         from captain_claw import msg_origin
 
+        from captain_claw import turn_source
+
         hint = getattr(self, "_turn_provenance_hint", None)
         self._turn_provenance_hint = None
         if isinstance(hint, tuple) and len(hint) == 3:
@@ -573,6 +575,13 @@ class Agent(
             channel = channel or hint[2]
         origin, detail = msg_origin.resolve_turn_origin(user_input, turn_origin, origin_detail)
         self._turn_origin = (origin, detail, str(channel or "") or None)
+        # Where the message came from (the app, which device, a scheduled
+        # job …): recorded on it, and the key of the agent's reasoning effort.
+        source_hint = getattr(self, "_turn_source_hint", None)
+        self._turn_source_hint = None
+        hinted, label = source_hint if isinstance(source_hint, tuple) and len(source_hint) == 2 else ("", "")
+        source = turn_source.resolve(hinted=hinted, channel=channel, origin=origin, origin_detail=detail)
+        self._turn_source = (source, turn_source.label_for(source, label) if source else "")
 
     def _absorb_surface_block(self, user_input: str, surface: str | None = None) -> tuple[str, bool]:
         """Take a chat surface's rules block (prepended by Flight Deck to a

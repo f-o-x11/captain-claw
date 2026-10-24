@@ -696,16 +696,21 @@ def turn_via(surface: str | None, ws: Any, whatsapp_waid: str = "", origin: Any 
     return via or "web"
 
 
-def user_turn_frame(content: str, via: str, client_msg_id: str = "") -> dict[str, Any]:
+def user_turn_frame(
+    content: str, via: str, client_msg_id: str = "", source: str = "", source_label: str = "",
+) -> dict[str, Any]:
     """The user turn as every client on the lane sees it. ``via`` names the
     surface it came from and ``client_msg_id`` the frame, so a web tab can
     tell its own echo (dropped) from another surface's turn (kept, labelled
-    "via WhatsApp", "via stick")."""
+    "via WhatsApp", "via stick"); ``source`` / ``source_label`` say where it
+    was sent from more closely (``turn_source``: the app, which device)."""
     return {
         "type": "chat_message", "role": "user",
         "content": content,
         "timestamp": datetime.now(UTC).isoformat(),
         "via": via,
+        **({"source": source} if source else {}),
+        **({"source_label": source_label} if source_label else {}),
         **accepted_fields(client_msg_id),
     }
 
@@ -738,6 +743,8 @@ async def handle_chat(
     client_msg_id: str = "",
     fd_delivers: bool = False,
     task: dict | None = None,
+    source: str | None = None,
+    source_label: str | None = None,
 ) -> bool:
     """Process a chat message through the agent.
 
@@ -772,6 +779,10 @@ async def handle_chat(
 
     *task* (a Flight Deck scheduled task, :func:`task_marker`) runs the
     rerouted turn in the task's own session (see :func:`enter_task_session`).
+
+    *source* / *source_label* are what the frame says of where it was sent
+    from (the device bridge, the app); :func:`turn_source.for_frame` settles
+    the turn's source from them, its automation kind and its surface.
     """
     from captain_claw.card_scrub import scrub_user_text
     from captain_claw.speaker import speaker_error, speaker_key_of
@@ -943,6 +954,20 @@ async def handle_chat(
     if rerouted:
         _borrow_socket(server, ws, lane)
 
+    # Where the message was sent from (turn_source): recorded on it, shown
+    # beside it, and the key of the agent's reasoning effort for the turn.
+    from captain_claw import turn_source as _turn_source
+
+    _src_origin_kind = str((origin or {}).get("kind", "") or "").strip().lower() if isinstance(origin, dict) else ""
+    _src = _turn_source.for_frame(
+        frame_source=source,
+        automation_kind=automation.kind if automation is not None else "",
+        surface=surface or getattr(ws, "_claw_surface", None),
+        whatsapp=bool(whatsapp_waid) or _src_origin_kind == "whatsapp",
+        public=is_public,
+    )
+    _src_label = _turn_source.label_for(_src, source_label if _src == _turn_source.normalize(source) else "")
+
     # ── Send to the right targets ────────────────────────────────
     # For public users we send directly to their WS; for admin we
     # broadcast to all admin connections.
@@ -957,13 +982,15 @@ async def handle_chat(
             _send_msg = server._lane_send(lane)
         _send_msg({"type": "status", "status": "thinking", **accepted_fields(client_msg_id)})
         _send_msg(user_turn_frame(
-            effective_content, turn_via(surface, ws, whatsapp_waid, origin), client_msg_id))
+            effective_content, turn_via(surface, ws, whatsapp_waid, origin), client_msg_id,
+            _src, _src_label))
     else:
         server._busy = True
         server._broadcast({"type": "status", "status": "thinking", **accepted_fields(client_msg_id)})
         server._thinking_callback("Thinking\u2026", phase="reasoning")
         server._broadcast(user_turn_frame(
-            effective_content, turn_via(surface, ws, whatsapp_waid, origin), client_msg_id))
+            effective_content, turn_via(surface, ws, whatsapp_waid, origin), client_msg_id,
+            _src, _src_label))
 
     # ── Task naming (runs concurrently with the agent) ────────────
     if not hasattr(server, "_recent_prompts"):
@@ -990,6 +1017,8 @@ async def handle_chat(
         server, ws, agent, effective_content, naming_task,
         is_public=is_public,
         turn_channel=turn_channel,
+        turn_source=_src,
+        turn_source_label=_src_label,
         lane=lane,
         public_session_id=public_session_id,
         video_attachments=video_attachments,
@@ -1467,6 +1496,8 @@ async def _run_agent(
     speaker_turn: str = "",
     speaker_grant: str = "",
     turn_channel: str | None = None,
+    turn_source: str = "",
+    turn_source_label: str = "",
     non_image_attached: bool = False,
     task: dict | None = None,
 ) -> None:
@@ -1680,7 +1711,8 @@ async def _run_agent(
         else:
             from captain_claw import msg_origin as _msg_origin
 
-            _msg_origin.hint_turn_provenance(agent, channel=turn_channel)
+            _msg_origin.hint_turn_provenance(
+                agent, channel=turn_channel, source=turn_source, source_label=turn_source_label)
             # A WhatsApp turn: what it produces for the user goes back into
             # that chat once the reply is out.
             _wa_turn_start = len(agent.session.messages) if getattr(agent, "session", None) else 0

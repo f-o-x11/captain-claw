@@ -3968,6 +3968,112 @@ async def update_agent_mode(
     return {"ok": True, "mode": mode_name, "message": "Mode updated. Takes effect on the agent's next response."}
 
 
+class AgentReasoningUpdate(BaseModel):
+    # A level, "auto" (the model's own), or None to remove the setting. Only
+    # the keys sent change.
+    default: str | None = None
+    channels: dict[str, str | None] | None = None
+    clear_default: bool = False
+
+
+def _agent_reasoning_dirs(agent_dir: Path, kind: str) -> list[Path]:
+    """Every ~/.captain-claw the agent may run with (as for the mode file)."""
+    dirs = [agent_dir / "data" / subdir / ".captain-claw" for subdir in ("home-config", "home-config-parent")]
+    own = _agent_home_cc(agent_dir, kind)
+    return dirs + ([own] if own not in dirs else [])
+
+
+def _read_agent_reasoning(agent_dir: Path, kind: str) -> dict:
+    from captain_claw.llm import reasoning
+
+    return reasoning.load_settings(_agent_home_cc(agent_dir, kind) / "reasoning_effort.json")
+
+
+def _agent_model_triplet(agent_dir: Path, kind: str) -> tuple[str, str, str]:
+    """(provider, model, base_url) from the config the agent starts with."""
+    for cfg in (_agent_home_cc(agent_dir, kind) / "config.yaml", agent_dir / "config.yaml"):
+        try:
+            data = yaml.safe_load(cfg.read_text()) or {}
+        except Exception:
+            continue
+        section = data.get("model") if isinstance(data, dict) else None
+        if isinstance(section, dict):
+            return (str(section.get("provider") or ""), str(section.get("model") or ""),
+                    str(section.get("base_url") or ""))
+    return "", "", ""
+
+
+@app.get("/fd/agent-reasoning/{kind}/{identifier}")
+async def get_agent_reasoning(
+    kind: str, identifier: str, request: Request,
+    user: dict | None = _agent_manager_dep,
+):
+    """An agent's reasoning effort for every source but the web chat: its
+    settings, the levels its configured model offers, and the sources."""
+    if kind not in ("docker", "process"):
+        raise HTTPException(400, "kind must be 'docker' or 'process'")
+    from captain_claw import turn_source
+    from captain_claw.llm import reasoning
+
+    user_id = getattr(request.state, "user_id", "")
+    agent_dir = _resolve_agent_dir(identifier, kind, user_id)
+    provider, model, base_url = _agent_model_triplet(agent_dir, kind)
+    profile = reasoning.profile_for_config(provider, model, base_url or None)
+    return {
+        "settings": _read_agent_reasoning(agent_dir, kind),
+        "profile": profile.to_wire() if profile else None,
+        "model": {"provider": provider, "model": model},
+        "catalog": turn_source.settings_catalog(),
+    }
+
+
+@app.put("/fd/agent-reasoning/{kind}/{identifier}")
+async def update_agent_reasoning(
+    kind: str, identifier: str, body: AgentReasoningUpdate, request: Request,
+    user: dict | None = _agent_manager_dep,
+):
+    """Change an agent's default reasoning effort and/or per-source levels.
+    The agent reads the file afresh: it applies from its next message."""
+    if kind not in ("docker", "process"):
+        raise HTTPException(400, "kind must be 'docker' or 'process'")
+    from captain_claw import turn_source
+    from captain_claw.llm import reasoning
+
+    def _value(raw: str | None, what: str) -> str:
+        text = str(raw or "").strip().lower()
+        if text == reasoning.AUTO or reasoning.normalize_level(text):
+            return reasoning.AUTO if text == reasoning.AUTO else str(reasoning.normalize_level(text))
+        raise HTTPException(400, f"Unknown reasoning level for {what}: {raw!r}")
+
+    user_id = getattr(request.state, "user_id", "")
+    agent_dir = _resolve_agent_dir(identifier, kind, user_id)
+    current = _read_agent_reasoning(agent_dir, kind)
+    channels = dict(current.get("channels") or {})
+    if body.clear_default:
+        current.pop("default", None)
+    elif body.default is not None:
+        current["default"] = _value(body.default, "the default")
+    for key, raw in (body.channels or {}).items():
+        source = turn_source.normalize(key)
+        if not source or source == "web":
+            raise HTTPException(400, f"Unknown source: {key!r}")
+        if raw is None:
+            channels.pop(source, None)
+        else:
+            channels[source] = _value(raw, source)
+    current["channels"] = channels
+    cleaned = reasoning.clean_settings(current)
+    text = json.dumps(cleaned, indent=2, sort_keys=True)
+    written = 0
+    for cc_dir in _agent_reasoning_dirs(agent_dir, kind):
+        if cc_dir.is_dir():
+            (cc_dir / "reasoning_effort.json").write_text(text, encoding="utf-8")
+            written += 1
+    if not written:
+        raise HTTPException(409, "The agent has no home folder yet — start it once first")
+    return {"ok": True, "settings": cleaned}
+
+
 def _agent_home_cc(agent_dir: Path, kind: str) -> Path:
     """The agent's own ~/.captain-claw: a process agent runs with
     HOME=data/home-config-parent; a container bind-mounts data/home-config."""

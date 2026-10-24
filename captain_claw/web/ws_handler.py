@@ -516,6 +516,10 @@ async def handle_ws_message(
                     task=task,
                     # A scheduled job delivering to WhatsApp: where its files go.
                     whatsapp_media_to=str(data.get("whatsapp_media_to", "") or "").strip() or None,
+                    # Where the frame says it was sent from (the device
+                    # bridge, the app) — turn_source settles the turn's.
+                    source=str(data.get("source", "") or "").strip() or None,
+                    source_label=str(data.get("source_label", "") or "").strip() or None,
                 )
 
     elif msg_type == "run_tool":

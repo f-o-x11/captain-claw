@@ -62,12 +62,16 @@ class Session:
         origin: str | None = None,
         origin_detail: str | None = None,
         channel: str | None = None,
+        source: str | None = None,
+        source_label: str | None = None,
     ) -> str:
         """Add a message to the session.  Returns the generated message_id.
 
         ``origin`` records where the message came from (``msg_origin``:
         human, cron, corrective, fleet_notice, model, …); ``origin_detail``
-        the sub-kind, ``channel`` the surface a turn arrived on. All are
+        the sub-kind, ``channel`` the surface a turn arrived on, ``source``
+        and ``source_label`` the place it was sent from (``turn_source``:
+        app, device:sticks3, scheduled …, "M5Stack StickS3 (stick)"). All are
         omitted when unset — readers classify such legacy messages.
 
         ``reasoning_content`` stores the provider's thinking-mode
@@ -101,6 +105,10 @@ class Session:
             msg["origin_detail"] = origin_detail
         if channel:
             msg["channel"] = channel
+        if source:
+            msg["source"] = source
+        if source_label:
+            msg["source_label"] = source_label
         # PR D: text from a turn that read members' private data keeps its flag wherever it lands
         # (delegate/consult results, sister and orchestrator output, notifications).
         try:

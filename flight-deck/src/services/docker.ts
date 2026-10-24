@@ -351,6 +351,32 @@ export const setAgentVision = (kind: 'process' | 'docker', id: string, vision: s
     body: JSON.stringify({ vision }),
   })
 
+/** Reasoning effort for every source but the web chat (whose chat box has its
+ *  own picker): a default and a level per source, "auto" = the model's own. */
+export interface AgentReasoningSettings { default?: string; channels: Record<string, string> }
+export interface AgentReasoning {
+  settings: AgentReasoningSettings
+  /** The levels its configured model offers; null when it has none. */
+  profile: unknown
+  model: { provider: string; model: string }
+  catalog: { title: string; sources: { key: string; label: string }[] }[]
+}
+
+export const getAgentReasoning = (kind: 'process' | 'docker', id: string) =>
+  fdFetch<AgentReasoning>(`/agent-reasoning/${kind}/${id}`)
+
+/** Only what is sent changes: a level or "auto", null to fall back (a
+ *  source to the default, the default to the model's own). Read afresh by the
+ *  agent — no restart. */
+export const setAgentReasoning = (
+  kind: 'process' | 'docker', id: string,
+  change: { default?: string; clear_default?: boolean; channels?: Record<string, string | null> },
+) =>
+  fdFetch<{ ok: boolean; settings: AgentReasoningSettings }>(`/agent-reasoning/${kind}/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(change),
+  })
+
 export const stopProcess = (slug: string, asUser?: string) =>
   fdFetch<ProcessActionResult>(`/processes/${slug}/stop`, { method: 'POST' }, asUser)
 
