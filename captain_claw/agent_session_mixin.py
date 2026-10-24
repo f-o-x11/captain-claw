@@ -1458,6 +1458,7 @@ class AgentSessionMixin:
         # A thinking model's replayed reasoning, counted on its own.
         _reasoning_tokens = self._count_tokens(reasoning_content) if reasoning_content else 0
         _channel: str | None = None
+        _source, _source_label = "", ""
         if origin is None:
             from captain_claw import member_privacy, msg_origin
 
@@ -1465,6 +1466,9 @@ class AgentSessionMixin:
                 turn = getattr(self, "_turn_origin", None)
                 if isinstance(turn, tuple) and len(turn) == 3:
                     origin, origin_detail, _channel = turn
+                    _src = getattr(self, "_turn_source", None)
+                    if isinstance(_src, tuple) and len(_src) == 2:
+                        _source, _source_label = _src
                 else:
                     origin, origin_detail = msg_origin.resolve_turn_origin(content)
             elif role == "user":
@@ -1488,6 +1492,8 @@ class AgentSessionMixin:
             origin=origin,
             origin_detail=origin_detail or None,
             channel=_channel or None,
+            source=_source or None,
+            source_label=_source_label or None,
         )
         _added = self.session.messages[-1]
         if tool_calls:

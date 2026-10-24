@@ -39,6 +39,9 @@ export interface ChatMessage {
   /** A user turn that came from another surface ("whatsapp", "device",
    *  "glasses"); absent for turns typed here. Shown as "via WhatsApp". */
   via?: string
+  /** Where it was sent from, as a person names it ("M5Stack StickS3 (stick)",
+   *  "Captain Claw app (Android)") — the agent's turn_source label. */
+  sourceLabel?: string
   /** A topic boundary in the continuous per-lane transcript: the agent's
    *  context moved to another session (`new`, `resume`) or was reset in
    *  place (`clear`). Rendered as a divider; the Topics list is built from

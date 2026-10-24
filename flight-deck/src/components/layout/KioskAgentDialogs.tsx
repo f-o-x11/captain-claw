@@ -25,6 +25,7 @@ import { getAgentConfig, getAgentMode, setAgentMode, setAgentModel, setAgentVisi
 import { LLM_PROVIDERS } from '../../services/tierConfig'
 import { VISION_OPTIONS, parseModelFromYaml } from '../../services/agentModel'
 import { MODES } from '../../services/cognitiveModes'
+import { KioskReasoningSettings } from './KioskReasoningSettings'
 import { useChatStore } from '../../stores/chatStore'
 import { useContainerStore } from '../../stores/containerStore'
 import { useNotificationStore } from '../../stores/notificationStore'
@@ -201,6 +202,9 @@ export function AgentMenu({ agentName, items, phone = false, shown = false }: {
 
 const DIALOG_SIZE = {
   sm: 'max-h-[100dvh] max-w-md rounded-t-2xl border border-zinc-800 wide:max-h-[88vh]',
+  // A sheet on a phone like `sm`; on a big screen wide enough for two columns.
+  // (Plain sm:/lg: widths: a `wide:` one would outrank lg: in the stylesheet.)
+  wide: 'max-h-[100dvh] rounded-t-2xl border border-zinc-800 wide:max-h-[88vh] sm:max-w-2xl lg:max-w-5xl',
   md: 'h-[100dvh] wide:h-[80vh] wide:max-w-2xl wide:border wide:border-zinc-800',
   lg: 'h-[100dvh] wide:h-[88vh] wide:max-w-5xl wide:border wide:border-zinc-800',
 }
@@ -226,7 +230,7 @@ export function AgentDialog({ title, icon: Icon, agentName, size = 'sm', onClose
 
   return createPortal(
     <div
-      className={`fixed inset-0 z-50 flex justify-center bg-black/60 wide:items-center wide:p-4 ${size === 'sm' ? 'items-end' : 'items-stretch'}`}
+      className={`fixed inset-0 z-50 flex justify-center bg-black/60 wide:items-center wide:p-4 ${size === 'sm' || size === 'wide' ? 'items-end' : 'items-stretch'}`}
       onClick={onClose}
     >
       <div
@@ -302,7 +306,7 @@ export function KioskAgentInfoDialog({ agent, phone, onClose }: { agent: KioskAg
   )
 }
 
-// ── Settings: model, cognitive mode and vision ──
+// ── Settings: model, vision, cognitive mode and reasoning effort ──
 
 const VISION_CHOICES = VISION_OPTIONS.map((o) => {
   const [title, detail = ''] = o.label.split(' — ')
@@ -454,142 +458,149 @@ export function KioskAgentSettingsDialog({ agent, restarting, onRestart, onClose
     : 'Leave it empty to keep the key it uses now.'
 
   return (
-    <AgentDialog title="Agent settings" icon={SlidersHorizontal} agentName={agent.name} onClose={close}>
-      <div className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain p-5">
+    <AgentDialog title="Agent settings" icon={SlidersHorizontal} agentName={agent.name} size="wide" onClose={close}>
+      <div className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain p-5 lg:p-6">
         {loading ? (
           <div className="flex items-center justify-center py-10 text-sm text-zinc-500">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading…
           </div>
         ) : (
-          <>
-            <section>
-              <SectionTitle icon={Cpu} title="Model" saving={saving === 'model'} saved={modelSaved} />
-              <p className="mb-2.5 text-[11px] leading-relaxed text-zinc-500">
-                The AI model it runs on, and the key that pays for it. Applies once the agent restarts.
-              </p>
-              <div className="grid grid-cols-1 gap-2 wide:grid-cols-[2fr_3fr]">
-                <label className="block min-w-0">
-                  <span className="mb-1 block text-[11px] font-medium text-zinc-400">Provider</span>
-                  <select
-                    value={draft.provider}
-                    onChange={(e) => pickProvider(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-2 text-sm text-zinc-200 focus:border-violet-500/60 focus:outline-none"
-                  >
-                    {/* What it runs on now, even if it isn't one of the list. */}
-                    {!LLM_PROVIDERS.some((p) => p.value === model.provider) && (
-                      <option value={model.provider}>{model.provider || '— choose —'}</option>
-                    )}
-                    {LLM_PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                  </select>
-                </label>
-                <TextField label="Model" value={draft.model} onChange={(v) => setDraft((d) => ({ ...d, model: v }))} placeholder="e.g. gpt-4.1-mini" />
-              </div>
-              {signIn ? (
-                <p className="mt-2 text-[11px] text-zinc-500">Local Google sign-in — no API key or endpoint.</p>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  <TextField
-                    label="API key" type="password" value={apiKey} onChange={setApiKey}
-                    placeholder={switched ? 'sk-…' : 'Unchanged'} hint={keyHint}
-                  />
-                  <TextField
-                    label="Endpoint (optional)" value={draft.baseUrl}
-                    onChange={(v) => { setUrlTouched(true); setDraft((d) => ({ ...d, baseUrl: v })) }}
-                    placeholder="The provider's own" hint="Only for a self-hosted or local server, e.g. http://127.0.0.1:8000/v1"
-                  />
-                </div>
-              )}
-              {modelDirty && (
-                <div className="mt-2.5 flex items-center justify-end gap-2">
-                  <button
-                    onClick={undoModel}
-                    disabled={saving === 'model'}
-                    className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
-                  >
-                    Undo
-                  </button>
-                  <button
-                    onClick={saveModel}
-                    disabled={!!saving || !provider || !draft.model.trim()}
-                    className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
-                  >
-                    {saving === 'model' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                    Save model
-                  </button>
-                </div>
-              )}
-            </section>
-
-            <section>
-              <SectionTitle icon={BrainCog} title="How it thinks" saving={saving === 'mode'} saved={modeSaved} />
-              <p className="mb-2.5 text-[11px] leading-relaxed text-zinc-500">
-                Its cognitive mode — the way it reasons. Applies from its next reply.
-              </p>
-              <div role="radiogroup" aria-label="Cognitive mode" className="grid grid-cols-2 gap-1.5">
-                {MODES.map((m) => {
-                  const on = m.id === mode
-                  return (
-                    <button
-                      key={m.id}
-                      role="radio"
-                      aria-checked={on}
-                      onClick={() => pickMode(m.id)}
-                      disabled={!!saving}
-                      className={`flex min-w-0 items-start gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors disabled:cursor-wait ${
-                        on ? `border-violet-500/50 ${m.bgActive}` : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900'
-                      }`}
-                    >
-                      <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${m.color}`} />
-                      <span className="min-w-0">
-                        <span className={`block truncate text-xs font-medium ${on ? m.textColor : 'text-zinc-200'}`}>{m.label}</span>
-                        <span className="block truncate text-[10px] text-zinc-500">{m.character}</span>
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">{current.description}</p>
-            </section>
-
-            <section>
-              <SectionTitle icon={Eye} title="Vision" saving={saving === 'vision'} />
-              <p className="mb-2.5 text-[11px] leading-relaxed text-zinc-500">
-                Whether its own model looks at the pictures you send.
-                {model.provider && <> It runs on <span className="text-zinc-400">{model.provider}{model.model ? ` / ${model.model}` : ''}</span>.</>}
-              </p>
-              {textOnly ? (
-                <p className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 text-xs text-zinc-400">
-                  This model reads text only.
+          // Two columns on a big screen: what it runs on (model, vision) on
+          // the left, how it thinks (mode, reasoning effort) on the right.
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:gap-8">
+            <div className="min-w-0 space-y-6">
+              <section>
+                <SectionTitle icon={Cpu} title="Model" saving={saving === 'model'} saved={modelSaved} />
+                <p className="mb-2.5 text-[11px] leading-relaxed text-zinc-500">
+                  The AI model it runs on, and the key that pays for it. Applies once the agent restarts.
                 </p>
-              ) : (
-                <div role="radiogroup" aria-label="Vision" className="space-y-1.5">
-                  {VISION_CHOICES.map((o) => {
-                    const on = o.value === vision
+                <div className="grid grid-cols-1 gap-2 wide:grid-cols-[2fr_3fr]">
+                  <label className="block min-w-0">
+                    <span className="mb-1 block text-[11px] font-medium text-zinc-400">Provider</span>
+                    <select
+                      value={draft.provider}
+                      onChange={(e) => pickProvider(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-2 text-sm text-zinc-200 focus:border-violet-500/60 focus:outline-none"
+                    >
+                      {/* What it runs on now, even if it isn't one of the list. */}
+                      {!LLM_PROVIDERS.some((p) => p.value === model.provider) && (
+                        <option value={model.provider}>{model.provider || '— choose —'}</option>
+                      )}
+                      {LLM_PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                    </select>
+                  </label>
+                  <TextField label="Model" value={draft.model} onChange={(v) => setDraft((d) => ({ ...d, model: v }))} placeholder="e.g. gpt-4.1-mini" />
+                </div>
+                {signIn ? (
+                  <p className="mt-2 text-[11px] text-zinc-500">Local Google sign-in — no API key or endpoint.</p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    <TextField
+                      label="API key" type="password" value={apiKey} onChange={setApiKey}
+                      placeholder={switched ? 'sk-…' : 'Unchanged'} hint={keyHint}
+                    />
+                    <TextField
+                      label="Endpoint (optional)" value={draft.baseUrl}
+                      onChange={(v) => { setUrlTouched(true); setDraft((d) => ({ ...d, baseUrl: v })) }}
+                      placeholder="The provider's own" hint="Only for a self-hosted or local server, e.g. http://127.0.0.1:8000/v1"
+                    />
+                  </div>
+                )}
+                {modelDirty && (
+                  <div className="mt-2.5 flex items-center justify-end gap-2">
+                    <button
+                      onClick={undoModel}
+                      disabled={saving === 'model'}
+                      className="rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
+                    >
+                      Undo
+                    </button>
+                    <button
+                      onClick={saveModel}
+                      disabled={!!saving || !provider || !draft.model.trim()}
+                      className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                    >
+                      {saving === 'model' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      Save model
+                    </button>
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <SectionTitle icon={Eye} title="Vision" saving={saving === 'vision'} />
+                <p className="mb-2.5 text-[11px] leading-relaxed text-zinc-500">
+                  Whether its own model looks at the pictures you send.
+                  {model.provider && <> It runs on <span className="text-zinc-400">{model.provider}{model.model ? ` / ${model.model}` : ''}</span>.</>}
+                </p>
+                {textOnly ? (
+                  <p className="rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2.5 text-xs text-zinc-400">
+                    This model reads text only.
+                  </p>
+                ) : (
+                  <div role="radiogroup" aria-label="Vision" className="space-y-1.5">
+                    {VISION_CHOICES.map((o) => {
+                      const on = o.value === vision
+                      return (
+                        <button
+                          key={o.value}
+                          role="radio"
+                          aria-checked={on}
+                          onClick={() => pickVision(o.value)}
+                          disabled={!!saving}
+                          className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-wait ${
+                            on ? 'border-violet-500/50 bg-violet-500/10' : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900'
+                          }`}
+                        >
+                          <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${on ? 'border-violet-400 bg-violet-500' : 'border-zinc-600'}`}>
+                            {on && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block text-xs font-medium text-zinc-200">{o.title}</span>
+                            <span className="block text-[11px] text-zinc-500">{o.detail}</span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+            </div>
+            <div className="min-w-0 space-y-6">
+              <section>
+                <SectionTitle icon={BrainCog} title="How it thinks" saving={saving === 'mode'} saved={modeSaved} />
+                <p className="mb-2.5 text-[11px] leading-relaxed text-zinc-500">
+                  Its cognitive mode — the way it reasons. Applies from its next reply.
+                </p>
+                <div role="radiogroup" aria-label="Cognitive mode" className="grid grid-cols-2 gap-1.5">
+                  {MODES.map((m) => {
+                    const on = m.id === mode
                     return (
                       <button
-                        key={o.value}
+                        key={m.id}
                         role="radio"
                         aria-checked={on}
-                        onClick={() => pickVision(o.value)}
+                        onClick={() => pickMode(m.id)}
                         disabled={!!saving}
-                        className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-wait ${
-                          on ? 'border-violet-500/50 bg-violet-500/10' : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900'
+                        className={`flex min-w-0 items-start gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors disabled:cursor-wait ${
+                          on ? `border-violet-500/50 ${m.bgActive}` : 'border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900'
                         }`}
                       >
-                        <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${on ? 'border-violet-400 bg-violet-500' : 'border-zinc-600'}`}>
-                          {on && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
-                        </span>
+                        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${m.color}`} />
                         <span className="min-w-0">
-                          <span className="block text-xs font-medium text-zinc-200">{o.title}</span>
-                          <span className="block text-[11px] text-zinc-500">{o.detail}</span>
+                          <span className={`block truncate text-xs font-medium ${on ? m.textColor : 'text-zinc-200'}`}>{m.label}</span>
+                          <span className="block truncate text-[10px] text-zinc-500">{m.character}</span>
                         </span>
                       </button>
                     )
                   })}
                 </div>
-              )}
-            </section>
-          </>
+                <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">{current.description}</p>
+              </section>
+
+              <KioskReasoningSettings kind={kind} agentKey={key} />
+            </div>
+          </div>
         )}
         {error && (
           <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">

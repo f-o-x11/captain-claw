@@ -339,11 +339,16 @@ def hint_turn_provenance(
     turn_origin: str | None = None,
     channel: str | None = None,
     origin_detail: str | None = None,
+    source: str | None = None,
+    source_label: str | None = None,
 ) -> None:
     """Tell *agent*'s next ``complete()``/``stream()`` where the turn came
     from. A hint rather than call arguments, so any agent object — including
-    test doubles with a plain ``complete(content)`` — can be driven."""
+    test doubles with a plain ``complete(content)`` — can be driven.
+    *source* / *source_label* (``turn_source``) name where the message came
+    from more closely than the channel (the app, which device)."""
     try:
         agent._turn_provenance_hint = (turn_origin, origin_detail, channel)
+        agent._turn_source_hint = (source, source_label)
     except Exception:
         pass

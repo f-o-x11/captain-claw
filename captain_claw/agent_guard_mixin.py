@@ -435,6 +435,21 @@ class AgentGuardMixin:
         )
         return False, f"Blocked by {guard_type} guard: {reason}"
 
+    def _turn_reasoning_effort(self) -> str | None:
+        """The reasoning effort for this turn's main calls: the chat box's
+        pick (a web chat turn), else the agent's setting for where the turn
+        came from (``reasoning_effort.json``: its source, its channel, the
+        default), else None — the model's own."""
+        picked = reasoning.current_turn_effort()
+        if picked is not None:
+            return picked
+        src = getattr(self, "_turn_source", None)
+        source = src[0] if isinstance(src, tuple) and src else ""
+        try:
+            return reasoning.configured_effort(source)
+        except Exception:
+            return None
+
     async def _complete_with_guards(
         self,
         messages: list[Message],
@@ -513,7 +528,7 @@ class AgentGuardMixin:
         # should read out as the answer.
         self._stream_label = _label or "conversation"
         try:
-            with reasoning.call_effort(_label not in _REASONING_EXEMPT_LABELS):
+            with reasoning.call_effort(None if _label in _REASONING_EXEMPT_LABELS else self._turn_reasoning_effort()):
                 response = await self.provider.complete_with_callback(
                     messages=messages,
                     tools=tools if getattr(self.provider, "supports_tools", True) else None,

@@ -91,6 +91,7 @@ function logRowToMessage(r: LogRow): ChatMessage {
     peer_name: meta.peer_name as string | undefined,
     ...(topic ? { topic } : {}),
     ...(meta.via ? { via: String(meta.via) } : {}),
+    ...(meta.source_label ? { sourceLabel: String(meta.source_label) } : {}),
     ...(taskMark(meta.task) ? { task: taskMark(meta.task) } : {}),
   }
 }
@@ -384,6 +385,7 @@ async function _flushMessages() {
               ...(m.peer_name ? { peer_name: m.peer_name } : {}),
               ...(m.topic ? { topic: m.topic } : {}),
               ...(m.via ? { via: m.via } : {}),
+              ...(m.sourceLabel ? { source_label: m.sourceLabel } : {}),
               ...(m.task ? { task: m.task } : {}),
             }),
           })),
@@ -1933,6 +1935,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     ws.on('chat_message', (data) => {
       const rawContent = (data.content as string) || ''
       let via = ''
+      let sourceLabel = ''
       if (data.role === 'user' && !data.replay) {
         if (data.rotation_cue) {
           // The rest of a "new topic" message, re-sent after the divider:
@@ -1946,6 +1949,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           // tab): part of the transcript, labelled where it came from.
           const from = String(data.via || '')
           via = from && from !== 'web' ? from : ''
+          if (via && data.source_label) sourceLabel = String(data.source_label)
         }
       }
       // Sanitize assistant content: strip thinking blocks, council protocol
@@ -1960,6 +1964,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         replay: data.replay as boolean || false,
         model: data.model as string || '',
         ...(via ? { via } : {}),
+        ...(sourceLabel ? { sourceLabel } : {}),
         ...(taskMark(data.task) ? { task: taskMark(data.task) } : {}),
       }
       addMessage(key, msg)

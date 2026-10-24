@@ -859,6 +859,14 @@ class _DeviceConn:
             turn["heard"] = True
 
     # ── device → agent ──
+    def source_fields(self) -> dict[str, str]:
+        """The frame's ``source`` (``device:<kind>``) and its label — the
+        model's name and this device's id."""
+        kind = self.hw if re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", self.hw or "") else ""
+        model = _DEVICE_MODELS.get(kind, "")
+        label = f"{model} ({self.device_id})" if model else f"Device ({self.device_id})"
+        return {"source": f"device:{kind}" if kind else "device", "source_label": label}
+
     def system_context(self) -> str:
         w, h = self.screen
         if self.paper:
@@ -895,6 +903,9 @@ class _DeviceConn:
             payload = {
                 "type": "chat", "content": content, "surface": "device",
                 "client_msg_id": "dev_" + secrets.token_hex(6),
+                # Which device it was (turn_source): recorded on the message
+                # and the key of the agent's reasoning effort for devices.
+                **self.source_fields(),
             }
             readings = device_context_line(ctx, self.hw)
             notes = ([readings] if readings else []) + list(extra_notes or [])

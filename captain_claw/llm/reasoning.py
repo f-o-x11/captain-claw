@@ -25,14 +25,21 @@ sets the turn's level (:func:`turn_effort`) and the agent's guarded LLM call
 opens it for the main conversation calls only (:func:`call_effort`), so
 housekeeping calls (titles, rephrase, compaction, reflections) keep the
 model's default and don't pay for deep thinking.
+
+Turns from anywhere but the web chat (WhatsApp, Telegram, the app, a device,
+a scheduled task …) take the agent's own settings instead — a default and a
+level per source, kept in ``~/.captain-claw/reasoning_effort.json`` and read
+afresh when it changes (:func:`configured_effort`).
 """
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
@@ -77,10 +84,10 @@ def turn_effort(level: Any) -> Iterator[str | None]:
 
 
 @contextmanager
-def call_effort(enabled: bool = True) -> Iterator[str | None]:
-    """Open the turn's level for one LLM call (``enabled=False`` keeps the
-    model's default for a housekeeping call made inside the turn)."""
-    token = _CALL.set(_TURN.get() if enabled else None)
+def call_effort(level: Any) -> Iterator[str | None]:
+    """Apply *level* to the LLM call made inside (None: the model's default —
+    a housekeeping call, or a turn nobody picked a level for)."""
+    token = _CALL.set(normalize_level(level))
     try:
         yield _CALL.get()
     finally:
@@ -94,6 +101,75 @@ def current_turn_effort() -> str | None:
 def requested_effort() -> str | None:
     """The level the provider should apply to the request it is building."""
     return _CALL.get()
+
+
+# ── The agent's own settings (every source but the web chat) ──────────
+
+SETTINGS_PATH = Path("~/.captain-claw/reasoning_effort.json").expanduser()
+AUTO = "auto"
+_settings_cache: dict[str, Any] = {"mtime": None, "value": None}
+
+
+def clean_settings(raw: Any) -> dict[str, Any]:
+    """``{"default": level|"auto", "channels": {source: level|"auto"}}`` with
+    anything malformed dropped. A missing default or source falls through
+    (source → its channel → the default); "auto" sends nothing."""
+    from captain_claw import turn_source
+
+    raw = raw if isinstance(raw, dict) else {}
+    out: dict[str, Any] = {"channels": {}}
+    default = _setting_value(raw.get("default"))
+    if default:
+        out["default"] = default
+    channels = raw.get("channels") if isinstance(raw.get("channels"), dict) else {}
+    for key, value in channels.items():
+        source, level = turn_source.normalize(key), _setting_value(value)
+        if source and source != "web" and level:
+            out["channels"][source] = level
+    return out
+
+
+def _setting_value(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text == AUTO:
+        return AUTO
+    return normalize_level(text) or ""
+
+
+def load_settings(path: Path | None = None) -> dict[str, Any]:
+    """The settings file, cleaned; re-read only when it changes."""
+    target = path or SETTINGS_PATH
+    try:
+        mtime = target.stat().st_mtime
+    except OSError:
+        return {"channels": {}}
+    if path is None and _settings_cache["mtime"] == mtime and _settings_cache["value"] is not None:
+        return _settings_cache["value"]
+    try:
+        value = clean_settings(json.loads(target.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        value = {"channels": {}}
+    if path is None:
+        _settings_cache.update(mtime=mtime, value=value)
+    return value
+
+
+def configured_effort(source: str, settings: dict[str, Any] | None = None) -> str | None:
+    """The level the agent's settings give a turn from *source*, or None
+    (send nothing). The web chat has the chat box's picker instead; an
+    unknown source takes the default."""
+    from captain_claw import turn_source
+
+    if turn_source.channel_of(source) == "web":
+        return None
+    cfg = settings if settings is not None else load_settings()
+    channels = cfg.get("channels") or {}
+    for key in (source, turn_source.channel_of(source)):
+        if key and key in channels:
+            value = channels[key]
+            return None if value == AUTO else value
+    default = cfg.get("default")
+    return None if default in (None, "", AUTO) else default
 
 
 # ── Profiles ──────────────────────────────────────────────────────────
@@ -975,6 +1051,17 @@ def profile_for_provider(provider_obj: Any) -> Profile | None:
     if provider not in _SHAPED_PROVIDERS:
         return None
     return profile_for(provider, model, base_url)
+
+
+def profile_for_config(provider: str, model: str, base_url: str | None = None) -> Profile | None:
+    """The picker for an agent's configured model (its config.yaml), as the
+    agent will build it once it runs that model."""
+    provider = str(provider or "").strip().lower()
+    if provider not in _SHAPED_PROVIDERS and provider not in ("claude", "chatgpt", "grok", "google"):
+        return None
+    from captain_claw.llm import _normalize_provider_name
+
+    return profile_for(_normalize_provider_name(provider), model, base_url)
 
 
 def plan_for_provider(provider_obj: Any, *, max_tokens: int | None = None) -> Plan | None:

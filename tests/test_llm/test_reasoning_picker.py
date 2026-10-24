@@ -149,7 +149,7 @@ def test_openrouter_uses_its_published_levels(monkeypatch):
 
 def _kwargs(provider, model, level, base_url=None, **kw):
     p = LiteLLMProvider(provider=provider, model=model, api_key="x", base_url=base_url)
-    with reasoning.turn_effort(level), reasoning.call_effort(True):
+    with reasoning.call_effort(level):
         return p._request_kwargs(_MSGS, tools=kw.get("tools"))
 
 
@@ -180,7 +180,7 @@ def test_claude_budget_skipped_mid_tool_loop():
                                                            "function": {"name": "write", "arguments": "{}"}}]),
         Message(role="tool", content="ok", tool_call_id="1", tool_name="write"),
     ]
-    with reasoning.turn_effort("high"), reasoning.call_effort(True):
+    with reasoning.call_effort("high"):
         kw = p._request_kwargs(msgs, tools=_TOOLS)
     assert "thinking" not in kw
 
@@ -244,12 +244,11 @@ def test_turn_effort_needs_a_call_to_open_it():
     p = LiteLLMProvider(provider="anthropic", model="claude-opus-5-5", api_key="x")
     with reasoning.turn_effort("max"):
         assert "output_config" not in p._request_kwargs(_MSGS)  # housekeeping call
-        with reasoning.call_effort(False):
+        with reasoning.call_effort(None):
             assert "output_config" not in p._request_kwargs(_MSGS)
-        with reasoning.call_effort(True):
+        with reasoning.call_effort(reasoning.current_turn_effort()):
             assert p._request_kwargs(_MSGS)["output_config"] == {"effort": "max"}
-    with reasoning.call_effort(True):
-        assert "output_config" not in p._request_kwargs(_MSGS)  # turn over
+    assert reasoning.current_turn_effort() is None  # turn over
 
 
 def test_guard_exempt_labels_cover_housekeeping():
