@@ -35,6 +35,8 @@ int minutesToFull() { return -1; }
 
 namespace notes {
 bool ready() { return true; }
+bool onCard() { return false; }
+uint64_t freeBytes() { return 3400000; }
 int count() { return 3; }
 uint32_t seconds() { return 84; }
 size_t room(uint32_t rate) { return (size_t)rate * 60 * 14; }

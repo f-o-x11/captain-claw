@@ -2,6 +2,9 @@
 
 #include <FS.h>
 #include <LittleFS.h>
+#include <M5Unified.h>
+#include <SD.h>
+#include <SPI.h>
 
 #include <algorithm>
 
@@ -18,6 +21,8 @@ static constexpr size_t kHead = 16;
 static constexpr size_t kWavHead = 44;
 static constexpr size_t kKeepFree = 128 * 1024;  // room left for the paper's answer cards
 static bool mounted = false;
+static fs::FS* store = nullptr;  // the card, or the flash
+static bool card = false;
 static int cachedCount = 0;
 static uint32_t cachedMs = 0;
 static uint64_t cachedFree = 0;
@@ -26,7 +31,10 @@ static bool readerPacked = false;
 static size_t readerLeft = 0;  // samples still to come
 static adpcm::State readerState;
 
-static uint64_t freeBytes() { return mounted ? LittleFS.totalBytes() - LittleFS.usedBytes() : 0; }
+static uint64_t freeNow() {
+  if (!mounted) return 0;
+  return card ? SD.totalBytes() - SD.usedBytes() : LittleFS.totalBytes() - LittleFS.usedBytes();
+}
 
 static String pathOf(const String& id, const char* ext) { return String(kDir) + "/" + id + ext; }
 
@@ -63,7 +71,7 @@ static Note noteOf(const Entry& e) {
 static std::vector<Entry> scan() {
   std::vector<Entry> out;
   std::vector<String> broken;
-  File dir = mounted ? LittleFS.open(kDir) : File();
+  File dir = mounted ? store->open(kDir) : File();
   if (!dir || !dir.isDirectory()) return out;
   for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
     String name = f.name();
@@ -77,7 +85,7 @@ static std::vector<Entry> scan() {
     else out.push_back({name.substring(0, name.length() - 4), size, packed});
   }
   dir.close();
-  for (auto& name : broken) LittleFS.remove(String(kDir) + "/" + name);
+  for (auto& name : broken) store->remove(String(kDir) + "/" + name);
   std::sort(out.begin(), out.end(), [](const Entry& a, const Entry& b) { return a.id < b.id; });
   return out;
 }
@@ -90,21 +98,71 @@ static void recount() {
     ++cachedCount;
     cachedMs += (uint64_t)n.samples * 1000 / n.rate;
   }
-  cachedFree = freeBytes();
+  cachedFree = freeNow();
+}
+
+// Notes kept in flash before a card was put in: onto the card, then gone
+// from the flash (a copy that fails stays where it was).
+static void moveToCard() {
+  File dir = LittleFS.open(kDir);
+  if (!dir || !dir.isDirectory()) return;
+  std::vector<String> names;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    String name = f.name();
+    f.close();
+    int slash = name.lastIndexOf('/');
+    names.push_back(slash >= 0 ? name.substring(slash + 1) : name);
+  }
+  dir.close();
+  static uint8_t buf[4096];
+  int moved = 0;
+  for (auto& name : names) {
+    const String path = String(kDir) + "/" + name;
+    File in = LittleFS.open(path, FILE_READ);
+    File out = in ? SD.open(path, FILE_WRITE) : File();
+    bool ok = in && out;
+    for (size_t got; ok && (got = in.read(buf, sizeof(buf))) > 0;) ok = out.write(buf, got) == got;
+    if (in) in.close();
+    if (out) out.close();
+    if (ok) {
+      LittleFS.remove(path);
+      ++moved;
+    } else {
+      SD.remove(path);
+    }
+  }
+  if (moved) Serial.printf("[claw] offline notes: %d moved from flash to the card\n", moved);
 }
 
 bool begin() {
   if (!board::kOfflineNotes) return false;
-  mounted = LittleFS.begin(true, "/littlefs", 10, "spiffs");
+  const bool flash = LittleFS.begin(true, "/littlefs", 10, "spiffs");
+  if (board::kHasSdCard) {
+    // The panel's driver set the shared bus up as Arduino's SPI (and locks
+    // it for each of its transfers): the card only needs its chip select.
+    // No card: SD.begin fails and the flash is used.
+    const int cs = M5.getPin(m5::pin_name_t::sd_spi_ss);
+    if (cs >= 0 && cs < 255 && SD.begin(cs, SPI, 10000000, "/sd", 2)) {
+      store = &SD;
+      card = true;
+    }
+  }
+  if (!store && flash) store = &LittleFS;
+  mounted = store != nullptr;
   if (!mounted) return false;
-  if (!LittleFS.exists(kDir)) LittleFS.mkdir(kDir);
+  if (!store->exists(kDir)) store->mkdir(kDir);
+  if (card && flash && LittleFS.exists(kDir)) moveToCard();
   recount();
-  Serial.printf("[claw] offline notes: %d waiting, %llu KB free (~%lu min)\n", cachedCount,
-                (unsigned long long)(cachedFree / 1024), (unsigned long)(room(16000) / 16000 / 60));
+  Serial.printf("[claw] offline notes on %s: %d waiting, %llu KB free (~%lu min)\n", card ? "the card" : "flash",
+                cachedCount, (unsigned long long)(cachedFree / 1024), (unsigned long)(room(16000) / 16000 / 60));
   return true;
 }
 
 bool ready() { return mounted; }
+
+bool onCard() { return card; }
+
+uint64_t freeBytes() { return cachedFree; }
 
 size_t room(uint32_t rate) {
   const uint64_t perSecond = keptRate(rate) / 2;  // bytes: two codes a byte
@@ -119,7 +177,7 @@ bool save(const int16_t* pcm, size_t samples, uint32_t rate, time_t when) {
   char path[64];
   snprintf(path, sizeof(path), "%s/%010lu-%08lx.adp", kDir, (unsigned long)(when > 0 ? when : 0),
            (unsigned long)esp_random());
-  File f = LittleFS.open(path, FILE_WRITE);
+  File f = store->open(path, FILE_WRITE);
   if (!f) return false;
   uint8_t h[kHead] = {'C', 'C', 'A', '1'};
   put32(h + 4, keptRate(rate));
@@ -141,13 +199,13 @@ bool save(const int16_t* pcm, size_t samples, uint32_t rate, time_t when) {
   if (ok && fill) ok = f.write(piece, fill) == fill;
   f.close();
   if (!ok) {
-    LittleFS.remove(path);
-    cachedFree = freeBytes();
+    store->remove(path);
+    cachedFree = freeNow();
     return false;
   }
   ++cachedCount;
   cachedMs += (uint64_t)kept * 1000 / keptRate(rate);
-  cachedFree = freeBytes();
+  cachedFree = freeNow();
   return true;
 }
 
@@ -167,8 +225,8 @@ uint32_t seconds() { return cachedMs / 1000; }
 bool openRead(const Note& note, uint32_t* rate) {
   closeRead();
   if (!mounted) return false;
-  readerPacked = LittleFS.exists(pathOf(note.id, ".adp"));
-  reader = LittleFS.open(pathOf(note.id, readerPacked ? ".adp" : ".wav"), FILE_READ);
+  readerPacked = store->exists(pathOf(note.id, ".adp"));
+  reader = store->open(pathOf(note.id, readerPacked ? ".adp" : ".wav"), FILE_READ);
   uint8_t h[kWavHead];
   const size_t head = readerPacked ? kHead : kWavHead;
   if (!reader || reader.read(h, head) != head || memcmp(h, readerPacked ? "CCA1" : "RIFF", 4) != 0) {
@@ -210,14 +268,14 @@ void closeRead() {
 
 void remove(const String& id) {
   if (!mounted) return;
-  if (!LittleFS.remove(pathOf(id, ".adp"))) LittleFS.remove(pathOf(id, ".wav"));
+  if (!store->remove(pathOf(id, ".adp"))) store->remove(pathOf(id, ".wav"));
   recount();
 }
 
 void quarantine(const String& id) {
   if (!mounted) return;
   closeRead();
-  if (!LittleFS.rename(pathOf(id, ".adp"), pathOf(id, ".bad"))) LittleFS.rename(pathOf(id, ".wav"), pathOf(id, ".bad"));
+  if (!store->rename(pathOf(id, ".adp"), pathOf(id, ".bad"))) store->rename(pathOf(id, ".wav"), pathOf(id, ".bad"));
   recount();
 }
 
