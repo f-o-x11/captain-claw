@@ -601,7 +601,7 @@ enum class Kind : uint8_t { None, Dash, Reply, Link, Setup };
 RTC_DATA_ATTR static bool rtcShown = false;
 RTC_DATA_ATTR static uint8_t rtcKind = 0;
 RTC_DATA_ATTR static uint32_t rtcDashAt = 0;
-RTC_DATA_ATTR static int16_t rtcTopEnd = 0;  // the dashboard's top part (header, date, room) ends here, as last drawn
+RTC_DATA_ATTR static int16_t rtcTopEnd = 0;  // the dashboard's top (header, date, room, battery) ends here, as last drawn
 static Kind shownKind = Kind::None;
 static bool everShown = false;
 static uint32_t lastDashMs = 0;  // the dashboard, this boot (0: not yet)
@@ -613,6 +613,7 @@ static void keepShown() {
   if (!p.begin("paperb", false)) return;
   p.putUChar("kind", rtcKind);
   p.putULong("dash", rtcDashAt);
+  p.putShort("top", rtcTopEnd);
   p.end();
 }
 
@@ -621,6 +622,7 @@ static void loadShown() {
   if (!p.begin("paperb", true)) return;  // (read-only: missing on the first boot)
   rtcKind = p.getUChar("kind", 0);
   rtcDashAt = p.getULong("dash", 0);
+  rtcTopEnd = p.getShort("top", 0);
   p.end();
   rtcShown = rtcKind != 0;
 }
@@ -792,8 +794,6 @@ static void drawHeader(const String& title = "", bool dots = true) {
   canvas.fillRect(0, kHeadH - 3, W, 3, kInk);
 }
 
-// The dashboard's clock (the header's title): the box its minute ticks in.
-static constexpr int kClockX = PAD - 6, kClockY = 6, kClockW = 136, kClockH = kHeadH - 14;
 static time_t clockShownAt = 0;  // when the time the paper's clock says was drawn
 
 // A keycap: the button's letter in a small black rounded square.
@@ -972,8 +972,8 @@ static Home lastHome;  // what the main loop last knew of the links (its rows: W
 static bool haveHome = false;
 
 // The dashboard's top: the header (the clock as of this drawing, the links'
-// dots, the battery), the date, the room. Returns where it ends — the window
-// the clock's tick redraws.
+// dots, the battery), the date, the room, the battery's block. Returns where
+// it ends — the window the clock's tick redraws.
 static int drawDashTop(bool asleep) {
   char clock[16] = "";
   clockText(clock, sizeof(clock), "%H:%M", time(nullptr));
@@ -983,7 +983,12 @@ static int drawDashTop(bool asleep) {
   int y = kHeadH + 14;
   y += drawDate(x, y, w);
   const int ch = drawClimate(x, y, w);
-  return y + (ch ? ch + 12 : 4);
+  y += ch ? ch + 12 : 4;
+  bool chg = false;
+  const int pct = batteryPct(&chg);
+  y = drawBlock(x, y, w, "BATTERY", pct >= 0 ? String(pct) + " %" : String("?"), batteryWords(pct, chg),
+                pct >= 0 && pct < 20 ? kRed : kInk);
+  return y + 8;
 }
 
 // The dashboard: the clock as of this drawing, the date, the room, the
@@ -993,11 +998,6 @@ static void drawDashboard(bool asleep) {
   const int x = PAD, w = W - 2 * PAD;
   int y = drawDashTop(asleep);
   rtcTopEnd = y;
-  bool chg = false;
-  const int pct = batteryPct(&chg);
-  y = drawBlock(x, y, w, "BATTERY", pct >= 0 ? String(pct) + " %" : String("?"), batteryWords(pct, chg),
-                pct >= 0 && pct < 20 ? kRed : kInk);
-  y += 8;
   const int n = notes::count();
   const int roomMin = (int)(notes::room(kNoteRate) / kNoteRate / 60);
   String kept = n == 0 ? String("none waiting") : String(n) + (n == 1 ? " note waiting" : " notes waiting");
@@ -1042,11 +1042,12 @@ static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asl
 #ifndef PREVIEW
 // On the five-minute marks (:00, :05 … :55) — or as soon after one as the
 // paper has been left alone — while the dashboard is on the paper: its top —
-// the clock, the date, the room's temperature and humidity, the header's
-// battery and links — redrawn as one partial window (one window takes as long
-// as the clock alone; the canvas may hold nothing else after a wake — only
-// the window is driven). The whole page every half hour comes on a mark too:
-// when it's due before the next one, it's drawn now.
+// the clock, the date, the room's temperature and humidity, the battery —
+// redrawn as one partial window (one window takes as long as the clock alone
+// would; the canvas may hold nothing else after a wake — only the window is
+// driven). Where the top ends is kept from the last full drawing; not known,
+// the whole page is drawn instead. The whole page every half hour comes on a
+// mark too: when it's due before the next one, it's drawn now.
 static constexpr uint32_t kClockIdleMs = 20000;
 static constexpr uint32_t kClockEverySec = 5 * 60;
 static constexpr int kClockPartialsMax = 15;
@@ -1056,25 +1057,18 @@ static void clockTick() {
   const time_t t = time(nullptr);
   char now[16];
   if (!clockText(now, sizeof(now), "%H:%M", t) || t / kClockEverySec == clockShownAt / kClockEverySec) return;
-  if (partialsInARow >= kClockPartialsMax || dashboardDueInSec() < kClockEverySec) {
+  if (partialsInARow >= kClockPartialsMax || dashboardDueInSec() < kClockEverySec || rtcTopEnd <= 0) {
     askDashboard(false);  // the whole page instead, readings and all
     return;
   }
   clockShownAt = t;
   pictures.clear();
-  if (rtcTopEnd > 0) {
-    canvas.fillRect(0, 0, W, rtcTopEnd, kPaper);
-    if (drawDashTop(false) != rtcTopEnd) {  // laid out otherwise now (the room's text size): the whole page
-      askDashboard(false);
-      return;
-    }
-    partialRect = {0, 0, W, rtcTopEnd};
-  } else {  // where the top ends isn't known (drawn before a restart): the clock alone
-    canvas.fillRect(kClockX, kClockY, kClockW, kClockH, kPaper);
-    font(vlw::Title);
-    text(now, PAD, kHeadH / 2 + 2, kInk, middle_left);
-    partialRect = {kClockX, kClockY, kClockW, kClockH};
+  canvas.fillRect(0, 0, W, rtcTopEnd, kPaper);
+  if (drawDashTop(false) != rtcTopEnd) {  // laid out otherwise now (a text size, a line): the whole page
+    askDashboard(false);
+    return;
   }
+  partialRect = {0, 0, W, rtcTopEnd};
   partialNext = true;
   startRefresh();
 }
