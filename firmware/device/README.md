@@ -162,6 +162,8 @@ paper changes only when it must:
   (1.0.0 redrew it every 30 s) and gives way to the dashboard once it closes.
   Each connect tells the deck why the device booted (`boot=power|restart|
   crash|watchdog|brownout|button|timer` in its log).
+- **Downloading an update** (1.0.2): the lights blink purple left, then
+  right, one a second, until it restarts into the new version (or gives up).
 
 | | C (top) | A | B |
 |---|---|---|---|

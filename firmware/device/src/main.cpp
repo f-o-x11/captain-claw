@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.1"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.2"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -2081,6 +2081,19 @@ static void installProgress(size_t done, size_t total) {
                   kCyan);
 }
 
+// The download holds the loop for a minute or more, and the paper shows
+// nothing new until it restarts: the lights keep going on their own
+// meanwhile (left, right, a blink a second), so it's plain what's happening.
+static volatile bool installLightsOn = false;
+
+static void installLights(void*) {
+  while (installLightsOn) {
+    leds::tick();
+    vTaskDelay(pdMS_TO_TICKS(40));
+  }
+  vTaskDelete(nullptr);
+}
+
 static void startInstall() {
   if (!offer.valid()) return;
   if (mode == Mode::Listening || mode == Mode::Waiting || audio::playing()) {
@@ -2101,13 +2114,20 @@ static void startInstall() {
   ui::setBar(agentName, "updating", kCyan);
   ui::showMessage(("Updating to " + offer.version).c_str(), String("Downloading… keep it on."), kCyan);
   leds::set(leds::State::Updating);
-  leds::tick();
+  if (board::kHasLeds) {
+    installLightsOn = true;
+    if (xTaskCreate(installLights, "updlights", 4096, nullptr, 1, nullptr) != pdPASS) installLightsOn = false;
+  }
   ui::flush();  // e-paper: on the paper before the download takes over
   String err = ota::install(offer, httpBase(), settings.token, installProgress);
   if (err.isEmpty()) {
     ui::showMessage("Update installed", "Restarting into " + offer.version + "…", kGreen);
     delay(1200);
     ESP.restart();
+  }
+  if (installLightsOn) {
+    installLightsOn = false;
+    delay(60);  // its last tick done: the loop drives the lights again
   }
   lastActivityMs = millis();
   notice("Update failed", err + ". Still on " FW_VERSION ".", kOrange);
