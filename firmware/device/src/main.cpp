@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.15"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.16"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -220,6 +220,8 @@ static size_t prerollCap = 0, prerollSent = 0;  // in samples
 static uint32_t prerollStartMs = 0;
 static volatile uint32_t prerollEndMs = 0;     // when the button was let go (0 = still held)
 static bool prerollOn = false, prerollStreaming = false, prerollChecked = false;
+static bool noteRec = false;  // this recording is a note, written to the card or flash as it comes (B paper)
+static bool talkHoldArms = false;  // the talk press began a recording: held on, it toggles note mode
 static bool prerollEndSounded = false;  // its "let go" blip has played
 
 // Tap to talk: the recording going on was started on the screen (or, where
@@ -534,6 +536,7 @@ static ui::Home homeNow() {
                        agentLinked ? kGreen : kYellow});
   home.character = settings.character;
   home.battery = batteryLine();
+  home.noteMode = board::kPaperB && settings.noteMode;
   return home;
 }
 
@@ -1121,12 +1124,18 @@ static void chooseAgent() {
 // ── microphone → server ──────────────────────────────────────────────
 
 static void micSink(const int16_t* samples, size_t count) {
-  if (wsUp) ws.sendBIN((const uint8_t*)samples, count * sizeof(int16_t));
+  if (noteRec) notes::addNote(samples, count);
+  else if (wsUp) ws.sendBIN((const uint8_t*)samples, count * sizeof(int16_t));
 }
 
 static void startOfflineNote();
+static void startNote();
 
 static void startTalking() {
+  if (board::kPaperB && (settings.noteMode || !wsUp)) {  // kept as a note, written as it's recorded
+    startNote();
+    return;
+  }
   if (!wsUp) {
     // Kept as a voice note (sent once the deck is back) where the device can.
     if (board::kOfflineNotes && notes::room(audio::kMicRate) > 3 * audio::kMicRate) {
@@ -1274,6 +1283,63 @@ static void startOfflineNote() {
   redraw();
 }
 
+// A note written to the card or flash as it's recorded (the B paper, in note
+// mode or offline): no length limit but the room. It ends as any toggled
+// recording does — the next press, or (offline, outside note mode) 2.5 s of
+// quiet — or when the room runs out.
+static void startNote() {
+  const time_t when = telemetry::clockSet() ? time(nullptr) : 0;
+  if (!notes::beginNote(audio::kMicRate, when)) {
+    notice("Not kept", "No room left for a voice note.", kRed);
+    return;
+  }
+  flashing = false;
+  ui::setQuestion("");
+  if (settings.talkSounds) audio::talkStart();  // the blip, then (0.25 s on) the mic listens
+  audio::micStart();
+  noteRec = true;
+  recStartMs = millis();
+  mode = Mode::Listening;
+  buzz(35);
+  redraw();
+}
+
+static void finishNote(bool keep) {
+  tapRec = false;
+  audio::micStop(micSink);  // its last blocks into the note
+  noteRec = false;
+  const bool kept = keep && notes::endNote();  // (under a second: not kept)
+  if (!kept) notes::dropNote();
+  if (!kept) {
+    backToMain();
+    return;
+  }
+  if (settings.talkSounds) audio::talkEnd();
+  notesDeclined = -1;
+  mode = ui::hasReply() ? Mode::Reply : Mode::Idle;
+  ui::drawNow();  // the dashboard: one more note waiting, less room
+  redraw();
+}
+
+// Hold A: note-taking mode on or off. The press began a recording (A talks
+// on a press); it's dropped, unsent. Rising tones: on; falling: off. Off, the
+// notes go to the agent (pumpUpload).
+static void toggleNoteMode() {
+  talkHoldArms = false;
+  if (mode == Mode::Listening && !prerollOn) {
+    if (noteRec) finishNote(false);
+    else stopTalking(false);
+  }
+  settings.noteMode = !settings.noteMode;
+  settings.save();
+  if (settings.keyClicks) {
+    if (settings.noteMode) audio::cue();
+    else audio::cueEnd();
+  }
+  ui::drawNow();  // the dashboard, saying so
+  backToMain();
+}
+
 // The mic's level now, from what it last wrote (for the screen and lights).
 static int prerollLevel() {
   size_t end = prerollReady(millis() - 40), from = end > 800 ? end - 800 : 0;
@@ -1379,10 +1445,11 @@ static void pumpPreroll() {
     }
     prerollEndSound();  // a real recording: let go is heard at once, whatever the link does
   }
-  if (!wsUp) {
+  const bool asNote = board::kPaperB && settings.noteMode;  // note mode: kept, never sent as it is
+  if (!wsUp || asNote) {
     // Let go and still no deck: keep it offline. A wake on Wi-Fi expects the
     // link any moment; without Wi-Fi (or recorded offline) there's no point waiting.
-    bool noLink = prerollOffline || WiFi.status() != WL_CONNECTED;
+    bool noLink = prerollOffline || asNote || WiFi.status() != WL_CONNECTED;
     if (stopAt && (int32_t)(now - stopAt) > (noLink ? 1500 : 25000)) {
       prerollEndSound();  // (full while held: no release played it)
       keepOffline(stopAt);
@@ -1498,6 +1565,7 @@ static void finishBatch(uint32_t now) {
 
 static void pumpUpload() {
   if (!board::kOfflineNotes) return;
+  if (board::kPaperB && settings.noteMode && upNotes.empty() && !upAwaitAck) return;  // sent when it's off
   const uint32_t now = millis();
   if (mode == Mode::Ask && now - askedMs > 60000) backToMain();  // no answer: asked again on the next link
   if (upAwaitAck) {
@@ -2682,6 +2750,7 @@ void setup() {
     startPreroll();
   }
   sideBtn().setHoldThresh(800);
+  if (board::kPaperB) talkBtn().setHoldThresh(1000);  // hold A: note mode (a press talks)
   if (board::kBackPin >= 0) backBtn().setHoldThresh(800);
   esp_timer_create_args_t sampler = {};
   sampler.callback = sampleButtons;
@@ -2795,6 +2864,8 @@ static void cancelTapRecording() {
   if (prerollOn) {
     stopPreroll();
     backToMain();
+  } else if (noteRec) {
+    finishNote(false);
   } else {
     stopTalking(false);
   }
@@ -2806,6 +2877,8 @@ static void endTapRecording() {
     uint32_t t = millis();
     prerollEndMs = t ? t : 1;
     tapRec = false;
+  } else if (mode == Mode::Listening && noteRec) {
+    finishNote(true);
   } else if (mode == Mode::Listening) {
     stopTalking(true);
   }
@@ -2823,6 +2896,7 @@ static void stopOnSilence() {
   static size_t scanned = 0;     // background-recording samples looked at so far
   static int loudRun = 0;        // …and its loud blocks in a row (kVoiceRun = a voice)
   if (!tapRec) return;
+  if (board::kPaperB && settings.noteMode) return;  // notes have their pauses: the press ends them
   const bool live = !prerollOn && mode == Mode::Listening && audio::micActive();
   if (!live && !(prerollOn && !prerollEndMs)) return;
   const uint32_t start = prerollOn ? prerollStartMs : recStartMs;
@@ -3164,6 +3238,7 @@ void loop() {
   const bool endsPreroll = talkBtn().wasPressed() && prerollOn && tapRec;
   if (talkBtn().wasPressed() && !prerollOn) {
     touch();
+    talkHoldArms = false;
     if (dark && inMenu) {
       // woken only
     } else if (mode == Mode::Menu || mode == Mode::Agents || mode == Mode::CharPick) {
@@ -3200,10 +3275,12 @@ void loop() {
       tapRec = board::kTalkToggles;  // before it starts: the sampler would end an offline one on letting go
       startTalking();
       if (mode != Mode::Listening) tapRec = false;
+      talkHoldArms = board::kPaperB;
       if (wasSpeaking) sendType("stop");
     }
   }
   if (endsPreroll && tapRec) endTapRecording();  // (unless the sampler saw the press first)
+  if (board::kPaperB && talkHoldArms && talkBtn().wasHold()) toggleNoteMode();
   if (talkBtn().wasReleased() && mode == Mode::Listening && !prerollOn && !tapRec) {
     bool tap = millis() - recStartMs < kTapMs;
     stopTalking(!tap);
@@ -3327,7 +3404,11 @@ void loop() {
       if (settings.iconMode) ui::showFace(settings.character, face::Pose::Listening, level);
       else ui::showListening(level, millis() - recStartMs);
     }
-    if (!prerollOn && millis() - recStartMs > kTalkMaxMs) stopTalking(true);
+    if (noteRec) {
+      if (notes::noteFull()) endTapRecording();  // the room is used up: kept as far as it got
+    } else if (!prerollOn && millis() - recStartMs > kTalkMaxMs) {
+      stopTalking(true);
+    }
   }
   if (buzzOffMs && (int32_t)(millis() - buzzOffMs) >= 0) {
     M5.Power.setVibration(0);

@@ -606,10 +606,10 @@ async def test_an_answer_cuts_a_spoken_row_short(monkeypatch):
 def test_offline_notes_read_as_one_numbered_message():
     one = db.offline_notes_message([{"recorded": "Mon 2026-10-20 14:02 (+0200)", "seconds": 12.4,
                                      "text": " Buy milk. "}])
-    assert one == "A voice note I recorded while you were out of reach:\n1. (Mon 2026-10-20 14:02 (+0200), 0:12) Buy milk."
+    assert one == "A voice note I recorded on the device:\n1. (Mon 2026-10-20 14:02 (+0200), 0:12) Buy milk."
     two = db.offline_notes_message([{"recorded": "", "seconds": 75, "text": "a"},
                                     {"recorded": "x]\n[y", "seconds": "junk", "text": "b"}])
-    assert two.splitlines() == ["Voice notes I recorded while you were out of reach:",
+    assert two.splitlines() == ["Voice notes I recorded on the device:",
                                 "1. (time unknown, 1:15) a", "2. (xy, 0:00) b"]
 
 

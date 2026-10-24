@@ -169,6 +169,16 @@ int main(int argc, char** argv) {
   ui::showHome(home);  // asked for (B held): the dashboard now
   save("09_dashboard_links_down");
 
+  ui::setHealth(ui::Up, ui::Up);
+  home.rows = {{"Paper", "ready — press A", kGreen},
+               {"Wi-Fi", "Kuharski-5G", kGreen},
+               {"Deck", "glasses.captain-claw.com", kGreen},
+               {"Agent", "Captain Claw", kGreen}};
+  home.noteMode = true;  // hold A: note-taking mode
+  ui::drawNow();
+  ui::showHome(home);
+  save("10_dashboard_note_mode");
+
   // (Asleep: the dashboard goes by the clock's five-minute marks — the Mac's
   // real clock here, so a jump of the stand-in millis() doesn't make it due.)
   return 0;

@@ -6,6 +6,8 @@
 #include <SD.h>
 #include <SPI.h>
 
+#include <freertos/stream_buffer.h>
+
 #include <algorithm>
 
 #include "adpcm.h"
@@ -224,8 +226,10 @@ bool ready() { return mounted; }
 
 bool onCard() { return card; }
 
+static bool noteOn = false;  // a note is being written as it's recorded
+
 bool poll() {
-  if (!board::kOfflineNotes || !board::kHasSdCard) return false;
+  if (!board::kOfflineNotes || !board::kHasSdCard || noteOn) return false;
   if (card) {
     if (cardThere()) return false;
     useFlash();
@@ -323,6 +327,9 @@ bool openRead(const Note& note, uint32_t* rate) {
   *rate = get32(h + (readerPacked ? 4 : 24));
   if (*rate < 8000 || *rate > 48000) *rate = readerPacked ? 8000 : 16000;
   readerLeft = readerPacked ? get32(h + 8) : 0;
+  // A note written as recorded whose end never came (the power went): its
+  // header still says 0 — all that's there, then.
+  if (readerPacked && !readerLeft) readerLeft = (reader.size() - kHead) * 2;
   readerState = adpcm::State();
   return true;
 }
@@ -364,6 +371,124 @@ void quarantine(const String& id) {
   closeRead();
   if (!store->rename(pathOf(id, ".adp"), pathOf(id, ".bad"))) store->rename(pathOf(id, ".wav"), pathOf(id, ".bad"));
   recount();
+}
+
+// ── a note written as it's recorded ──────────────────────────────────────
+//
+// Each mic block is halved (16 → 8 kHz) and coded here, on the main loop
+// (adpcm::StreamCoder), into a stream buffer in PSRAM; a writer task drains
+// it to the file. The mic has only two blocks queued (64 ms), and a flash
+// erase or a card write can take longer than that.
+
+static constexpr size_t kStreamBytes = 64 * 1024;  // ~16 s of coded voice
+static StreamBufferHandle_t stream = nullptr;
+static File noteFile;
+static String notePath;
+static uint32_t noteRate = 16000;
+static size_t noteMaxBytes = 0;          // the room it had when it began
+static size_t noteBytes = 0;             // coded bytes handed to the writer
+static volatile size_t written = 0;      // …and put in the file by it
+static volatile bool writeFailed = false;
+static adpcm::StreamCoder coder;
+
+static void writerLoop(void*) {
+  static uint8_t buf[4096];  // a flash sector a write
+  for (;;) {
+    const size_t n = xStreamBufferReceive(stream, buf, sizeof(buf), portMAX_DELAY);
+    if (!n) continue;
+    if (!noteFile || noteFile.write(buf, n) != n) writeFailed = true;
+    written += n;
+  }
+}
+
+// Coded bytes to the writer.
+static void toWriter(const uint8_t* bytes, size_t n) {
+  const size_t sent = xStreamBufferSend(stream, bytes, n, pdMS_TO_TICKS(20));
+  if (sent < n) writeFailed = true;  // the writer is 16 s behind: the store is stuck
+  noteBytes += sent;
+}
+
+bool beginNote(uint32_t rate, time_t when) {
+  if (!mounted || noteOn) return false;
+  if (!stream) {  // the first note: its buffer and its writer
+    static StaticStreamBuffer_t holder;
+    uint8_t* mem = (uint8_t*)ps_malloc(kStreamBytes + 1);
+    if (!mem) return false;
+    stream = xStreamBufferCreateStatic(kStreamBytes, 1, mem, &holder);
+    if (!stream || xTaskCreatePinnedToCore(writerLoop, "notes", 4096, nullptr, 1, nullptr, 0) != pdPASS) {
+      stream = nullptr;
+      return false;
+    }
+  }
+  const uint64_t perSecond = keptRate(rate) / 2;
+  if (cachedFree < kKeepFree + kHead + perSecond * 3) return false;  // under 3 s of room
+  noteMaxBytes = (size_t)min<uint64_t>(cachedFree - kKeepFree - kHead, 0x7FFFFFFF);
+  char path[64];
+  snprintf(path, sizeof(path), "%s/%010lu-%08lx.adp", kDir, (unsigned long)(when > 0 ? when : 0),
+           (unsigned long)esp_random());
+  noteFile = store->open(path, FILE_WRITE);
+  if (!noteFile) return false;
+  uint8_t h[kHead] = {'C', 'C', 'A', '1'};
+  put32(h + 4, keptRate(rate));  // its length goes in at the end
+  if (noteFile.write(h, kHead) != kHead) {
+    noteFile.close();
+    store->remove(path);
+    return false;
+  }
+  notePath = path;
+  noteRate = rate;
+  coder = adpcm::StreamCoder();
+  coder.halve = keptRate(rate) != rate;
+  noteBytes = 0;
+  written = 0;
+  writeFailed = false;
+  xStreamBufferReset(stream);
+  noteOn = true;
+  return true;
+}
+
+void addNote(const int16_t* pcm, size_t samples) {
+  if (noteOn) coder.push(pcm, samples, toWriter);
+}
+
+bool noteFull() { return noteOn && (writeFailed || noteBytes + 4096 >= noteMaxBytes); }
+
+// The writer caught up with what it was given (or 10 s went by).
+static void drained() {
+  for (uint32_t t0 = millis(); written < noteBytes && millis() - t0 < 10000;) delay(5);
+}
+
+bool endNote() {
+  if (!noteOn) return false;
+  coder.finish(toWriter);
+  drained();
+  noteOn = false;
+  const uint64_t kept = coder.samples;
+  bool ok = !writeFailed && written >= noteBytes && kept >= keptRate(noteRate);  // a second at least
+  if (ok) {
+    uint8_t n[4];
+    put32(n, (uint32_t)kept);
+    ok = noteFile.seek(8) && noteFile.write(n, 4) == 4;
+  }
+  noteFile.close();
+  if (!ok) {
+    store->remove(notePath);
+    cachedFree = freeNow();
+    return false;
+  }
+  ++cachedCount;
+  cachedMs += kept * 1000 / keptRate(noteRate);
+  cachedFree = freeNow();
+  return true;
+}
+
+void dropNote() {
+  if (!noteOn) return;
+  drained();
+  noteOn = false;
+  noteFile.close();
+  store->remove(notePath);
+  cachedFree = freeNow();
 }
 
 }  // namespace notes

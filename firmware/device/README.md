@@ -172,6 +172,12 @@ speaking and trouble exactly as above; the voice carries the answers:
   flash: B after a sleep shows it. Hold B for the dashboard now.
 - **A talks** (1.0.11; C before): press, talk, press again — or 2.5 s of
   quiet sends it; a double press plays the last answer again.
+- **Note-taking mode** (1.0.16): hold A (1 s) to turn it on or off — rising
+  tones on, falling off, and the dashboard redraws ("NOTE MODE · HOLD A TO
+  SEND", the A key says "note"). While it's on, every recording is kept as a
+  voice note, online too (press A, talk, press A; no 2.5 s quiet stop — notes
+  have their pauses); turning it off sends them all to the agent as one
+  turn. The press that holds on begins a recording, which is dropped.
 - **C: the options code** (1.0.11; A before) — the phone settings page; with
   no Wi-Fi it opens the setup hotspot instead. On it, A goes back (to the
   answer or the dashboard, where it was opened from) and C installs the
@@ -216,7 +222,13 @@ speaking and trouble exactly as above; the voice carries the answers:
   named the way the device names them (`<epoch>-<8 hex>.adp`) are ever read,
   sent to the agent or removed: anything else on the card is left alone.
   The card shares the panel's bus, so it waits while the paper redraws.
-  Each note is still at most 60 s (it's held in memory while you talk).
+- **No length limit on a note** (1.0.16): a note made awake (note mode, or
+  offline) is written to the card or flash as it's recorded — coded on the
+  main loop (`adpcm::StreamCoder`, the same bytes as coding it whole:
+  `test/host/adpcm_stream.cpp`), written by a task of its own so a slow
+  write never stalls the mic — up to the room left (about 14 min in flash,
+  hours on a card). A recording begun by the press that wakes the paper is
+  still held in memory first (up to 30 s): it starts before the storage is.
 - **Recording lights** (1.0.7): the left light blinks red while it records
   (brighter as you speak); the right one, steady, says how long it's been —
   green for the first 20 s, yellow for the next 20 s, red after that.

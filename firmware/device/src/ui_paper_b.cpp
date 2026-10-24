@@ -932,8 +932,8 @@ static int drawClimate(int x, int y, int w) {
 
 // A block: a label, a large line, a quieter line under it; where it ends.
 static int drawBlock(int x, int y, int w, const String& label, const String& big, const String& small,
-                     uint16_t bigInk = kInk) {
-  drawLabel(label, x, y);
+                     uint16_t bigInk = kInk, uint16_t labelInk = kBlue) {
+  drawLabel(label, x, y, labelInk);
   y += 28;
   font(vlw::Title);
   text(fit(big, w), x, y, bigInk);
@@ -1000,7 +1000,10 @@ static void drawDashboard(bool asleep) {
                       : roomMin < 1    ? String("no room left for more")
                       : notes::onCard() ? "microSD card · " + String(gb) + " free"
                                         : "room for " + String(roomMin) + " min more";
-  y = drawBlock(x, y, w, "VOICE NOTES", kept, room);
+  // Note-taking mode: every recording is kept, and goes to the agent once
+  // the mode is turned off (hold A).
+  if (lastHome.noteMode) y = drawBlock(x, y, w, "NOTE MODE · HOLD A TO SEND", kept, room, kInk, kRed);
+  else y = drawBlock(x, y, w, "VOICE NOTES", kept, room);
   y += 8;
   // The links, a row each, in the ink of their state; asleep, how to wake.
   drawLabel(asleep ? "ASLEEP" : "LINKS", x, y);
@@ -1026,7 +1029,8 @@ static void drawDashboard(bool asleep) {
       text(hAgent == Up ? "agent linked" : "no agent yet", x, y + 26, hAgent == Up ? kGreen : kYellow);
     }
   }
-  drawFooter({{board::kTalkKey, "talk"}, {board::kSideKey, "options"}, {board::kBackKey, "answer"}});
+  drawFooter({{board::kTalkKey, lastHome.noteMode ? "note" : "talk"}, {board::kSideKey, "options"},
+              {board::kBackKey, "answer"}});
 }
 
 static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asleep); }); }
