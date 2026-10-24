@@ -181,6 +181,11 @@ void answerStarted();
 void answerEnded();
 // A on the options: back to the page they were opened from.
 void leaveOptions();
+// The links' state for the dashboard (its LINKS rows), without drawing.
+void setHome(const Home& home);
+// The links have been down a while (or came back after that): what the
+// paper shows is drawn again with them.
+void linksChanged();
 #endif
 
 // Conversation views (text mode).

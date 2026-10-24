@@ -1044,9 +1044,13 @@ static void dashboardIfDue() {
   if (now || dashDue()) askDashboard(false);
 }
 
-void showHome(const Home& home) {
+void setHome(const Home& home) {
   lastHome = home;
   haveHome = true;
+}
+
+void showHome(const Home& home) {
+  setHome(home);
   dashboardIfDue();
 }
 
@@ -1373,6 +1377,19 @@ void leaveOptions() {
   } else {
     drawNow();
   }
+}
+
+// The links went down a while ago (or came back after that): the paper is
+// drawn again with them — the dashboard's LINKS rows, the top bar's dots. An
+// answer being read keeps its page (its dots change); the options or setup
+// code stays as it is.
+void linksChanged() {
+  if (shownKind == Kind::Link || shownKind == Kind::Setup) return;
+  if (viewing && shownKind == Kind::Reply) {
+    if (!sounding) askReplyPage();
+    return;
+  }
+  askDashboard(false);
 }
 
 // ── everything else: the lights and the voice carry it ─────────────────

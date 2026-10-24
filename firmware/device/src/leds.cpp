@@ -177,9 +177,11 @@ void tick() {
       show(c, c);
       break;
     }
-    case State::Connecting: {  // blue, blinking
-      uint32_t c = fmodf(t, 1.0f) < 0.5f ? scale(40, 80, 255, 0.8f) : 0;
-      show(c, c);
+    case State::NoWifi:  // offline, blue blinking: the left light, no Wi-Fi
+    case State::NoAgent: {  // the right light, Wi-Fi but no Flight Deck or no agent
+      const uint32_t c = fmodf(t, 1.0f) < 0.5f ? scale(40, 80, 255, 0.8f) : 0;
+      if (state == State::NoWifi) show(c, 0);
+      else show(0, c);
       break;
     }
     case State::Updating: {  // downloading an update: left, then right, a purple blink a second each
