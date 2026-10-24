@@ -9,6 +9,7 @@ from aiohttp import web
 
 from captain_claw import mail_authority
 from captain_claw.agent import Agent
+from captain_claw.llm import reasoning
 from captain_claw.logging import get_logger
 
 if TYPE_CHECKING:
@@ -474,45 +475,48 @@ async def handle_ws_message(
                                             "rotation_cue": True})
                 if not rest and not has_attachments:
                     return
-        if automation is None and not has_attachments and content.startswith("/"):
-            from captain_claw.web.slash_commands import handle_command
-            # On this socket's own agent, as a "command" frame is: a lane's
-            # /new must not switch lane A's session.
-            _cmd_agent = await server.resolve_agent(ws)
-            await handle_command(server.lane_view(ws, _cmd_agent), ws, content)
-        elif (automation is None and not has_attachments
-              and getattr(server.agent, "plan_mode_auto", False)):
-            from captain_claw.web.plan_auto_route import handle_plan_auto_route
-            with mail_authority.bound(mail_authority.interactive(content)):
-                await handle_plan_auto_route(server, ws, content)
-        else:
-            from captain_claw.web.chat_handler import handle_chat
-            await handle_chat(
-                server, ws, content,
-                image_path=image_paths[0] if len(image_paths) == 1 else None,
-                file_path=file_paths[0] if len(file_paths) == 1 else None,
-                image_paths=image_paths if len(image_paths) > 1 else None,
-                file_paths=file_paths if len(file_paths) > 1 else None,
-                attachment_notes=attachment_notes or None,
-                context_notes=context_notes or None,
-                client_msg_id=client_msg_id,
-                rewind_to=rewind_to,
-                whatsapp_waid=whatsapp_waid,
-                origin=origin,
-                surface=surface,
-                no_flow=bool(data.get("no_flow", False)),
-                deny_tools=[str(t) for t in (data.get("deny_tools") or [])],
-                no_tools=bool(data.get("no_tools", False)),
-                no_broadcast=bool(data.get("no_broadcast", False)),
-                # Queue-dispatched turns skip the post-turn "what next?" call.
-                no_next_steps=bool(data.get("no_next_steps", False)),
-                no_rephrase=bool(data.get("no_rephrase", False)),
-                automation=automation,
-                fd_delivers=fd_delivers,
-                task=task,
-                # A scheduled job delivering to WhatsApp: where its files go.
-                whatsapp_media_to=str(data.get("whatsapp_media_to", "") or "").strip() or None,
-            )
+        # The reasoning effort picked in the chat box (absent = the model's
+        # default). Scoped to this frame: the turn's task inherits it.
+        with reasoning.turn_effort(data.get("reasoning_effort")):
+            if automation is None and not has_attachments and content.startswith("/"):
+                from captain_claw.web.slash_commands import handle_command
+                # On this socket's own agent, as a "command" frame is: a lane's
+                # /new must not switch lane A's session.
+                _cmd_agent = await server.resolve_agent(ws)
+                await handle_command(server.lane_view(ws, _cmd_agent), ws, content)
+            elif (automation is None and not has_attachments
+                  and getattr(server.agent, "plan_mode_auto", False)):
+                from captain_claw.web.plan_auto_route import handle_plan_auto_route
+                with mail_authority.bound(mail_authority.interactive(content)):
+                    await handle_plan_auto_route(server, ws, content)
+            else:
+                from captain_claw.web.chat_handler import handle_chat
+                await handle_chat(
+                    server, ws, content,
+                    image_path=image_paths[0] if len(image_paths) == 1 else None,
+                    file_path=file_paths[0] if len(file_paths) == 1 else None,
+                    image_paths=image_paths if len(image_paths) > 1 else None,
+                    file_paths=file_paths if len(file_paths) > 1 else None,
+                    attachment_notes=attachment_notes or None,
+                    context_notes=context_notes or None,
+                    client_msg_id=client_msg_id,
+                    rewind_to=rewind_to,
+                    whatsapp_waid=whatsapp_waid,
+                    origin=origin,
+                    surface=surface,
+                    no_flow=bool(data.get("no_flow", False)),
+                    deny_tools=[str(t) for t in (data.get("deny_tools") or [])],
+                    no_tools=bool(data.get("no_tools", False)),
+                    no_broadcast=bool(data.get("no_broadcast", False)),
+                    # Queue-dispatched turns skip the post-turn "what next?" call.
+                    no_next_steps=bool(data.get("no_next_steps", False)),
+                    no_rephrase=bool(data.get("no_rephrase", False)),
+                    automation=automation,
+                    fd_delivers=fd_delivers,
+                    task=task,
+                    # A scheduled job delivering to WhatsApp: where its files go.
+                    whatsapp_media_to=str(data.get("whatsapp_media_to", "") or "").strip() or None,
+                )
 
     elif msg_type == "run_tool":
         # Deterministic, structured tool invocation (the autonomous action rail).

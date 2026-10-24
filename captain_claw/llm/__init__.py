@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Callable
 import httpx
 
 from captain_claw.exceptions import LLMAPIError, LLMError
+from captain_claw.llm import reasoning
 from captain_claw.llm.vision import (
     IMAGE_TOKEN_ALLOWANCE as _IMAGE_TOKEN_ALLOWANCE,
     as_encoded as _as_encoded,
@@ -450,6 +451,146 @@ def _allow_reasoning_effort(kwargs: dict[str, Any]) -> None:
         kwargs["allowed_openai_params"] = allowed + ["reasoning_effort"]
 
 
+def _apply_reasoning_plan(kwargs: dict[str, Any], plan: "reasoning.Plan", provider: str) -> None:
+    """Put a reasoning-effort plan's fields on a LiteLLM request.
+
+    Body fields ride in ``extra_body`` — except for Anthropic, whose LiteLLM
+    route sends ``extra_body`` as a literal field: there they are top-level
+    params (``thinking``, ``output_config``), which LiteLLM forwards once its
+    model map says the model takes them (:func:`_teach_litellm_reasoning`).
+    """
+    for key in plan.drop:
+        kwargs.pop(key, None)
+    kwargs.update(plan.kwargs)
+    if not plan.body:
+        return
+    if provider == "anthropic":
+        kwargs.update(plan.body)
+        effort = (plan.body.get("output_config") or {}).get("effort")
+        _teach_litellm_reasoning(str(kwargs.get("model", "")), effort)
+        return
+    extra = dict(kwargs.get("extra_body") or {})
+    extra.update(plan.body)
+    kwargs["extra_body"] = extra
+
+
+_LITELLM_TAUGHT: set[tuple[str, str]] = set()
+
+
+def _teach_litellm_reasoning(model: str, effort: str | None) -> None:
+    """Record in LiteLLM's model map that this Claude model thinks (so the
+    ``thinking`` param passes) and takes *effort* — LiteLLM refuses
+    ``output_config.effort`` xhigh/max client-side for models its bundled map
+    doesn't flag, and the map lags new Claude releases. Merges into any
+    existing entry; pricing is untouched."""
+    base = model.split("/")[-1]
+    marker = (base, effort or "")
+    if not base or marker in _LITELLM_TAUGHT:
+        return
+    _LITELLM_TAUGHT.add(marker)
+    flags: dict[str, Any] = {"litellm_provider": "anthropic", "mode": "chat", "supports_reasoning": True}
+    if effort in ("xhigh", "max"):
+        flags[f"supports_{effort}_reasoning_effort"] = True
+    try:
+        import litellm
+
+        litellm.register_model({base: flags})
+    except Exception as exc:
+        log.debug("Could not extend LiteLLM's model map", model=base, error=str(exc))
+
+
+def _continues_tool_call(messages: list[Any]) -> bool:
+    """Whether *messages* end in tool results answering an assistant turn
+    that carries no thinking block — Anthropic then refuses thinking with a
+    fixed budget ("a final assistant message must start with a thinking
+    block"), and we don't keep thinking blocks to echo."""
+    tool_results = 0
+    for m in reversed(messages or []):
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+        if role == "tool":
+            tool_results += 1
+            continue
+        if role != "assistant" or not tool_results:
+            return False
+        has_calls = bool(m.get("tool_calls") if isinstance(m, dict) else getattr(m, "tool_calls", None))
+        blocks = m.get("thinking_blocks") if isinstance(m, dict) else getattr(m, "thinking_blocks", None)
+        return has_calls and not blocks
+    return False
+
+
+def _plan_conflicts(plan: "reasoning.Plan", kwargs: dict[str, Any]) -> bool:
+    """A plan this particular call can't carry: thinking with a fixed budget
+    mid tool loop, or thinking switched on beside a forced tool choice (a
+    stall retry) — the forced choice wins for that one call."""
+    if plan.needs_thinking_echo and _continues_tool_call(kwargs.get("messages") or []):
+        return True
+    forced = kwargs.get("tool_choice") not in (None, "auto", "none")
+    thinking = plan.body.get("thinking")
+    turns_on = isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive")
+    return forced and turns_on
+
+
+def _force_reasoning_off(kwargs: dict[str, Any]) -> None:
+    """Send reasoning_effort="none" (a model that refuses tools otherwise),
+    also over a plan's body copy, which would win in the JSON."""
+    kwargs["reasoning_effort"] = "none"
+    extra = kwargs.get("extra_body")
+    if isinstance(extra, dict) and "reasoning_effort" in extra:
+        kwargs["extra_body"] = {**extra, "reasoning_effort": "none"}
+
+
+# Request fields a reasoning-effort plan may add (top level / JSON body).
+_REASONING_KWARGS = ("reasoning_effort", "thinking", "thinkingConfig", "reasoning", "output_config")
+_REASONING_BODY_KEYS = frozenset({
+    "reasoning_effort", "thinking", "reasoning", "enable_thinking", "thinking_budget",
+    "chat_template_kwargs", "output_config",
+})
+_REASONING_FIELD_WORDS = (
+    "reasoning_effort", "reasoning", "thinking", "thinkingconfig", "thinking_config",
+    "thinkinglevel", "thinking_level", "thinkingbudget", "thinking_budget",
+    "enable_thinking", "output_config", "effort", "chat_template_kwargs",
+)
+_REFUSAL_WORDS = (
+    "not supported", "unsupported", "unrecognized", "unknown", "invalid", "not allowed",
+    "extra inputs", "not permitted", "does not support", "unexpected", "must be one of",
+    "expected `thinking`", "not available", "is not a valid",
+)
+
+
+def _is_reasoning_field_refused_error(msg: str) -> bool:
+    """Whether *msg* (lowercased) refuses one of the reasoning fields (a
+    model or server that doesn't take the effort it was sent) — and isn't
+    one of the 400s healed some other way."""
+    if (_is_reasoning_content_required_error(msg) or _is_tool_choice_unsupported_error(msg)
+            or _is_temperature_rejected_error(msg) or _is_reasoning_with_tools_rejected_error(msg)):
+        return False
+    return any(w in msg for w in _REASONING_FIELD_WORDS) and any(w in msg for w in _REFUSAL_WORDS)
+
+
+def _strip_reasoning_fields(kwargs: dict[str, Any]) -> bool:
+    """Drop every reasoning field from *kwargs*; True when there was one."""
+    found = False
+    for key in _REASONING_KWARGS:
+        if key in kwargs:
+            kwargs.pop(key)
+            found = True
+    extra = kwargs.get("extra_body")
+    if isinstance(extra, dict) and _REASONING_BODY_KEYS & extra.keys():
+        rest = {k: v for k, v in extra.items() if k not in _REASONING_BODY_KEYS}
+        if rest:
+            kwargs["extra_body"] = rest
+        else:
+            kwargs.pop("extra_body", None)
+        found = True
+    allowed = [p for p in kwargs.get("allowed_openai_params") or [] if p not in _REASONING_KWARGS]
+    if "allowed_openai_params" in kwargs:
+        if allowed:
+            kwargs["allowed_openai_params"] = allowed
+        else:
+            kwargs.pop("allowed_openai_params")
+    return found
+
+
 def _is_healable_request_error(msg: str) -> bool:
     """Whether *msg* (lowercased) is a 400 :func:`_heal_request_kwargs` can fix."""
     return (
@@ -460,6 +601,7 @@ def _is_healable_request_error(msg: str) -> bool:
         or _is_reasoning_content_required_error(msg)
         or _output_budget_that_fits(msg) is not None
         or _is_image_input_rejected_error(msg)
+        or _is_reasoning_field_refused_error(msg)
     )
 
 
@@ -538,7 +680,7 @@ def _heal_request_kwargs(
     # /v1/chat/completions). Keep the tools, turn reasoning off, and
     # remember the model so later tool calls send "none" up front.
     if kwargs.get("tools") and _is_reasoning_with_tools_rejected_error(msg):
-        retry_kwargs["reasoning_effort"] = "none"
+        _force_reasoning_off(retry_kwargs)
         _allow_reasoning_effort(retry_kwargs)
         stripped.append("reasoning_effort")
         base = str(kwargs.get("model", "")).split("/")[-1].lower()
@@ -560,6 +702,13 @@ def _heal_request_kwargs(
         retry_kwargs["messages"] = _strip_image_parts(retry_kwargs.get("messages"))
         stripped.append("images")
         _remember_provider_rejected_images(provider, kwargs.get("model", ""))
+
+    # The model or server refused a reasoning field (an effort it doesn't
+    # take, a server without thinking controls): send the request without
+    # them, and give the model its own default for the rest of the run.
+    if _is_reasoning_field_refused_error(msg) and _strip_reasoning_fields(retry_kwargs):
+        stripped.append("reasoning")
+        reasoning.remember_refused(str(kwargs.get("model", "")))
 
     reasoning_backfilled = False
     if _is_reasoning_content_required_error(msg):
@@ -2015,8 +2164,11 @@ class ChatGPTResponsesProvider(LLMProvider):
             "prompt_cache_key": self.session_id,
         }
         payload["instructions"] = instructions or "Follow the user's instructions."
-        if self.reasoning_effort:
-            payload["reasoning"] = {"effort": self.reasoning_effort}
+        # The chat box's reasoning effort for this call, else the suffix's.
+        plan = reasoning.plan_for_provider(self)
+        effort = plan.responses_effort if plan is not None else self.reasoning_effort
+        if effort:
+            payload["reasoning"] = {"effort": effort}
         return payload
 
     @staticmethod
@@ -3030,6 +3182,14 @@ class OllamaProvider(LLMProvider):
         self.client = httpx.AsyncClient(timeout=120.0, follow_redirects=True)
         self.rate_limiter = TokenRateLimiter(tokens_per_minute) if tokens_per_minute > 0 else None
 
+    def _think_for_call(self) -> bool | str | None:
+        """`think` for this request: the chat box's reasoning effort when one
+        was picked (False turns thinking off), else the provider's own."""
+        plan = reasoning.plan_for_provider(self)
+        if plan is not None and plan.ollama_think is not None:
+            return plan.ollama_think
+        return self.think or None
+
     async def complete(
         self,
         messages: list[Message],
@@ -3069,8 +3229,9 @@ class OllamaProvider(LLMProvider):
             "stream": False,
             "options": options,
         }
-        if self.think:
-            body["think"] = self.think
+        think = self._think_for_call()
+        if think is not None:
+            body["think"] = think
         if ollama_tools:
             body["tools"] = ollama_tools
         if response_schema:
@@ -3124,6 +3285,7 @@ class OllamaProvider(LLMProvider):
                         log.warning("Ollama model rejected think — retrying without",
                                     model=self.model)
                         self.think = False
+                        reasoning.remember_refused(self.model)
                         body.pop("think", None)
                         continue
                     # Model can't take images → send the text, fall back after.
@@ -3310,8 +3472,9 @@ class OllamaProvider(LLMProvider):
             "stream": True,
             "options": options,
         }
-        if self.think:
-            body["think"] = self.think
+        think = self._think_for_call()
+        if think is not None:
+            body["think"] = think
         if ollama_tools:
             body["tools"] = ollama_tools
 
@@ -3334,6 +3497,7 @@ class OllamaProvider(LLMProvider):
                             log.warning("Ollama model rejected think — retrying without",
                                         model=self.model)
                             self.think = False
+                            reasoning.remember_refused(self.model)
                             body.pop("think", None)
                             continue
                         raise LLMAPIError(
@@ -3513,17 +3677,24 @@ class LiteLLMProvider(LLMProvider):
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
 
+        # The reasoning effort picked in the chat box for this call (see
+        # llm/reasoning.py) — it replaces the model-name suffix below.
+        plan = reasoning.plan_for_provider(self, max_tokens=kwargs.get(token_key))
+        if plan is not None and _plan_conflicts(plan, kwargs):
+            plan = None
+        if plan is not None:
+            _apply_reasoning_plan(kwargs, plan, self.provider)
         # Reasoning-effort suffix on OpenAI reasoning-capable models
         # (gpt-5*, o-series) and DeepSeek thinking-mode models.
         # LiteLLM forwards ``reasoning_effort`` to OpenAI as
         # ``reasoning.effort`` and to DeepSeek as the same field.
-        if self.reasoning_effort and self.provider in ("openai", "deepseek"):
+        elif self.reasoning_effort and self.provider in ("openai", "deepseek"):
             kwargs["reasoning_effort"] = self.reasoning_effort
         # Models learned to refuse tools unless reasoning is off.
         if kwargs.get("tools") and (
             str(self.model).split("/")[-1].lower() in _REASONING_OFF_WITH_TOOLS_MODELS
         ):
-            kwargs["reasoning_effort"] = "none"
+            _force_reasoning_off(kwargs)
         _allow_reasoning_effort(kwargs)
 
         # DeepSeek thinking-mode opt-in. Only the dedicated reasoning
@@ -3534,7 +3705,7 @@ class LiteLLMProvider(LLMProvider):
         # since the user clearly wanted to think. An ops override
         # via ``FD_DEEPSEEK_THINKING=off`` disables this if it ever
         # causes trouble.
-        if self.provider == "deepseek":
+        if self.provider == "deepseek" and plan is None:
             thinking_on = self.reasoning_effort not in (None, "none")
             if self.reasoning_effort == "none":
                 kwargs.pop("reasoning_effort", None)
