@@ -138,10 +138,14 @@ int main(int argc, char** argv) {
   g_previewMillis = 123456;
 
   bar("ready", kGreen);
-  ui::Home home{true, "All good", kGreen, "Hold the yellow button to talk", {}};
+  ui::Home home{true, "All good", kGreen, "Press the yellow button to talk", {}};
   home.battery = "≈ 2 h 10 min left";
   ui::showHome(home);
   save("01_home");
+  home.noteMode = true;  // hold the yellow button: note-taking mode
+  ui::showHome(home);
+  save("01b_home_note_mode");
+  home.noteMode = false;
 
   bar("ready", kYellow, ui::Up, ui::Partial);
   ui::showHome({false, "Getting ready", kYellow, "Waiting for the agent", {}});
@@ -151,6 +155,9 @@ int main(int argc, char** argv) {
   int lv[] = {10, 30, 55, 80, 62, 40, 70, 90, 66, 35, 20, 48, 75, 58, 30};
   for (int l : lv) ui::showListening(l, 4300);
   save("03_listening");
+  bar("note", kRed);  // a note: kept, not sent
+  for (int l : lv) ui::showListening(l, 83000);
+  save("03b_listening_note");
 
   bar("12s · 3 steps", kYellow);
   g_previewMillis = 200400;

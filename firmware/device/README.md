@@ -410,9 +410,18 @@ StickS3:
 | double-click | hear the last answer again | (on an answer) hear it again |
 | in the agent list | choose | move down |
 
-StopWatch: hold the yellow button to talk and let go to send; a tap stops
-speech or flips picture ↔ text; the other button works like the StickS3's
-side button.
+StopWatch (0.18.0): press the yellow button once, talk, and press it again —
+or just stop: 2.5 s of quiet sends it, as the on-screen record button does (it
+was hold-to-talk). A press while it speaks stops the speech; a double press
+plays the last answer again; a press that wakes the watch starts a recording
+(dropped if nothing is said). Hold the yellow button (1 s) for **note-taking
+mode**, as on the PaperColor B: every recording is kept as a voice note (the
+screen says "Note", the ring goes round once a minute, no quiet stop), the
+clock face shows a red arc and "Note mode · hold yellow to send", and holding
+it again turns the mode off and sends the notes to the agent as one turn (no
+asking). Notes — in note mode or offline — are written to flash as they're
+recorded, so there's no 1-minute limit, only the room left. The other button
+works like the StickS3's side button.
 
 **Replay.** Double-click the side button on an answer (its text or its picture), or
 choose Menu → *Replay answer* (the first row, while there's an answer with sound), to

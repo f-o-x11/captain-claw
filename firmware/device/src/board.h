@@ -23,11 +23,11 @@ constexpr const char* kNoun = "watch";        // "the watch restarts…"
 constexpr const char* kIdPrefix = "watch";    // device id: watch-a1b2c3
 constexpr const char* kTalkButton = "yellow button";
 constexpr const char* kSideButton = "other button";
-constexpr const char* kTalkHint = "Hold the yellow button to talk";  // the home screen's call to action
+constexpr const char* kTalkHint = "Press the yellow button to talk";  // the home screen's call to action
 // Hold to talk, let go to send (false), or press to start and press again to
-// send (true).
-constexpr bool kTalkToggles = false;
-constexpr bool kTalkFromSleep = true;  // woken by the talk button and still holding it: talking already
+// send (true) — or 2.5 s of quiet sends it, as the on-screen button does.
+constexpr bool kTalkToggles = true;
+constexpr bool kTalkFromSleep = true;  // a press that wakes it starts a recording (dropped if nothing's said)
 // Which of M5Unified's buttons (A/B/C) talks, goes next and goes back (0: none).
 constexpr char kTalkM5 = 'A', kSideM5 = 'B', kBackM5 = 0;
 constexpr const char* kTalkKey = "A";         // the letters a screen prints for them
@@ -142,6 +142,15 @@ constexpr bool kChunkedImages = false;
 constexpr bool kPaperB = true;
 #else
 constexpr bool kPaperB = false;
+#endif
+
+// Note-taking mode (hold the talk button): every recording is kept as a voice
+// note, written to flash (or a card) as it's recorded, and they all go to the
+// agent once the mode is turned off. The B paper and the StopWatch.
+#if defined(PAPER_B) || defined(BOARD_STOPWATCH)
+constexpr bool kNoteMode = true;
+#else
+constexpr bool kNoteMode = false;
 #endif
 
 }  // namespace board
