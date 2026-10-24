@@ -182,7 +182,7 @@ static void handleRoot() {
            "(light blue a tool, dark blue narration, purple the model); green blinks with the voice. Starting "
            "up: left = Wi-Fi, right = agent (yellow trying, green up, red not). Idle: a blink every 10 s, "
            "green, then blue, then yellow as sleep nears.</small>"
-           "<label>Key clicks</label><select name=clicks>");
+           "<label>Key beeps (A and B)</label><select name=clicks>");
     h += option("1", "On", settings.keyClicks) + option("0", "Off", !settings.keyClicks);
     h += F("</select>");
   }

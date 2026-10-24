@@ -107,10 +107,12 @@ void talkEnd() {
   M5.Speaker.tone(880, 80, 1, true);  // A5
 }
 
-void click() {
+void click(bool low) {
   if (micOn || streamOpen) return;  // never over the mic or a voice
   if (!M5.Speaker.isEnabled()) M5.Speaker.begin();
-  M5.Speaker.tone(2600, 14, 1);
+  // 60 ms: the codec, just woken, swallows the start of a sound (a 14 ms tick
+  // was never heard); a note apart from the recording blips (A6 / A5).
+  M5.Speaker.tone(low ? 1047 : 1319, 60, 1);  // C6 / E6
 }
 
 static void submitNext() {

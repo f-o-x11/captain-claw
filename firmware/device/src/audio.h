@@ -25,7 +25,9 @@ void cueEnd(); // the same two tones the other way round: "done speaking"
 // Recording sounds — single notes, unlike the two-note speech chimes:
 void talkStart(); // a short high blip as a recording begins; returns 0.25 s later, the blip played
 void talkEnd();   // a short lower blip when it's let go (sent, or kept offline)
-void click(); // a short tick for a button press (the paper changes slowly)
+// A short beep for a button press (the paper changes slowly): `low` for the
+// second button, so the two sound apart.
+void click(bool low = false);
 
 // ── microphone ──
 void micStart();

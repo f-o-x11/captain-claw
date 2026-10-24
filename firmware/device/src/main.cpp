@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.3"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.4"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -3007,11 +3007,15 @@ void loop() {
   // main screen, which starts talking right away.
   bool dark = screenOff;
 
-  // The paper changes slowly: a click says the press was heard.
-  if (board::kEpaper && settings.keyClicks && !prerollOn &&
-      (sideBtn().wasPressed() || backBtn().wasPressed() ||
-       (talkBtn().wasPressed() && (inMenu || mode == Mode::Link || mode == Mode::Ask)))) {
-    audio::click();
+  // The paper changes slowly: a short beep says the press was heard — A
+  // higher, B lower (C has its recording blips).
+  if (board::kEpaper && settings.keyClicks && !prerollOn) {
+    if (sideBtn().wasPressed() ||
+        (talkBtn().wasPressed() && (inMenu || mode == Mode::Link || mode == Mode::Ask))) {
+      audio::click();
+    } else if (backBtn().wasPressed()) {
+      audio::click(true);
+    }
   }
 
   // Front button: hold to talk, tap for quick actions; in the menu, choose.
