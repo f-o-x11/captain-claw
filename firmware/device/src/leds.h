@@ -1,6 +1,8 @@
 // Status lights (PaperColor: two RGB LEDs). The paper takes ~20 s to redraw,
-// so the lights say what's happening now: red blinking while it records you
-// (like a REC light, brighter when you're louder), a blink for every step
+// so the lights say what's happening now: while it records you the left one
+// blinks red (a REC light, brighter when you're louder) and the right one
+// shows the time left — steady red, then a slow blink, then a fast one; a
+// blink for every step
 // the deck reports while the agent works — light blue for a tool, dark blue
 // for narration and progress, purple for the model thinking — green with the voice
 // while it speaks, a soft white glow while the paper redraws, purple blinks
@@ -21,6 +23,9 @@ void begin();
 void setLevel(uint8_t level);
 // What the device is doing; `level` 0..100 is the mic or the voice.
 void set(State state, int level = 0);
+// Recording (State::Listening): how much of its time is used, 0..1 — the
+// right light shows what's left.
+void recordUsed(float used);
 // Idle: a short blink every 10 s — green for the first 30% of the way to
 // sleep, blue for the next 50%, yellow for the last 20%.
 void setIdle(uint32_t idleMs, uint32_t sleepMs);

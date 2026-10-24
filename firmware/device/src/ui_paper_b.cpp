@@ -30,6 +30,7 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <Preferences.h>
+#include <lgfx/v1/panel/Panel_ED2208.hpp>
 
 #include "battery.h"
 #include "notes.h"
@@ -40,6 +41,8 @@ int minutesToFull();
 }  // namespace battery
 namespace notes {
 bool ready();
+bool onCard();
+uint64_t freeBytes();
 int count();
 uint32_t seconds();
 size_t room(uint32_t rate);
@@ -392,11 +395,153 @@ static void waitPanel(uint32_t ms) {
   while (M5.Display.displayBusy() && millis() - t0 < ms) delay(20);
 }
 
+// ── the clock's window: a partial refresh ──────────────────────────────
+//
+// The ED2208's undocumented partial-window command (0x83, the sequence from
+// esphome/esphome#20944; tried on this panel before, and it works): only the
+// rectangle given is driven, black and white. It takes about as long as a
+// full refresh, but only that window changes. The rest of the page may fade
+// a little over many of them, so after kClockPartialsMax in a row the next
+// minute redraws the whole dashboard instead. The bus is let go while the
+// panel works (the microSD card shares it).
+
+static int partialsInARow = 0;
+static volatile bool partialNext = false;  // the refresh asked for is the clock's window only
+static Rect partialRect;
+
+#ifndef PREVIEW
+// The panel's framebuffer, bus and pins (M5GFX keeps them protected).
+struct PaperPanel : lgfx::Panel_ED2208 {
+  int width() const { return _cfg.panel_width; }
+  int height() const { return _cfg.panel_height; }
+  const uint8_t* row(int y) const { return _lines_buffer[y]; }
+
+  void cmd(uint8_t c) { _bus->writeCommand(c, 8); }
+  void data(uint8_t d) { _bus->writeData(d, 8); }
+  bool idle() const { return _cfg.pin_busy < 0 || lgfx::gpio_in(_cfg.pin_busy); }
+  void waitBusy(uint32_t ms) {
+    _bus->wait();
+    uint32_t t0 = millis();
+    while (!idle() && millis() - t0 < ms) delay(10);
+  }
+  void begin() {
+    _bus->beginTransaction();
+    cs_control(false);
+  }
+  void end() {
+    _bus->wait();
+    cs_control(true);
+    _bus->endTransaction();
+  }
+
+  void window(int x0, int y0, int x1, int y1) {
+    cmd(0x83);  // partial window
+    for (int v : {x0, x1, y0, y1}) {
+      data(v >> 8);
+      data(v & 0xFF);
+    }
+    data(0x01);
+  }
+
+  // Drives [x0..x1] × [y0..y1] (native pixels, inclusive; x widened to
+  // fours, the controller's step) from the framebuffer.
+  void partial(int x0, int y0, int x1, int y1) {
+    x0 &= ~3;
+    x1 = min(width() - 1, x1 | 3);
+    const int w = x1 - x0 + 1;
+    static uint8_t line[400];
+    begin();
+    window(x0, y0, x1, y1);
+    cmd(0x10);  // its pixels, two a byte (black 0, white 1)
+    for (int y = y0; y <= y1; ++y) {
+      const uint8_t* px = row(y) + 3 * x0;
+      for (int x = 0; x < w; x += 2, px += 6) {
+        uint8_t a = px[0] + px[1] + px[2] < 384 ? 0x0 : 0x1;
+        uint8_t b = px[3] + px[4] + px[5] < 384 ? 0x0 : 0x1;
+        line[x >> 1] = (a << 4) | b;
+      }
+      _bus->writeBytes(line, w / 2, true, false);
+    }
+    _bus->wait();
+    cmd(0x04);  // power on
+    waitBusy(5000);
+    delay(200);
+    cmd(0x06);  // booster, as M5GFX's full refresh
+    for (uint8_t d : {0x6F, 0x1F, 0x17, 0x27}) data(d);
+    delay(200);
+    window(x0, y0, x1, y1);  // again before the refresh, as esphome#20944 does
+    cmd(0x50);  // border floats for a window
+    data(0xFF);
+    cmd(0x12);  // refresh
+    data(0x00);
+    end();  // the bus is free while the panel works
+    for (uint32_t t0 = millis(); !idle() && millis() - t0 < 45000;) delay(20);
+    begin();
+    cmd(0x02);  // power off
+    data(0x00);
+    waitBusy(5000);
+    delay(200);
+    cmd(0x50);  // back to the full refresh's border setting
+    data(0x3F);
+    end();
+  }
+
+  // The controller's set-up as M5GFX sends it at start: a full refresh after
+  // partial windows starts from the same state as one after a boot.
+  void reinit() {
+    static constexpr uint8_t kInit[] = {
+        0xAA, 6, 0x49, 0x55, 0x20, 0x08, 0x09, 0x18, 0x01, 1, 0x3F, 0x00, 2, 0x5F, 0x69,
+        0x05, 4, 0x40, 0x1F, 0x1F, 0x2C, 0x08, 4, 0x6F, 0x1F, 0x1F, 0x22, 0x06, 4, 0x6F, 0x1F, 0x17, 0x17,
+        0x03, 4, 0x03, 0x54, 0x00, 0x44, 0x60, 2, 0x02, 0x00, 0x30, 1, 0x08, 0x50, 1, 0x3F,
+        0xE3, 1, 0x2F, 0x84, 1, 0x01, 0xFF};
+    begin();
+    for (size_t i = 0; kInit[i] != 0xFF; i += 2 + kInit[i + 1]) {
+      waitBusy(5000);
+      cmd(kInit[i]);
+      for (uint8_t k = 0; k < kInit[i + 1]; ++k) data(kInit[i + 2 + k]);
+    }
+    waitBusy(5000);
+    cmd(0x61);  // resolution
+    for (int v : {width(), height()}) {
+      data(v >> 8);
+      data(v & 0xFF);
+    }
+    end();
+  }
+};
+
+static PaperPanel* paperPanel() {
+  if (M5.getBoard() != m5::board_t::board_M5PaperColor) return nullptr;
+  return static_cast<PaperPanel*>(static_cast<lgfx::Panel_ED2208*>(M5.Display.getPanel()));
+}
+
+// The canvas is the panel's own pixels (portrait, unrotated): a window on
+// one is the same window on the other.
+static bool canPartial() {
+  PaperPanel* p = paperPanel();
+  return p && p->width() == W && p->height() == H && M5.Display.getRotation() == 0;
+}
+#endif
+
 static void pushToPanel() {
   waitPanel(45000);
   M5.Display.startWrite();
   canvas.pushSprite(&M5.Display, 0, 0);
   M5.Display.endWrite();
+#ifndef PREVIEW
+  if (partialNext) {
+    if (PaperPanel* p = paperPanel()) {
+      const Rect& r = partialRect;
+      p->partial(r.x, r.y, r.x + r.w - 1, r.y + r.h - 1);
+      ++partialsInARow;
+      return;
+    }
+  }
+  if (partialsInARow) {
+    if (PaperPanel* p = paperPanel()) p->reinit();  // out of the partial window
+    partialsInARow = 0;
+  }
+#endif
   M5.Display.display();
   waitPanel(45000);
 }
@@ -409,6 +554,7 @@ static void paperLoop(void*) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     toInks();
     pushToPanel();
+    partialNext = false;
     refreshing = false;
   }
 }
@@ -419,6 +565,7 @@ static void startRefresh() {
   else {  // no task (out of memory): do it here
     toInks();
     pushToPanel();
+    partialNext = false;
     refreshing = false;
   }
 }
@@ -426,6 +573,7 @@ static void startRefresh() {
 static void startRefresh() {
   toInks();
   pushToPanel();
+  partialNext = false;
 }
 #endif
 
@@ -483,7 +631,8 @@ static bool viewing = false;    // B showed the answer; the next B pages, the la
 static uint32_t replyGen = 0, shownGen = 0;  // the answer laid out / the one on the paper
 static int shownPage = -1;
 
-void idleSince(uint32_t) {}
+static uint32_t lastUseMs = 0;  // idleSince(): the last press, word or sound
+void idleSince(uint32_t ms) { lastUseMs = ms; }
 void drawNow() {
   forceNext = true;
   forceAtMs = millis();
@@ -515,12 +664,19 @@ static void commit() {
   startRefresh();
 }
 
+static void clockTick();
+
 void tick() {
-  if (refreshing || !want.active) return;
-  commit();
+  if (refreshing) return;
+  if (want.active) commit();
+#ifndef PREVIEW
+  else clockTick();
+#endif
 }
 
-bool busy() { return refreshing; }
+// A redraw the lights should show (the clock's window is quiet, and lets the
+// bus go while the panel works).
+bool busy() { return refreshing && !partialNext; }
 
 void flush() {
 #ifndef PREVIEW
@@ -624,6 +780,10 @@ static void drawHeader(const String& title = "", bool dots = true) {
   text(fit(name, right - PAD), PAD, y + 2, kInk, middle_left);
   canvas.fillRect(0, kHeadH - 3, W, 3, kInk);
 }
+
+// The dashboard's clock (the header's title): the box its minute ticks in.
+static constexpr int kClockX = PAD - 6, kClockY = 6, kClockW = 136, kClockH = kHeadH - 14;
+static String clockShown;  // the time the paper's clock says
 
 // A keycap: the button's letter in a small black rounded square.
 static int drawKey(const char* key, int x, int y) {
@@ -807,6 +967,7 @@ static void drawDashboard(bool asleep) {
   char clock[16] = "";
   clockText(clock, sizeof(clock), "%H:%M", time(nullptr));
   drawHeader(clock, !asleep);
+  clockShown = clock;
   const int x = PAD, w = W - 2 * PAD;
   int y = kHeadH + 14;
   y += drawDate(x, y, w);
@@ -821,9 +982,12 @@ static void drawDashboard(bool asleep) {
   const int roomMin = (int)(notes::room(kNoteRate) / kNoteRate / 60);
   String kept = n == 0 ? String("none waiting") : String(n) + (n == 1 ? " note waiting" : " notes waiting");
   if (n) kept += " · " + clockLength(notes::seconds());
+  char gb[24];
+  snprintf(gb, sizeof(gb), "%.1f GB", notes::freeBytes() / 1e9);
   const String room = !notes::ready() ? String("no room offline (no flash)")
                       : roomMin < 1    ? String("no room left for more")
-                                       : "room for " + String(roomMin) + " min more";
+                      : notes::onCard() ? "microSD card · " + String(gb) + " free"
+                                        : "room for " + String(roomMin) + " min more";
   y = drawBlock(x, y, w, "VOICE NOTES", kept, room);
   y += 8;
   // The links, a row each, in the ink of their state; asleep, how to wake.
@@ -854,6 +1018,32 @@ static void drawDashboard(bool asleep) {
 }
 
 static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asleep); }); }
+
+#ifndef PREVIEW
+// Every minute, while the dashboard is on the paper and it has been left
+// alone a while: only the clock's box, redrawn as a partial window (the
+// canvas may hold nothing else after a wake — only that box is driven).
+static constexpr uint32_t kClockIdleMs = 20000;
+static constexpr int kClockPartialsMax = 15;
+
+static void clockTick() {
+  if (shownKind != Kind::Dash || viewing || millis() - lastUseMs < kClockIdleMs || !canPartial()) return;
+  char now[16];
+  if (!clockText(now, sizeof(now), "%H:%M", time(nullptr)) || clockShown == now) return;
+  if (partialsInARow >= kClockPartialsMax || dashboardDueInSec() < 60) {
+    askDashboard(false);  // the whole page instead, readings and all
+    return;
+  }
+  clockShown = now;
+  pictures.clear();
+  canvas.fillRect(kClockX, kClockY, kClockW, kClockH, kPaper);
+  font(vlw::Title);
+  text(now, PAD, kHeadH / 2 + 2, kInk, middle_left);
+  partialRect = {kClockX, kClockY, kClockW, kClockH};
+  partialNext = true;
+  startRefresh();
+}
+#endif
 
 // The dashboard when its half hour is up, or when it was asked for (drawNow).
 static void dashboardIfDue() {

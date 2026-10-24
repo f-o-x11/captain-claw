@@ -168,6 +168,22 @@ paper changes only when it must:
 - **Key beeps** (1.0.4): A and B answer every press with a short beep, A
   higher, B lower (the 14 ms click before was too short to survive the
   speaker waking). "Beep off" or *Key beeps: off* on the phone page silences them.
+- **The clock ticks** (1.0.5): once a minute, while the dashboard is up and
+  the paper has been left alone for 20 s, only the clock's box is redrawn —
+  the panel's partial-window refresh (black and white, ~as long as a full
+  one, but nothing else on the page changes). After 15 in a row the next
+  minute redraws the whole dashboard, in case the rest has faded. Asleep the
+  clock stops; it catches up on the next wake.
+- **microSD card** (1.0.5): with a card in the slot, voice notes recorded
+  offline are kept on it (hours of room; the dashboard says how much is
+  free) and notes already in flash move onto it at start-up; with none,
+  they stay in flash (about 14 min) as before. The card shares the panel's
+  bus, so it waits while the paper redraws. Each note is still at most
+  60 s (it's held in memory while you talk).
+- **Recording lights** (1.0.5): the left light blinks red while it records
+  (brighter as you speak); the right one shows the time left — steady red
+  for the first 30 %, a slow blink for the next 50 %, a fast blink for the
+  last 20 % (110 s online, 60 s offline or from sleep).
 - **Power off** (1.0.3): after 1, 3, 10 or 30 idle minutes, 1 or 2 hours, or
   never (phone page). Awake it stays on Wi-Fi, so it answers at once but the
   battery lasts hours rather than days; the dashboard is redrawn every half

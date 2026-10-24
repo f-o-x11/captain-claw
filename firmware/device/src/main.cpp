@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.4"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.5"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -210,6 +210,7 @@ static bool sideClickWoke = false;   // that click only woke the screen
 // Wi-Fi and the deck connect; then it all goes up, as if spoken just now.
 static constexpr uint32_t kPrerollMaxMs = 30000;   // a wake-to-talk recording
 static constexpr uint32_t kOfflineMaxMs = 60000;   // a voice note kept offline (notes.h)
+static constexpr uint32_t kTalkMaxMs = 110000;     // a recording sent as it's made (the server caps at 120 s)
 static uint32_t prerollMaxMs = kPrerollMaxMs;      // this recording's cap
 static bool prerollOffline = false;                // recorded knowing the deck can't be reached
 static constexpr uint32_t kPrerollMinMs = 1000;    // less than this recorded is a press that woke it
@@ -1497,6 +1498,7 @@ static void pumpUpload() {
     return;
   }
   if (audio::playing()) return;  // never over a voice
+  if (notes::onCard() && ui::busy()) return;  // the card's bus is the panel's: not mid-redraw
   // Every send below can find the link gone: onWs → abortUpload runs inside
   // it and clears the batch, so each one is followed by a check.
   if (upNotes.empty()) {
@@ -2423,7 +2425,11 @@ static void updateLeds() {
     batteryAt = millis();
     batteryPct = telemetry::onUsbPower() ? 100 : M5.Power.getBatteryLevel();
   }
-  if (prerollOn || mode == Mode::Listening) leds::set(S::Listening, micLevel);
+  if (prerollOn || mode == Mode::Listening) {
+    leds::set(S::Listening, micLevel);
+    const uint32_t cap = prerollOn ? prerollMaxMs : kTalkMaxMs;
+    leds::recordUsed((millis() - (prerollOn ? prerollStartMs : recStartMs)) / (float)cap);
+  }
   else if (audio::playing()) leds::set(S::Speaking, audio::outputLevel());
   else if (mode == Mode::Waiting) leds::set(S::Working);
   else if (leds::startingUp()) leds::set(S::Startup);
@@ -3179,7 +3185,7 @@ void loop() {
       if (settings.iconMode) ui::showFace(settings.character, face::Pose::Listening, level);
       else ui::showListening(level, millis() - recStartMs);
     }
-    if (!prerollOn && millis() - recStartMs > 110000) stopTalking(true);  // the server caps at 120 s
+    if (!prerollOn && millis() - recStartMs > kTalkMaxMs) stopTalking(true);
   }
   if (buzzOffMs && (int32_t)(millis() - buzzOffMs) >= 0) {
     M5.Power.setVibration(0);

@@ -1,7 +1,8 @@
 // Voice notes recorded while the device can't reach Flight Deck (no Wi-Fi,
 // or the deck is down), kept in internal flash (LittleFS) as 8 kHz 4-bit
 // ADPCM (adpcm.h): 4 KB a second, so the flash holds about a quarter of an
-// hour. Once the deck is back — and the user said yes — they go up together
+// hour — or, on the PaperColor with a microSD card in, on the card (hours;
+// notes left in flash move there at start-up). Once the deck is back — and the user said yes — they go up together
 // as plain PCM and become one turn for the agent, marked as recorded offline
 // (device_bridge.py). Notes kept by older firmware (16 kHz WAV) still go up.
 #pragma once
@@ -19,8 +20,13 @@ struct Note {
   uint32_t rate = 8000;
 };
 
-// Mounts the flash; false when this device keeps no notes.
+// Mounts the card (where there's one) or the flash; false when this device
+// keeps no notes.
 bool begin();
+// Kept on the microSD card (else in flash).
+bool onCard();
+// Free space where they're kept, in bytes (kept up to date, no I/O).
+uint64_t freeBytes();
 // Notes can be kept (the flash is mounted).
 bool ready();
 // The longest recording at `rate` (the mic's) there's room for now, in

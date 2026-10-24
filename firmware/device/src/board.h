@@ -47,6 +47,7 @@ constexpr bool kHasClimate = false;
 // Voice notes recorded offline are kept in internal flash and sent when the
 // deck is back and the user says yes (notes.cpp).
 constexpr bool kOfflineNotes = true;
+constexpr bool kHasSdCard = false;
 // A touch screen: "tap to talk" puts a record button on it (an option).
 constexpr bool kHasTouch = true;
 constexpr bool kLoudPeakRestarts = false;  // not seen (yet) on the StopWatch
@@ -81,6 +82,7 @@ constexpr bool kHasMotor = false;
 constexpr bool kHasLeds = true;
 constexpr bool kHasClimate = true;
 constexpr bool kOfflineNotes = true;
+constexpr bool kHasSdCard = true;  // microSD slot (SPI, shared with the panel): notes go there when a card is in
 constexpr bool kHasTouch = false;
 constexpr bool kLoudPeakRestarts = false;
 constexpr bool kChunkedImages = true;
@@ -110,6 +112,7 @@ constexpr bool kHasMotor = false;
 constexpr bool kHasLeds = false;
 constexpr bool kHasClimate = false;
 constexpr bool kOfflineNotes = true;  // in flash: the 1.5 MB data partition holds ~5½ min
+constexpr bool kHasSdCard = false;
 constexpr bool kHasTouch = false;
 constexpr bool kLoudPeakRestarts = true;   // M5Stack's note: >75% volume on battery
 constexpr bool kChunkedImages = false;
