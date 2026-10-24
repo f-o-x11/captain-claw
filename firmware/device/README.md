@@ -183,6 +183,10 @@ speaking and trouble exactly as above; the voice carries the answers:
   nowhere to go: the lights say what matters, and go back to their idle
   blink once a recording is over (1.0.11: after an offline note they stayed
   on the recording lights).
+- **Recording comes first** (1.0.14): while it records — talking, an
+  offline note, or the recording a wake press starts — nothing redraws by
+  itself; the five-minute dashboard (or the offline one) waits until the
+  recording ends, and after an offline note the dashboard is drawn then.
 - **Offline** (1.0.13): once Wi-Fi, Flight Deck or the agent has been
   down for 30 s, the paper is redrawn with it — the dashboard's LINKS rows
   and the top bar's dots in red (an answer being read keeps its page; the

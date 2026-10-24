@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.13"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.14"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -831,6 +831,7 @@ static void redraw() {
   syncTapButton();
 #if defined(PAPER_B)
   ui::setHome(homeNow());  // the dashboard's LINKS rows, current in any mode
+  ui::hold(prerollOn || mode == Mode::Listening);  // (a wake-to-talk recording runs before Listening)
 #endif
   ui::setReplayable((mode == Mode::Reply || mode == Mode::Idle) && canReplay() && !audio::playing());
   switch (mode) {
@@ -2511,7 +2512,7 @@ static void trackLinks() {
   }
 #if defined(PAPER_B)
   static bool shownDown = false;  // the paper was redrawn with the links down
-  if (mode != Mode::Idle && mode != Mode::Reply) return;  // (not over a recording, a turn, the options)
+  if (prerollOn || (mode != Mode::Idle && mode != Mode::Reply)) return;  // (not over a recording, a turn, the options)
   const bool down = !linked && millis() - offlineSinceMs > 30000;
   const bool back = linked && shownDown && millis() - onlineSinceMs > 10000;
   if ((down && !shownDown) || back) {
@@ -3422,6 +3423,9 @@ void loop() {
   }
 
   ui::idleSince(lastActivityMs);  // the e-paper redraws once it's been left alone
+#if defined(PAPER_B)
+  ui::hold(prerollOn || mode == Mode::Listening);  // no redraw by itself while recording
+#endif
   ui::tick();
   updateLeds();
   noteButtonActivity();
