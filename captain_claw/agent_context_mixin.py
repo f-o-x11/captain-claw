@@ -42,6 +42,10 @@ _BACKGROUND_NOTES_LEAD = (
 _STANDALONE_NOTES_LEAD = "background context; reference only, do not repeat or quote it in your reply"
 # Chat surfaces whose formatting rules ride on their turns.
 _RULED_SURFACES = frozenset({"glasses", "whatsapp", "messenger", "device"})
+# Sources whose messages the history leaves unmarked: the web chat (the
+# default), and a member's or a public visitor's session, where every message
+# comes the same way.
+_UNMARKED_SOURCES = frozenset({"web", "member", "public"})
 # "[Flight Deck] Agent '<name>' has <event> the fleet …" (anywhere in a notice).
 _FLEET_NOTICE_RE = re.compile(
     r"\[Flight Deck\] Agent '(?P<name>[^']*)' has (?P<event>\w+) the fleet"
@@ -3041,6 +3045,11 @@ class AgentContextMixin:
                 f"{system_info_block}\n{_timing_block}" if system_info_block
                 else _timing_block
             )
+        # Where this message came from (the web chat, WhatsApp, the stick …):
+        # the channels share one conversation.
+        _source_line = self._turn_source_line()
+        if _source_line:
+            system_info_block = f"{system_info_block}\n{_source_line}" if system_info_block else _source_line
         return system_info_block
 
     def _build_system_prompt(self) -> str:
@@ -4275,6 +4284,35 @@ class AgentContextMixin:
             return []
 
     @staticmethod
+    def _with_source_mark(msg: dict[str, Any]) -> dict[str, Any]:
+        """A user message from anywhere but the web chat opens with where it
+        came from ("[via WhatsApp] …", "[via M5Stack StickS3 (desk)] …"), so
+        the model knows which channel said what in a conversation they share.
+        Older messages without a source go by their channel. Rendered only —
+        the stored message keeps the person's words."""
+        from captain_claw import turn_source
+
+        source = turn_source.normalize(msg.get("source")) or turn_source.resolve(channel=msg.get("channel"))
+        if not source or turn_source.channel_of(source) in _UNMARKED_SOURCES:
+            return msg
+        content = msg.get("content")
+        label = turn_source.label_for(source, msg.get("source_label"))
+        if not isinstance(content, str) or not label or content.startswith("[via "):
+            return msg
+        return {**msg, "content": f"[via {label}] {content}"}
+
+    def _turn_source_line(self) -> str:
+        """Where the message being answered came from, for the turn's note."""
+        src = getattr(self, "_turn_source", None)
+        source, label = src if isinstance(src, tuple) and len(src) == 2 else ("", "")
+        if not source or not label:
+            return ""
+        return (
+            f"This message came from: {label}. Earlier user messages from other channels "
+            "start with [via …] (none: the web chat) — that mark is never part of your reply."
+        )
+
+    @staticmethod
     def _provenance_hidden_messages(
         messages: list[dict[str, Any]],
         turn_start: int | None,
@@ -4780,6 +4818,7 @@ class AgentContextMixin:
                     historical_assistant_merged += 1
                     continue
                 if role == "user":
+                    msg = self._with_source_mark(msg)
                     latest_user_pos = len(candidate_messages)
                     if (
                         turn_anchor_pos is None

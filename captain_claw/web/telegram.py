@@ -5,6 +5,13 @@ their own session.  Agents are created lazily on first message and
 cached for the lifetime of the server process.  Per-user asyncio locks
 serialise requests from the same user while allowing different users to
 run concurrently.
+
+The agent's owner is the exception: their own private chat joins the main
+conversation (lane A) — the one the web chat, WhatsApp, the app and the
+devices share — so Telegram is not a silo of its own
+(``telegram.owner_in_main``). The owner is whoever reaches the agent through
+Flight Deck's shared bot (it relays only the chat the owner linked), or the
+approved user marked ``owner`` on a bot of the agent's own.
 """
 
 from __future__ import annotations
@@ -405,8 +412,9 @@ async def _handle_telegram_message(server: WebServer, message: TelegramMessage) 
                 server, message.user_id, message.chat_id, message.username, message.first_name,
             )
 
-        # Resolve per-user agent (creates on first use).
-        user_agent = await _tg_get_or_create_agent(server, message)
+        # The owner's private chat: the main conversation; anyone else: a
+        # per-user agent (created on first use).
+        user_agent, owner = await _tg_agent_for(server, message)
 
         # Card numbers / CVVs never go further (card_scrub).
         from captain_claw.card_scrub import scrub_user_text
@@ -576,7 +584,8 @@ async def _handle_telegram_message(server: WebServer, message: TelegramMessage) 
                 "/new starts a fresh session (the old one is kept in history).\n"
                 "/basna <task> runs a parallel multi-agent research ensemble.\n"
                 "/group adds me to a Telegram group.\n"
-                "Each Telegram user has a dedicated session.",
+                + ("This chat shares my main conversation — the web chat, WhatsApp, the app and devices."
+                   if owner else "Each Telegram user has a dedicated session."),
                 reply_to_message_id=message.message_id,
             )
             return
@@ -585,6 +594,10 @@ async def _handle_telegram_message(server: WebServer, message: TelegramMessage) 
             await telegram_group_chat.offer_add_link(server, message)
             return
 
+        if owner and lowered.split()[0] == "/new":
+            await _tg_send(server, message.chat_id, await _tg_owner_new_session(server, text),
+                           reply_to_message_id=message.message_id)
+            return
         if text.startswith("/"):
             result = await execute_telegram_command(server, text, user_agent)
             if result is not None:
@@ -627,15 +640,16 @@ async def _handle_telegram_message(server: WebServer, message: TelegramMessage) 
                 default_msg = "I'm sharing this contact."
             effective_text = prefix + (text or default_msg)
 
-        user_label = message.username or message.first_name or str(message.user_id)
-        server._broadcast({
-            "type": "chat_message",
-            "role": "user",
-            "content": f"[TG {user_label}] {effective_text}",
-        })
-
-        # Store the chat_id on the agent so delegate callbacks can route back here
-        user_agent._telegram_chat_id = message.chat_id  # type: ignore[attr-defined]
+        if not owner:
+            # The owner's turn shows on the main conversation once it has it.
+            user_label = message.username or message.first_name or str(message.user_id)
+            server._broadcast({
+                "type": "chat_message",
+                "role": "user",
+                "content": f"[TG {user_label}] {effective_text}",
+            })
+            # Store the chat_id on the agent so delegate callbacks can route back here
+            user_agent._telegram_chat_id = message.chat_id  # type: ignore[attr-defined]
 
         # A model that sees images gets the photo inline (its marker); any other
         # has it described first — a vision model or a multimodal peer — as the
@@ -647,6 +661,7 @@ async def _handle_telegram_message(server: WebServer, message: TelegramMessage) 
             user_id=str(message.user_id),
             describe_images=describe,
             analyze_videos=attached.videos or None,
+            owner=owner,
         )
 
     except Exception as exc:
@@ -713,8 +728,8 @@ async def _handle_telegram_callback_query(server: WebServer, cbq: TelegramCallba
         except Exception:
             pass
 
-        # Get or create the user agent and process the action.
-        user_agent = await _tg_get_or_create_agent(server, TelegramMessage(
+        # The user's agent (the owner: the main conversation) takes the action.
+        user_agent, owner = await _tg_agent_for(server, TelegramMessage(
             update_id=cbq.update_id,
             message_id=cbq.message_id,
             chat_id=cbq.chat_id,
@@ -724,17 +739,19 @@ async def _handle_telegram_callback_query(server: WebServer, cbq: TelegramCallba
             text=action_text,
         ))
 
-        user_label = cbq.username or cbq.first_name or str(cbq.user_id)
-        server._broadcast({
-            "type": "chat_message",
-            "role": "user",
-            "content": f"[TG {user_label}] {action_text}",
-        })
+        if not owner:
+            user_label = cbq.username or cbq.first_name or str(cbq.user_id)
+            server._broadcast({
+                "type": "chat_message",
+                "role": "user",
+                "content": f"[TG {user_label}] {action_text}",
+            })
 
         await _tg_process_with_typing(
             server, cbq.chat_id, action_text, None,
             user_agent=user_agent,
             user_id=user_id_key,
+            owner=owner,
         )
 
     except Exception as exc:
@@ -1173,8 +1190,12 @@ async def _tg_process_with_typing(
     user_id: str,
     describe_images: list[str] | None = None,
     analyze_videos: list[str] | None = None,
+    owner: bool = False,
 ) -> None:
     """Run user_agent.complete() with typing indicator and per-user lock.
+
+    *owner*: the owner's private chat on the main agent — the turn also holds
+    the main conversation (:func:`_tg_owner_lane`).
 
     Different Telegram users run concurrently.  Requests from the *same*
     user are serialised by a per-user asyncio lock. *describe_images* are
@@ -1196,7 +1217,10 @@ async def _tg_process_with_typing(
             reply_to_message_id=reply_to_message_id,
         )
 
-    async with lock:
+    async with lock, contextlib.AsyncExitStack() as owner_lane:
+        if owner:
+            await owner_lane.enter_async_context(
+                _tg_owner_lane(server, chat_id, user_id, text, reply_to_message_id))
         stop_typing = asyncio.Event()
 
         async def _typing_heartbeat() -> None:
@@ -1236,6 +1260,8 @@ async def _tg_process_with_typing(
                 # then answers with just its last response instead of folding
                 # every blurb into one long message.
                 narration = _TgNarration(server, chat_id) if _stream_narration() else None
+                # The main agent's own hook (the web chat's) comes back after.
+                prev_narration = getattr(user_agent, "narration_callback", None)
                 user_agent.narration_callback = narration
                 agent_text = text
                 if analyze_videos:
@@ -1254,10 +1280,11 @@ async def _tg_process_with_typing(
                     with mail_authority.bound(mail_authority.interactive(text)):
                         from captain_claw import msg_origin as _msg_origin
 
-                        _msg_origin.hint_turn_provenance(user_agent, channel="telegram")
+                        _msg_origin.hint_turn_provenance(
+                            user_agent, channel="telegram", source="telegram", source_label="Telegram")
                         response = await user_agent.complete(agent_text)
                 finally:
-                    user_agent.narration_callback = None
+                    user_agent.narration_callback = prev_narration
                     if narration is not None:
                         await narration.drain()  # the answer always lands last
                 log.info("Telegram agent.complete() done", user_id=user_id, response_len=len(response or ""))
@@ -1525,6 +1552,110 @@ def _tg_is_approved(server: WebServer, user_id_key: str) -> bool:
     return getattr(server, "_telegram_relay", False) or info.get("via") != "shared_bot"
 
 
+def _tg_is_owner(server: WebServer, user_id_key: str, chat_type: str = "private") -> bool:
+    """The agent's owner writing in their own private chat: it joins the main
+    conversation. Through Flight Deck's shared bot that is anyone relayed (it
+    only relays the chat the owner linked); on a bot of the agent's own, the
+    approved user marked ``owner``. Groups never."""
+    if chat_type and chat_type != "private":
+        return False
+    info = (getattr(server, "_approved_telegram_users", None) or {}).get(str(user_id_key))
+    if not isinstance(info, dict) or not (info.get("via") == "shared_bot" or info.get("owner") is True):
+        return False
+    if not getattr(getattr(getattr(server, "config", None), "telegram", None), "owner_in_main", True):
+        return False
+    return _tg_is_approved(server, str(user_id_key))
+
+
+# How long the owner's Telegram message waits for the main conversation to be
+# free (a web, WhatsApp or device turn running there) before giving up.
+_OWNER_LANE_WAIT_SECONDS = 15 * 60
+# What the main agent carries while it answers the owner's Telegram, so a
+# delegation made in that turn reports back to the chat (tools/flight_deck.py,
+# basna, bat, code_session).
+_OWNER_TURN_ATTRS = ("_telegram_chat_id", "_telegram_user_id")
+
+
+@contextlib.asynccontextmanager
+async def _tg_owner_lane(
+    server: WebServer, chat_id: int, user_id: str, content: str = "",
+    reply_to_message_id: int | None = None,
+):
+    """The owner's Telegram turn on the main conversation (lane A): wait while
+    another turn runs there, hold it as busy, show the turn on every client
+    ("via Telegram"), and on the way out do what a lane-A turn's end does."""
+    agent = server.agent
+    deadline = time.monotonic() + _OWNER_LANE_WAIT_SECONDS
+    told = False
+    while True:
+        while server._busy:
+            if not told:
+                told = True
+                await _tg_send(server, chat_id, "Still answering another message — yours is next…",
+                               reply_to_message_id=reply_to_message_id)
+            if time.monotonic() > deadline:
+                raise RuntimeError("the main conversation stayed busy — send it again in a moment")
+            await asyncio.sleep(0.5)
+        # Automation results still waiting go in ahead of this turn, as on
+        # every lane-A turn.
+        from captain_claw.web.chat_handler import PENDING_RESULTS_KEY, flush_automation_results
+
+        meta = getattr(getattr(agent, "session", None), "metadata", None)
+        if isinstance(meta, dict) and meta.get(PENDING_RESULTS_KEY):
+            await flush_automation_results(server)
+        if not server._busy:
+            break
+    server._busy = True
+    saved = {k: getattr(agent, k) for k in _OWNER_TURN_ATTRS if hasattr(agent, k)}
+    agent._telegram_chat_id = int(chat_id)
+    agent._telegram_user_id = str(user_id)
+    server._broadcast({"type": "status", "status": "thinking"})
+    try:
+        if content:
+            from captain_claw.web.chat_handler import user_turn_frame
+
+            server._broadcast(user_turn_frame(content, "telegram", "", "telegram", "Telegram"))
+        yield
+    finally:
+        for k in _OWNER_TURN_ATTRS:
+            if k in saved:
+                setattr(agent, k, saved[k])
+            elif hasattr(agent, k):
+                delattr(agent, k)
+        server._busy = False
+        server._broadcast({"type": "status", "status": "ready"})
+        # A `sessions` tool call in the turn moves the conversation now.
+        try:
+            from captain_claw.web.slash_commands import apply_pending_session_change
+
+            await apply_pending_session_change(server, agent)
+        except Exception as exc:
+            log.warning("Pending session change failed", error=str(exc))
+
+
+async def _tg_agent_for(server: WebServer, message: TelegramMessage) -> tuple[Agent, bool]:
+    """The agent a Telegram sender talks to, and whether it is the owner's
+    main conversation (the owner's private chat) — anyone else has a session
+    of their own."""
+    if _tg_is_owner(server, str(message.user_id), getattr(message, "chat_type", "private")):
+        return server.agent, True
+    return await _tg_get_or_create_agent(server, message), False
+
+
+async def _tg_owner_new_session(server: WebServer, text: str) -> str:
+    """``/new`` from the owner's Telegram: a new main conversation, as the web
+    chat's /new — every client on it is told."""
+    if server._busy:
+        return "Still answering a message — send /new once the reply is in."
+    from captain_claw.web.slash_commands import apply_pending_session_change
+
+    parts = text.split(None, 1)
+    server.agent._pending_session_change = {"action": "new", "name": parts[1].strip() if len(parts) > 1 else ""}
+    await apply_pending_session_change(server, server.agent)
+    name = getattr(server.agent.session, "name", "") if server.agent.session else ""
+    return f"New session started: {name}. The previous conversation is kept in history."
+
+
 async def _tg_admit_relay_user(
     server: WebServer, user_id: int, chat_id: int, username: str, first_name: str,
 ) -> None:
@@ -1591,15 +1722,23 @@ async def _tg_pair_unknown_user(server: WebServer, message: TelegramMessage) -> 
 
 
 async def handle_approve_command(server: WebServer, args: str) -> str:
-    """Handle /approve user telegram <token>."""
+    """Handle /approve user telegram <token> [owner].
+
+    ``owner`` marks the person as the agent's owner: their private chat joins
+    the main conversation. For someone already approved, their @username or
+    Telegram id stands in for the token."""
+    usage = "Usage: `/approve user telegram <token> [owner]`"
     parts = args.split()
     if len(parts) < 3 or parts[0].lower() != "user" or parts[1].lower() != "telegram":
-        return "Usage: `/approve user telegram <token>`"
+        return usage
     token = parts[2].strip().upper()
     if not token:
-        return "Usage: `/approve user telegram <token>`"
+        return usage
+    owner = len(parts) > 3 and parts[3].lower() == "owner"
     _tg_cleanup_expired(server)
     record = server._pending_telegram_pairings.get(token)
+    if not isinstance(record, dict) and owner:
+        return await _tg_mark_owner(server, parts[2].strip())
     if not isinstance(record, dict):
         return f"Telegram pairing token not found or expired: `{token}`"
     user_id = str(record.get("user_id", "")).strip()
@@ -1615,6 +1754,7 @@ async def handle_approve_command(server: WebServer, args: str) -> str:
         "first_name": str(record.get("first_name", "")).strip(),
         "approved_at": datetime.now(UTC).isoformat(),
         "token": token,
+        **({"owner": True} if owner else {}),
     }
     server._pending_telegram_pairings.pop(token, None)
     await _tg_save_state(server)
@@ -1629,4 +1769,20 @@ async def handle_approve_command(server: WebServer, args: str) -> str:
     username = str(record.get("username", "")).strip()
     first_name = str(record.get("first_name", "")).strip()
     label = username or first_name or user_id
+    if owner:
+        return f"Approved Telegram user: **{label}** — the owner: their private chat shares the main conversation."
     return f"Approved Telegram user: **{label}**"
+
+
+async def _tg_mark_owner(server: WebServer, who: str) -> str:
+    """Mark an approved Telegram user (by @username or id) as the owner."""
+    key = who.strip().lstrip("@").lower()
+    for uid, info in server._approved_telegram_users.items():
+        if not isinstance(info, dict):
+            continue
+        if key in (str(uid), str(info.get("username", "")).strip().lstrip("@").lower()):
+            info["owner"] = True
+            await _tg_save_state(server)
+            label = info.get("username") or info.get("first_name") or uid
+            return f"**{label}** is the owner: their private chat now shares the main conversation."
+    return f"No approved Telegram user `{who}` — approve them first (their pairing token)."

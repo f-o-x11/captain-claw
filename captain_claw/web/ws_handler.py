@@ -304,12 +304,17 @@ async def _handle_telegram_delegate_result(
     """
     import asyncio
 
-    from captain_claw.web.telegram import _tg_send, _tg_get_user_lock
+    import contextlib
+
+    from captain_claw.web.telegram import _tg_get_user_lock, _tg_owner_lane, _tg_send
 
     lock = _tg_get_user_lock(server, user_id)
 
     async def _run() -> None:
-        async with lock:
+        async with lock, contextlib.AsyncExitStack() as owner_lane:
+            if tg_agent is server.agent:
+                # The owner's chat: the result is a turn on the main conversation.
+                await owner_lane.enter_async_context(_tg_owner_lane(server, chat_id, user_id))
             try:
                 # Another agent's result, not the Telegram user typing.
                 with mail_authority.bound(mail_authority.automated("peer_relay", "", "deny")):
@@ -618,6 +623,9 @@ async def handle_ws_message(
                      user_id=origin_user_id, chat_id=origin_chat_id,
                      content_len=len(notif_content))
             tg_agent = server._telegram_agents.get(origin_user_id)
+            from captain_claw.web.telegram import _tg_is_owner
+            if tg_agent is None and _tg_is_owner(server, origin_user_id):
+                tg_agent = server.agent  # the owner's chat is the main conversation
             if tg_agent:
                 # Process with the telegram agent and send result to telegram;
                 # the turn records the result as its opening message (writing

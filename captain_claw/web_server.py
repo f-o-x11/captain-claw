@@ -168,7 +168,7 @@ COMMANDS: list[dict[str, str]] = [
     {"command": "/insights delete <id>", "description": "Delete an insight", "category": "Insights"},
     {"command": "/monitor on|off", "description": "Toggle monitor split view", "category": "Monitor"},
     {"command": "/monitor trace on|off", "description": "Toggle LLM trace logging", "category": "Monitor"},
-    {"command": "/approve user telegram <token>", "description": "Approve a Telegram user pairing", "category": "Telegram"},
+    {"command": "/approve user telegram <token> [owner]", "description": "Approve a Telegram user pairing (owner: their chat shares the main conversation)", "category": "Telegram"},
     {"command": "/orchestrate <request>", "description": "Run parallel multi-session orchestration", "category": "Orchestrator"},
     {"command": "/basna <task>", "description": "Run a Basna — parallel multi-agent research ensemble", "category": "Orchestrator"},
     {"command": "/code <task>", "description": "Start an autonomous coding session (Code studio)", "category": "Orchestrator"},
