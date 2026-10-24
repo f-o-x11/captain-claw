@@ -168,11 +168,13 @@ paper changes only when it must:
 - **Key beeps** (1.0.4): A and B answer every press with a short beep, A
   higher, B lower (the 14 ms click before was too short to survive the
   speaker waking). "Beep off" or *Key beeps: off* on the phone page silences them.
-- **The clock ticks** (1.0.6): on the five-minute marks (:00, :05 … :55) —
-  or as soon after one as the paper has been left alone for 20 s — while the
-  dashboard is up, only the clock's box is redrawn: the panel's
-  partial-window refresh (black and white, ~as long as a full one, but
-  nothing else on the page changes). The whole dashboard every half hour
+- **The clock ticks** (1.0.6; 1.0.8 the room too): on the five-minute marks
+  (:00, :05 … :55) — or as soon after one as the paper has been left alone
+  for 20 s — while the dashboard is up, its top is redrawn: the clock, the
+  date, the temperature and humidity, the header's battery and link dots.
+  It's the panel's partial-window refresh, in colour: one window, ~as long
+  as a full refresh, and the battery and notes blocks below don't change.
+  (Right after a restart, before the first full redraw, only the clock.) The whole dashboard every half hour
   lands on a mark too (drawn early when it's due before the next one).
   Asleep the clock stops; it catches up on the next wake.
 - **microSD card** (1.0.5): with a card in the slot, voice notes recorded

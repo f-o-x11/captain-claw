@@ -399,7 +399,7 @@ static void waitPanel(uint32_t ms) {
 //
 // The ED2208's undocumented partial-window command (0x83, the sequence from
 // esphome/esphome#20944; tried on this panel before, and it works): only the
-// rectangle given is driven, black and white. It takes about as long as a
+// rectangle given is driven, in the six inks. It takes about as long as a
 // full refresh, but only that window changes. The rest of the page may fade
 // a little over many of them, so after kClockPartialsMax in a row the next
 // tick redraws the whole dashboard instead. The bus is let go while the
@@ -443,6 +443,20 @@ struct PaperPanel : lgfx::Panel_ED2208 {
     data(0x01);
   }
 
+  // A framebuffer pixel as the panel's 4-bit ink code — the nearest of the
+  // six, as M5GFX's full refresh picks them (the frame is in the inks already).
+  static uint8_t code(const lgfx::bgr888_t& p) {
+    static constexpr uint8_t kCodes[6] = {0x0, 0x1, 0x2, 0x3, 0x5, 0x6};  // black white yellow red blue green
+    uint32_t best = UINT32_MAX;
+    uint8_t out = 0x1;
+    for (int i = 0; i < 6; ++i) {
+      const int dr = p.r - kInkDefs[i].r, dg = p.g - kInkDefs[i].g, db = p.b - kInkDefs[i].b;
+      const uint32_t d = dr * dr + dg * dg + db * db;
+      if (d < best) best = d, out = kCodes[i];
+    }
+    return out;
+  }
+
   // Drives [x0..x1] × [y0..y1] (native pixels, inclusive; x widened to
   // fours, the controller's step) from the framebuffer.
   void partial(int x0, int y0, int x1, int y1) {
@@ -452,14 +466,10 @@ struct PaperPanel : lgfx::Panel_ED2208 {
     static uint8_t line[400];
     begin();
     window(x0, y0, x1, y1);
-    cmd(0x10);  // its pixels, two a byte (black 0, white 1)
+    cmd(0x10);  // its pixels, two a byte
     for (int y = y0; y <= y1; ++y) {
-      const uint8_t* px = row(y) + 3 * x0;
-      for (int x = 0; x < w; x += 2, px += 6) {
-        uint8_t a = px[0] + px[1] + px[2] < 384 ? 0x0 : 0x1;
-        uint8_t b = px[3] + px[4] + px[5] < 384 ? 0x0 : 0x1;
-        line[x >> 1] = (a << 4) | b;
-      }
+      const lgfx::bgr888_t* px = reinterpret_cast<const lgfx::bgr888_t*>(row(y)) + x0;
+      for (int x = 0; x < w; x += 2) line[x >> 1] = code(px[x]) << 4 | code(px[x + 1]);
       _bus->writeBytes(line, w / 2, true, false);
     }
     _bus->wait();
@@ -591,6 +601,7 @@ enum class Kind : uint8_t { None, Dash, Reply, Link, Setup };
 RTC_DATA_ATTR static bool rtcShown = false;
 RTC_DATA_ATTR static uint8_t rtcKind = 0;
 RTC_DATA_ATTR static uint32_t rtcDashAt = 0;
+RTC_DATA_ATTR static int16_t rtcTopEnd = 0;  // the dashboard's top part (header, date, room) ends here, as last drawn
 static Kind shownKind = Kind::None;
 static bool everShown = false;
 static uint32_t lastDashMs = 0;  // the dashboard, this boot (0: not yet)
@@ -960,10 +971,10 @@ static String clockLength(uint32_t secs) {
 static Home lastHome;  // what the main loop last knew of the links (its rows: Wi-Fi, deck, agent)
 static bool haveHome = false;
 
-// The dashboard: the clock as of this drawing, the date, the room, the
-// battery, the notes kept offline, the links; drawn every half hour and on
-// request. Asleep: the same, the links replaced by how to wake it.
-static void drawDashboard(bool asleep) {
+// The dashboard's top: the header (the clock as of this drawing, the links'
+// dots, the battery), the date, the room. Returns where it ends — the window
+// the clock's tick redraws.
+static int drawDashTop(bool asleep) {
   char clock[16] = "";
   clockText(clock, sizeof(clock), "%H:%M", time(nullptr));
   drawHeader(clock, !asleep);
@@ -972,7 +983,16 @@ static void drawDashboard(bool asleep) {
   int y = kHeadH + 14;
   y += drawDate(x, y, w);
   const int ch = drawClimate(x, y, w);
-  y += ch ? ch + 12 : 4;
+  return y + (ch ? ch + 12 : 4);
+}
+
+// The dashboard: the clock as of this drawing, the date, the room, the
+// battery, the notes kept offline, the links; drawn every half hour and on
+// request. Asleep: the same, the links replaced by how to wake it.
+static void drawDashboard(bool asleep) {
+  const int x = PAD, w = W - 2 * PAD;
+  int y = drawDashTop(asleep);
+  rtcTopEnd = y;
   bool chg = false;
   const int pct = batteryPct(&chg);
   y = drawBlock(x, y, w, "BATTERY", pct >= 0 ? String(pct) + " %" : String("?"), batteryWords(pct, chg),
@@ -1021,10 +1041,12 @@ static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asl
 
 #ifndef PREVIEW
 // On the five-minute marks (:00, :05 … :55) — or as soon after one as the
-// paper has been left alone — while the dashboard is on the paper: only the
-// clock's box, redrawn as a partial window (the canvas may hold nothing else
-// after a wake — only that box is driven). The whole page every half hour
-// comes on a mark too: when it's due before the next one, it's drawn now.
+// paper has been left alone — while the dashboard is on the paper: its top —
+// the clock, the date, the room's temperature and humidity, the header's
+// battery and links — redrawn as one partial window (one window takes as long
+// as the clock alone; the canvas may hold nothing else after a wake — only
+// the window is driven). The whole page every half hour comes on a mark too:
+// when it's due before the next one, it's drawn now.
 static constexpr uint32_t kClockIdleMs = 20000;
 static constexpr uint32_t kClockEverySec = 5 * 60;
 static constexpr int kClockPartialsMax = 15;
@@ -1040,10 +1062,19 @@ static void clockTick() {
   }
   clockShownAt = t;
   pictures.clear();
-  canvas.fillRect(kClockX, kClockY, kClockW, kClockH, kPaper);
-  font(vlw::Title);
-  text(now, PAD, kHeadH / 2 + 2, kInk, middle_left);
-  partialRect = {kClockX, kClockY, kClockW, kClockH};
+  if (rtcTopEnd > 0) {
+    canvas.fillRect(0, 0, W, rtcTopEnd, kPaper);
+    if (drawDashTop(false) != rtcTopEnd) {  // laid out otherwise now (the room's text size): the whole page
+      askDashboard(false);
+      return;
+    }
+    partialRect = {0, 0, W, rtcTopEnd};
+  } else {  // where the top ends isn't known (drawn before a restart): the clock alone
+    canvas.fillRect(kClockX, kClockY, kClockW, kClockH, kPaper);
+    font(vlw::Title);
+    text(now, PAD, kHeadH / 2 + 2, kInk, middle_left);
+    partialRect = {kClockX, kClockY, kClockW, kClockH};
+  }
   partialNext = true;
   startRefresh();
 }
