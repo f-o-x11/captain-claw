@@ -179,6 +179,8 @@ uint32_t dashboardDueInSec();
 // grew since.
 void answerStarted();
 void answerEnded();
+// A on the options: back to the page they were opened from.
+void leaveOptions();
 #endif
 
 // Conversation views (text mode).

@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.11"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.12"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -3105,8 +3105,10 @@ void loop() {
     } else if (mode == Mode::Status) {
       openMenu();
     } else if (mode == Mode::Link) {
-      if (board::kPaperB) {  // the options screen: A goes back
-        ui::drawNow();
+      if (board::kPaperB) {  // the options screen: A goes back where it came from
+#if defined(PAPER_B)
+        ui::leaveOptions();
+#endif
         backToMain();
       } else if (board::kEpaper) {
         updateSoftware();  // the Options screen: the talk button updates
