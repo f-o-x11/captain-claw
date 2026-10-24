@@ -29,6 +29,7 @@
 #ifndef PREVIEW
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <Preferences.h>
 
 #include "battery.h"
 #include "notes.h"
@@ -435,8 +436,10 @@ enum class Kind : uint8_t { None, Dash, Reply, Link, Setup };
 #ifndef RTC_DATA_ATTR
 #define RTC_DATA_ATTR  // (the preview has no deep sleep)
 #endif
-// What the paper shows across deep sleep (the panel keeps its picture), and
-// when the dashboard was last drawn, by the clock.
+// What the paper shows (the panel keeps its picture with no power at all),
+// and when the dashboard was last drawn, by the clock: in RTC memory across
+// deep sleep, and in flash (NVS) across everything else — a restart, a
+// brownout, the battery jolted loose — so a reset never redraws it.
 RTC_DATA_ATTR static bool rtcShown = false;
 RTC_DATA_ATTR static uint8_t rtcKind = 0;
 RTC_DATA_ATTR static uint32_t rtcDashAt = 0;
@@ -444,6 +447,27 @@ static Kind shownKind = Kind::None;
 static bool everShown = false;
 static uint32_t lastDashMs = 0;  // the dashboard, this boot (0: not yet)
 static constexpr uint32_t kDashEverySec = 30 * 60;
+
+#ifndef PREVIEW
+static void keepShown() {
+  Preferences p;
+  if (!p.begin("paperb", false)) return;
+  p.putUChar("kind", rtcKind);
+  p.putULong("dash", rtcDashAt);
+  p.end();
+}
+
+static void loadShown() {
+  Preferences p;
+  if (!p.begin("paperb", true)) return;  // (read-only: missing on the first boot)
+  rtcKind = p.getUChar("kind", 0);
+  rtcDashAt = p.getULong("dash", 0);
+  p.end();
+  rtcShown = rtcKind != 0;
+}
+#else
+static void keepShown() {}
+#endif
 
 // One screen waiting its turn (the panel may be busy with the last).
 struct Want {
@@ -453,6 +477,8 @@ struct Want {
 };
 static Want want;
 static bool forceNext = false;  // drawNow(): the dashboard, now, whatever the clock says
+static uint32_t forceAtMs = 0;  // (only right after: a stray drawNow() never redraws later)
+static String linkShown;        // the options code on the paper (title + address)
 static bool viewing = false;    // B showed the answer; the next B pages, the last B goes back to the dashboard
 static uint32_t replyGen = 0, shownGen = 0;  // the answer laid out / the one on the paper
 static int shownPage = -1;
@@ -460,6 +486,7 @@ static int shownPage = -1;
 void idleSince(uint32_t) {}
 void drawNow() {
   forceNext = true;
+  forceAtMs = millis();
   viewing = false;
 }
 bool waiting() { return false; }
@@ -484,6 +511,7 @@ static void commit() {
     lastDashMs = millis() ? millis() : 1;
     rtcDashAt = (uint32_t)time(nullptr);
   }
+  keepShown();
   startRefresh();
 }
 
@@ -505,10 +533,10 @@ void flush() {
 }
 
 // Seconds until the dashboard is next due (0: now). This boot's clock once
-// it has been drawn here, else the RTC clock (it runs through deep sleep,
-// set or not) against when it was last drawn; a clock that jumped back
-// means now. The screen the panel kept doesn't matter: an answer or the
-// options code left on it gives way at the next half hour, not before.
+// it has been drawn here, else the clock (it runs through deep sleep; after
+// a reset the RTC chip sets it) against when it was last drawn; a clock that
+// jumped back means now, no clock at all counts from this boot. An answer
+// left on the paper gives way at the next half hour, not before.
 uint32_t dashboardDueInSec() {
   if (lastDashMs) {
     const uint32_t age = (millis() - lastDashMs) / 1000;
@@ -516,12 +544,21 @@ uint32_t dashboardDueInSec() {
   }
   if (!everShown) return 0;
   const uint32_t now = (uint32_t)time(nullptr);
+  if (now < 1700000000) {  // no clock yet (power came back): from this boot
+    const uint32_t up = millis() / 1000;
+    return up >= kDashEverySec ? 0 : kDashEverySec - up;
+  }
   if (now < rtcDashAt) return 0;
   const uint32_t age = now - rtcDashAt;
   return age + 15 >= kDashEverySec ? 0 : kDashEverySec - age;  // a timer wake lands a little early
 }
 
-static bool dashDue() { return dashboardDueInSec() == 0; }
+// Due by the clock — or at once when the paper shows a code that's no longer
+// open (the options page closes when its screen is left; setup restarts).
+static bool dashDue() {
+  const bool code = everShown && (shownKind == Kind::Link || shownKind == Kind::Setup);
+  return code || dashboardDueInSec() == 0;
+}
 
 // ── chrome ─────────────────────────────────────────────────────────────
 
@@ -645,7 +682,8 @@ static void makeCanvas() {
 
 void begin() {
 #ifndef PREVIEW
-  if (esp_reset_reason() == ESP_RST_DEEPSLEEP && rtcShown) {  // the panel kept its picture
+  if (esp_reset_reason() != ESP_RST_DEEPSLEEP || !rtcShown) loadShown();  // any other reset: from flash
+  if (rtcShown) {  // the panel kept its picture
     everShown = true;
     shownKind = (Kind)rtcKind;
   }
@@ -819,7 +857,7 @@ static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asl
 
 // The dashboard when its half hour is up, or when it was asked for (drawNow).
 static void dashboardIfDue() {
-  const bool now = forceNext;
+  const bool now = forceNext && millis() - forceAtMs < 3000;
   forceNext = false;
   if (now || dashDue()) askDashboard(false);
 }
@@ -1069,9 +1107,13 @@ void showSetup(const char* reason, const char* apName, const char* ip) {
 
 // A: the options code (the settings page on a phone on the same Wi-Fi),
 // with what the paper is and what it has.
+// (Asked again every 30 s while it's open: drawn once, unless it changes.)
 void showLink(const char* title, const String& url, const String& note) {
   String t = title;
   forceNext = false;
+  const String key = t + "\n" + url;
+  if (key == linkShown && ((want.active && want.kind == Kind::Link) || shownKind == Kind::Link)) return;
+  linkShown = key;
   draw(Kind::Link, [=] {
     drawHeader();
     font(vlw::Title);

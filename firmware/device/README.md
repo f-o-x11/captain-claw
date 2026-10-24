@@ -155,6 +155,13 @@ paper changes only when it must:
   the next link, and *Auto update* defaults to on (an update installs itself
   when idle on USB) — both can be changed on the phone page. Notices have
   nowhere to go: the lights say what matters.
+- **Moving it does nothing** (1.0.1): motion is never read as use, and what
+  the paper shows, with when the dashboard was drawn, is kept in flash as
+  well as across deep sleep — a restart, a brownout or the battery jolted
+  loose doesn't redraw it. The options code is drawn once while it's open
+  (1.0.0 redrew it every 30 s) and gives way to the dashboard once it closes.
+  Each connect tells the deck why the device booted (`boot=power|restart|
+  crash|watchdog|brownout|button|timer` in its log).
 
 | | C (top) | A | B |
 |---|---|---|---|
@@ -369,6 +376,21 @@ Hold the front button while switching on to reopen setup. With no Wi-Fi
 saved, setup opens by itself; with none in reach for 30 s, it carries on
 offline and keeps voice notes. (Pressing it to wake from sleep is talking,
 not setup. See *Talk from sleep*.)
+
+## Sound by voice
+
+From 0.17.1 (paper B 1.0.1) a recording that is only a sound command changes
+the device instead of going to the agent — Flight Deck spots it
+(`sound_command()` in `device_bridge.py`, for devices that connect with
+`cmds=sound`) and the device says the result back at the new volume:
+
+- **"volume up" / "volume down"** (or "louder", "quieter", "pojačaj", "tiše"…):
+  a quarter at a time, 25 % to 100 %.
+- **"beep on" / "beep off"**: every beep at once — before speech, talking,
+  key clicks.
+
+Anything longer ("turn up the volume on the kitchen speaker") still goes to the
+agent.
 
 ## Setup
 
