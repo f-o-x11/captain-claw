@@ -4827,11 +4827,11 @@ async def get_fleet(request: Request, include_remote: bool = False, user: dict |
 
     # The federation roster only for a caller FD can name: a signed-in user,
     # or one of its own agents (transport guard + the agent's X-Agent-Auth).
-    identified = bool(user and user.get("id")) or (
-        _agent_caller_ok(request)
-        and _agent_record_by_auth(request.headers.get("X-Agent-Auth", "").strip()) is not None
-    )
-    if include_remote and identified:
+    if include_remote is True and (
+        (isinstance(user, dict) and user.get("id"))
+        or (_agent_caller_ok(request)
+            and _agent_record_by_auth(request.headers.get("X-Agent-Auth", "").strip()) is not None)
+    ):
         from captain_claw.flight_deck.botport_link import get_link
 
         for r in get_link().remote_agents():

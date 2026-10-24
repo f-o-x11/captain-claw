@@ -116,6 +116,21 @@ class ConcernManager:
         log.debug("Concern created: %s from %s", concern.id[:8], from_instance)
         return concern
 
+    def mark_assigned(self, concern_id: str, instance_id: str) -> bool:
+        """Assign a concern to an instance in memory (no await — callers pair
+        it with their own bookkeeping atomically, then :meth:`persist`)."""
+        concern = self._concerns.get(concern_id)
+        if not concern or concern.is_terminal:
+            return False
+        concern.assigned_instance = instance_id
+        concern.status = "assigned"
+        concern.touch()
+        self._refresh_timeout(concern)
+        return True
+
+    async def persist(self, concern: Concern) -> None:
+        await self._store.save_concern(concern)
+
     async def assign_concern(
         self,
         concern_id: str,
@@ -123,15 +138,9 @@ class ConcernManager:
         instance_name: str = "",
     ) -> bool:
         """Assign a concern to a specific instance."""
-        concern = self._concerns.get(concern_id)
-        if not concern or concern.is_terminal:
+        if not self.mark_assigned(concern_id, instance_id):
             return False
-
-        concern.assigned_instance = instance_id
-        concern.status = "assigned"
-        concern.touch()
-        self._refresh_timeout(concern)
-
+        concern = self._concerns[concern_id]
         await self._store.save_concern(concern)
         log.debug(
             "Concern %s assigned to %s (%s)",
@@ -407,8 +416,9 @@ class ConcernManager:
                 continue
 
             try:
-                if concern.status == "responded" and reason == "idle_timeout":
-                    # Successfully answered — close gracefully, nobody is waiting.
+                if concern.status == "responded":
+                    # Already answered: nobody waits for a result, whatever
+                    # ran out — close it gracefully.
                     await self.close_concern(concern.id, reason="idle_after_response")
                     ended.append(concern.id)
                     continue

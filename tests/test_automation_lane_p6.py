@@ -116,8 +116,21 @@ async def test_a_remote_deck_lane_leaves_the_global_tools_and_owner_briefing_alo
 
     s._build_scoped_agent = fake_build
     s._lane_session = fake_session
-    await s._get_lane_agent("bp3fa2c1")
+    agent = await s._get_lane_agent("bp3fa2c1")
     assert built == [("lane-BP3FA2C1", {"register_tools": False, "warm_owner_caches": False})]
+    assert agent._tenant_hidden is True  # no owner profile, packs or members' data
+
+
+def test_a_remote_deck_lane_never_gets_the_network_or_the_owners_tools():
+    from captain_claw.web.chat_handler import remote_lane_denies
+
+    denied = set(remote_lane_denies("BP" + "A" * 20))
+    assert {"flight_deck", "consult_peer", "botport", "cron", "sessions", "history",
+            "personality", "shared_agent_usage"} <= denied
+    assert remote_lane_denies("B") == [] and remote_lane_denies("A") == []
+    # A remote lane id keeps its full length (another deck must not collide into it).
+    assert WebServer.normalize_lane("bp" + "a" * 20) == "BP" + "A" * 20
+    assert WebServer.normalize_lane("lanebxyzlong") == "LANEBXYZ"
 
 
 # ── A rerouted turn ────────────────────────────────────────────────────

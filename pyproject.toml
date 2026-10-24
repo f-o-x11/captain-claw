@@ -146,6 +146,9 @@ disallow_untyped_defs = false
 [tool.setuptools.packages.find]
 where = [".", "botport"]
 include = ["captain_claw*", "botport*"]
+# The repo-root botport/ directory (no __init__) would be found as a namespace
+# package too, yielding a bogus "botport.botport"; the real package is botport/botport.
+exclude = ["botport.botport*", "botport.tests*"]
 
 [tool.setuptools.package-data]
 captain_claw = ["web/static/**/*", "instructions/**/*", "flight_deck/static/**/*", "payments/*.json"]

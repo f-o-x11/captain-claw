@@ -68,6 +68,13 @@ class ServerConfig(BaseModel):
     # Browser origins allowed to call the REST API cross-origin (e.g. a Flight
     # Deck UI on another host). Empty: no CORS headers (same-origin only).
     cors_origins: list[str] = Field(default_factory=list)
+    # With behind_proxy: the addresses of the proxies whose X-Forwarded-For
+    # is believed (anyone else's is ignored).
+    trusted_proxies: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
+    # Swarm file uploads (legacy agents): per-swarm cap, and the free space
+    # always left on the disk (an SD card that fills up takes the DB with it).
+    swarm_workspace_mb: int = 1024
+    min_free_disk_mb: int = 512
 
     @property
     def tls_enabled(self) -> bool:
@@ -324,6 +331,12 @@ class BotPortConfig(BaseSettings):
             for k in self.auth.keys:
                 if k.secret and len(k.secret.strip()) < 16:
                     out.append(f"auth key {k.key!r} has a short secret (<16 chars)")
+                if not k.instance.strip():
+                    out.append(f"auth key {k.key!r} has no `instance`: a Flight Deck cannot use it "
+                               "(only a legacy agent, under the name it sends)")
+        if self.server.behind_proxy and self.server.host not in ("127.0.0.1", "localhost", "::1"):
+            out.append("behind_proxy is on but the hub listens on "
+                       f"{self.server.host}: bind it to 127.0.0.1 so only the proxy reaches it")
         if self.server.dashboard_enabled and not self.server.admin_token and self.auth.enabled:
             out.append(
                 "server.admin_token is empty: the dashboard and REST API answer only "

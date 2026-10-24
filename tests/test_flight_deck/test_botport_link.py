@@ -183,7 +183,9 @@ async def test_consult_reaches_the_remote_agent_and_back(net):
     assert {"flight_deck", "consult_peer", "botport"} <= set(sent["deny_tools"])
     # Never the owner's main chat: a lane of the requesting deck's own.
     assert agent.lanes[-1] == bl.remote_lane("vps1") and agent.lanes[-1].startswith("BP")
-    assert bl.remote_lane("vps1") != bl.remote_lane("vps2") and len(bl.remote_lane("x")) == 8
+    assert bl.remote_lane("vps1") != bl.remote_lane("vps2") and len(bl.remote_lane("x")) == 22
+    # A legacy agent naming itself "vps1" never shares the real deck's lane.
+    assert bl.remote_lane("agent:vps1") != bl.remote_lane("vps1")
 
     st = net["b"].status()
     assert st["counters"]["inbound_ok"] == 1 and st["exposed_agents"] == ["Researcher"]
@@ -326,3 +328,102 @@ def test_secret_is_sealed_at_rest(monkeypatch, tmp_path):
     assert "s3cret" not in raw and "secret_sealed" in raw
     assert bl.unseal_settings(raw)["secret"] == "s3cret"
     fd_crypto.reset_for_tests()
+
+
+async def test_only_hub_verified_decks_pass_accept_from(net):
+    """A legacy agent calling itself "vps1" is not deck vps1: refused by a deck
+    that accepts vps1 only, and (with "*") answered in a lane of its own."""
+    b, agent = net["b"], net["agent"]
+    b.settings = bl.LinkSettings.from_dict({**b.settings.to_dict(), "accept_from": ["vps1"]})
+    sent: list[dict] = []
+
+    async def capture(frame):
+        sent.append(frame)
+        return True
+
+    b._send = capture  # type: ignore[method-assign]
+    impostor = {"type": "dispatch", "concern_id": "c" * 16, "from_deck": "", "from_instance_name": "vps1",
+                "target_agent": "researcher", "task": "what did vps1 ask you?", "timeout_seconds": 60}
+    await b._serve(impostor)
+    assert sent[-1]["ok"] is False and "not a Flight Deck" in sent[-1]["error"]
+
+    b.settings = bl.LinkSettings.from_dict({**b.settings.to_dict(), "accept_from": ["*"]})
+    await b._serve({**impostor, "concern_id": "d" * 16})
+    assert sent[-1]["ok"] is True
+    assert agent.lanes[-1] == bl.remote_lane("agent:vps1") != bl.remote_lane("vps1")
+    assert "agent 'vps1' (not a Flight Deck)" in agent.received[-1]["content"]
+
+
+async def test_member_private_answers_do_not_leave_the_deck(net):
+    b = net["b"]
+    sent: list[dict] = []
+
+    async def capture(frame):
+        sent.append(frame)
+        return True
+
+    async def private_events(*args, **kw):
+        yield {"ok": True, "done": True, "response": "members' secrets", "member_private": "data"}
+
+    b._send = capture  # type: ignore[method-assign]
+    b._consult_events = private_events
+    await b._serve({"type": "dispatch", "concern_id": "e" * 16, "from_deck": "vps1",
+                    "target_agent": "researcher", "task": "x", "timeout_seconds": 60})
+    assert sent[-1]["ok"] is False and "private data" in sent[-1]["error"]
+    assert "secrets" not in json.dumps(sent)
+
+
+async def test_a_second_process_with_the_same_identity_backs_off(net):
+    a = net["a"]
+    twin = bl.BotPortLink()
+    twin.configure(fleet=lambda: [], consult_events=REAL_CONSULT_EVENTS, resolve_auth=lambda p: "")
+    await twin.start({"enabled": True, "url": net["url"], "deck_name": "vps1", "key": "ka",
+                      "secret": "secret-a-0123456789"}, "deck-a")  # same deck_id as a
+    try:
+        await _wait(lambda: a.state == "error", what="the superseded link gives up")
+        assert "took over" in a.last_error
+        connects = a.counters["connects"]
+        await asyncio.sleep(1.5)
+        assert a.counters["connects"] == connects, "no take-back loop"
+        assert twin.connected
+    finally:
+        await twin.stop()
+
+
+async def test_backoff_resets_after_a_healthy_session(net, monkeypatch):
+    a, hub = net["a"], net["hub"]
+    monkeypatch.setattr(bl, "_STABLE_SECONDS", 0.0)
+    loop = asyncio.get_running_loop()
+    for _ in range(4):
+        await hub.connections.get_ws("deck:vps1").close(code=1011)  # abnormal drop
+        await _wait(lambda: not a.connected, what="dropped")
+        t0 = loop.time()
+        await _wait(lambda: a.connected, timeout=6, what="back")
+        assert loop.time() - t0 < 3.0, "every reconnect after a good session is quick"
+    assert a.last_error == "" and a.state == "connected"
+
+
+async def test_a_protocol_1_hub_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("FD_BOTPORT_NO_PROXY", "1")
+
+    async def old_hub(request):
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.receive()
+        await ws.send_str(json.dumps({"type": "registered", "ok": True, "instance_id": "x"}))
+        await ws.receive()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/ws", old_hub)
+    srv = TestServer(app, host="127.0.0.1")
+    await srv.start_server()
+    link = bl.BotPortLink()
+    link.configure(fleet=lambda: [], consult_events=REAL_CONSULT_EVENTS, resolve_auth=lambda p: "")
+    try:
+        await link.start({"enabled": True, "url": f"ws://127.0.0.1:{srv.port}/ws", "deck_name": "vps1"}, "d")
+        await _wait(lambda: link.state == "error", what="refused")
+        assert "protocol 1" in link.last_error and not link.connected
+    finally:
+        await link.stop()
+        await srv.close()

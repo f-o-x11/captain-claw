@@ -49,6 +49,7 @@ _MAX_FRAME = 16 * 1024 * 1024
 _HEARTBEAT_SECONDS = 25.0
 _AGENT_REFRESH_SECONDS = 30.0
 _BACKOFF_MAX = 60.0
+_STABLE_SECONDS = 10.0  # a session this long counts as healthy: the next retry is quick again
 _PROGRESS_MIN_INTERVAL = 0.5
 _DONE_MEMORY = 512
 _RECENT = 40
@@ -58,16 +59,27 @@ REMOTE_AUTOMATION: dict[str, str] = {"kind": "botport", "job_text": "", "mail_wr
 # Tools a remote turn never gets: no reaching back into the network from a
 # turn another deck started (no A -> B -> A loops, no fan-out on its behalf).
 LOOP_GUARD_TOOLS = ("flight_deck", "consult_peer", "botport")
+# Everything a remote turn never gets: the loop guard plus the tools bound to
+# the owner's own session and memory. Agents enforce the same set themselves
+# for any "BP" lane (web_server.REMOTE_LANE_DENY); this is defence in depth.
+REMOTE_DENY_TOOLS = LOOP_GUARD_TOOLS + (
+    "cron", "sessions", "history", "topics", "personality", "terminal",
+    "insights", "intentions", "shared_agent_usage",
+)
 # Agents run each remote deck's requests in a lane of their own ("BP" + hash):
 # never the owner's main chat, never another deck's history.
 REMOTE_LANE_PREFIX = "BP"
 
 
-def remote_lane(deck: str) -> str:
+def remote_lane(sender: str) -> str:
+    """The agent lane a sender's requests run in: "BP" + 80 bits of a hash.
+
+    ``sender`` is a hub-verified deck name, or "agent:<name>" for a legacy
+    agent (deck names cannot contain ':', so the two never share a lane)."""
     import hashlib
 
-    digest = hashlib.sha256((deck or "?").strip().lower().encode("utf-8")).hexdigest().upper()
-    return REMOTE_LANE_PREFIX + digest[:6]
+    digest = hashlib.sha256((sender or "?").strip().lower().encode("utf-8")).hexdigest().upper()
+    return REMOTE_LANE_PREFIX + digest[:20]
 
 _ENV = {
     "enabled": "FD_BOTPORT_ENABLED",
@@ -288,6 +300,8 @@ class BotPortLink:
         self.network: dict[str, Any] = {"decks": [], "agents": []}
 
         self._ws: Any = None
+        self._conn: Any = None          # the socket being connected (before "registered")
+        self._settings_gen = 0          # bumped by apply(): a session on older settings ends
         self._send_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._wake = asyncio.Event()
@@ -330,11 +344,19 @@ class BotPortLink:
                 await asyncio.wait_for(ws.close(code=1001, reason="Flight Deck shutting down"), timeout=3)
         for inb in list(self._inbound.values()):
             inb.task.cancel()
+        self._fail_outbound("Flight Deck is shutting down")
         if self._task is not None:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await asyncio.wait_for(self._task, timeout=5)
         self.state = "stopped"
+
+    def _fail_outbound(self, error: str) -> None:
+        """End every request this deck's agents are waiting on."""
+        for cid, o in list(self._outbound.items()):
+            self._outbound.pop(cid, None)
+            self._remember_done(cid)
+            o.queue.put_nowait({"ok": False, "error": error})
 
     def effective(self, stored: dict[str, Any] | None) -> LinkSettings:
         merged = dict(stored or {})
@@ -342,16 +364,19 @@ class BotPortLink:
         return LinkSettings.from_dict(merged)
 
     async def apply(self, stored: dict[str, Any] | None) -> None:
-        """New settings: reconnect with them."""
+        """New settings: reconnect with them (a connection still being set up
+        on the old ones is dropped too)."""
         self.settings = self.effective(stored)
+        self._settings_gen += 1
         self.last_error = ""
+        if not self.settings.enabled:
+            self._fail_outbound("The BotPort link was switched off")
         await self.reconnect()
 
     async def reconnect(self) -> None:
-        ws = self._ws
         self.next_retry_at = 0.0
         self._wake.set()
-        if ws is not None:
+        for ws in {id(w): w for w in (self._ws, self._conn) if w is not None}.values():
             with contextlib.suppress(Exception):
                 await ws.close(code=1000, reason="reconnecting")
 
@@ -359,7 +384,7 @@ class BotPortLink:
 
     @property
     def connected(self) -> bool:
-        return self.state == "connected" and self._ws is not None
+        return self.settings.enabled and self.state == "connected" and self._ws is not None
 
     def status(self) -> dict[str, Any]:
         s = self.settings
@@ -523,11 +548,21 @@ class BotPortLink:
                 url = normalize_url(s.url)
                 outcome = await self._session(url)
                 if outcome == "fatal":
-                    # Bad credentials / name: wait for new settings (or 10 min).
+                    # Bad credentials / name / old hub: wait for new settings (or 10 min).
                     self.state = "error"
                     await self._sleep(600.0)
                     continue
-                if outcome == "connected":
+                if outcome == "superseded":
+                    # Another process with this deck's identity took the link:
+                    # two of them would take it from each other forever.
+                    self.state = "error"
+                    self._error("another Flight Deck process with this deck's identity took over the link "
+                                "(code 4000) — run one process per deck data directory; retrying in 5 min")
+                    await self._sleep(300.0)
+                    continue
+                if outcome == "restart":
+                    continue  # settings changed while connecting: go again at once
+                if outcome == "connected" and time.time() - self.connected_since >= _STABLE_SECONDS:
                     backoff = 1.0  # it worked: come back quickly after a drop
             except asyncio.CancelledError:
                 raise
@@ -535,6 +570,7 @@ class BotPortLink:
                 self._error(_describe(exc))
             finally:
                 self._ws = None
+                self._conn = None
             if self._stopping:
                 break
             delay = min(backoff, _BACKOFF_MAX) * (0.75 + random.random() * 0.5)
@@ -563,10 +599,13 @@ class BotPortLink:
 
     async def _session(self, url: str) -> str:
         """One connection's life: "connected" (it was up, then dropped),
-        "refused" (retry later) or "fatal" (retrying with these settings is pointless)."""
+        "refused" (retry later), "fatal" (retrying with these settings is
+        pointless), "superseded" (code 4000) or "restart" (settings changed)."""
         import websockets
+        from websockets.exceptions import ConnectionClosed
 
         s = self.settings
+        gen = self._settings_gen
         self.state = "connecting"
         proxy: Any = None if os.environ.get("FD_BOTPORT_NO_PROXY", "").lower() in ("1", "true", "yes") else True
         async with websockets.connect(
@@ -574,6 +613,7 @@ class BotPortLink:
             max_size=_MAX_FRAME, **ws_proxy_kwargs(proxy),
             user_agent_header=f"FlightDeck/{self.version or '?'} botport-link/{PROTOCOL}",
         ) as ws:
+            self._conn = ws
             self._advertised = await self._ads()
             await ws.send(json.dumps({
                 "type": "register",
@@ -593,13 +633,23 @@ class BotPortLink:
                 # acknowledged (it is resent right after this) — either way
                 # the hub must keep the concern alive.
                 "in_flight": list(dict.fromkeys([*self._inbound, *self._outbox])),
+                # Acked requests we still wait for, and ones whose ack never
+                # came (resubmitted right after this — submission is idempotent).
                 "awaiting": [cid for cid, o in self._outbound.items() if o.acked],
+                "submitted": [cid for cid, o in self._outbound.items() if not o.acked],
             }))
             reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
             if reply.get("type") != "registered" or not reply.get("ok"):
                 err = str(reply.get("error") or "registration refused")
                 self._error(f"hub refused registration: {err}")
                 return "fatal" if reply.get("retry") is False else "refused"
+            hub_protocol = int(reply.get("protocol") or 1)
+            if hub_protocol < PROTOCOL:
+                self._error(f"the hub speaks BotPort protocol {hub_protocol}; Flight Deck links need "
+                            f"protocol {PROTOCOL} — upgrade BotPort on the hub")
+                return "fatal"
+            if gen != self._settings_gen:
+                return "restart"
 
             self._ws = ws
             self.state = "connected"
@@ -631,6 +681,8 @@ class BotPortLink:
                             await self._on_message(msg)
                         except Exception as exc:
                             log.warning("botport link: handler failed", type=msg.get("type"), error=str(exc))
+            except ConnectionClosed:
+                pass  # a drop after a good session: reported below, not as an exception
             finally:
                 beat.cancel()
                 self._ws = None
@@ -639,10 +691,8 @@ class BotPortLink:
                 reason = getattr(ws, "close_reason", "") or ""
                 if not self._stopping:
                     self._error(f"link closed ({code}{': ' + reason if reason else ''})")
-                if code == 4000:
-                    # Another connection of this same deck took over (two FD
-                    # processes share a data dir?) — don't fight it in a loop.
-                    self._error("another connection of this deck took over the link (code 4000)")
+            if code == 4000:
+                return "superseded"
         return "connected"
 
     async def _beat(self) -> None:
@@ -781,12 +831,16 @@ class BotPortLink:
         s = self.settings
         self.counters["inbound"] += 1
 
+        # Only a deck's name is hub-verified (bound to its key); anything else
+        # (a legacy agent, the hub's swarm) names itself, so it is let in only
+        # when this deck accepts everyone.
         allowed = {x.strip().lower() for x in s.accept_from}
-        who = (from_deck or str(d.get("from_instance_name") or "")).lower()
-        if "*" not in allowed and who not in allowed:
+        who = from_deck.lower()
+        if "*" not in allowed and (not from_deck or who not in allowed):
             self.counters["inbound_refused"] += 1
+            asker = f"'{from_deck}'" if from_deck else f"agent '{d.get('from_instance_name') or '?'}' (not a Flight Deck)"
             await self._finish(cid, ok=False, error=f"Flight Deck '{self.hub_deck_name or s.deck_name}' "
-                                                    f"does not accept requests from '{who or 'unknown'}'")
+                                                    f"does not accept requests from {asker}")
             self._note("in", from_label, "", False, "refused (accept_from)")
             return
 
@@ -818,12 +872,14 @@ class BotPortLink:
         await self._send({"type": "progress", "concern_id": cid, "event": "accepted", "data": {"agent": name}})
 
         port = int(agent["port"])
-        auth = self._resolve_auth(port)
+        auth = await asyncio.to_thread(self._resolve_auth, port)  # Docker lookup: off the loop
         timeout = float(d.get("timeout_seconds") or 600.0)
         timeout = max(30.0, min(timeout, s.max_inbound_timeout))
         sender = f"{d.get('from_agent')} on " if d.get("from_agent") else ""
+        origin = (f"Flight Deck '{from_deck}'" if from_deck
+                  else f"agent '{d.get('from_instance_name') or '?'}' (not a Flight Deck)")
         message = (
-            f"[Request from {sender}Flight Deck '{from_deck or d.get('from_instance_name') or '?'}' via BotPort. "
+            f"[Request from {sender}{origin} via BotPort. "
             f"Answer it fully in your reply; you cannot message them back.]\n\n{d.get('task') or ''}"
         )
         last_sent = 0.0
@@ -844,8 +900,8 @@ class BotPortLink:
                 "localhost", port, auth, message,
                 source_name=f"{d.get('from_agent') or 'agent'}@{from_deck or 'botport'}",
                 timeout=timeout, no_flow=True, no_broadcast=True, automation=dict(REMOTE_AUTOMATION),
-                deny_tools=sorted({*LOOP_GUARD_TOOLS, *s.deny_tools}),
-                lane=remote_lane(from_deck or str(d.get("from_instance_name") or "")),
+                deny_tools=sorted({*REMOTE_DENY_TOOLS, *s.deny_tools}),
+                lane=remote_lane(from_deck if from_deck else "agent:" + str(d.get("from_instance_name") or "")),
             )) as events:
                 async for evt in events:
                     if "ok" in evt and (evt.get("done") or evt.get("ok") is False):
@@ -879,16 +935,14 @@ class BotPortLink:
 
         if final is None:
             final = {"ok": False, "error": f"{name} produced no answer"}
+        if final.get("ok") and final.get("member_private") in ("data", "content"):
+            # Marked for the agent's owner only (members' private data): it
+            # does not leave this deck, whoever the other deck belongs to.
+            final = {"ok": False, "error": f"{name}'s answer drew on private data that cannot leave this "
+                                           f"Flight Deck"}
         if final.get("ok"):
             response = str(final.get("response") or "(no response)")
             meta: dict[str, Any] = {"agent": name}
-            level = final.get("member_private")
-            if level in ("data", "content"):
-                meta["member_private"] = level
-                with contextlib.suppress(Exception):
-                    from captain_claw import member_privacy
-
-                    response = member_privacy.header_for(level) + "\n" + response
             if isinstance(final.get("usage"), dict):
                 meta["usage"] = {k: final["usage"].get(k) for k in ("model", "input_tokens", "output_tokens",
                                                                     "prompt_tokens", "completion_tokens")
@@ -924,6 +978,9 @@ class BotPortLink:
                       context: str = "") -> AsyncIterator[dict[str, Any]]:
         """Ask ``target_agent`` on ``target_deck``; yields /fd/consult-peer-style events
         and ends with ``{"ok": True, "done": True, "response": ...}`` or ``{"ok": False, "error": ...}``."""
+        if not self.settings.enabled:
+            yield {"ok": False, "error": "This Flight Deck's BotPort link is switched off"}
+            return
         if not self.settings.allow_outbound:
             yield {"ok": False, "error": "This Flight Deck does not allow its agents to consult remote agents"}
             return
@@ -978,7 +1035,9 @@ class BotPortLink:
 
 
 def _from_label(d: dict[str, Any]) -> str:
-    deck = str(d.get("from_deck") or d.get("from_instance_name") or "?")
+    deck = str(d.get("from_deck") or "")
+    if not deck:
+        return f"agent {d.get('from_instance_name') or '?'}"
     agent = str(d.get("from_agent") or "")
     return f"{agent}@{deck}" if agent else deck
 

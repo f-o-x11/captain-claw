@@ -475,11 +475,24 @@ class WebServer:
     # such a lane never takes over the process-global tools and gets no owner
     # briefing — it is someone else asking.
     REMOTE_LANE_PREFIX = "BP"
+    # What a remote lane may never use, whatever the asking deck sends: the
+    # network itself (no A -> B -> A) and the tools bound to the owner's own
+    # session and memory (a cron job planted in the owner's chat, the owner's
+    # sessions, history, topics, insights, persona, members' usage).
+    REMOTE_LANE_DENY = (
+        "flight_deck", "consult_peer", "botport",
+        "cron", "sessions", "history", "topics", "personality", "terminal",
+        "insights", "intentions", "shared_agent_usage",
+    )
 
     @staticmethod
     def normalize_lane(raw: Any) -> str:
-        """Map anything a client sends to a lane id. Empty/garbage → A."""
-        lane = re.sub(r"[^A-Za-z0-9_-]", "", str(raw or "")).upper()[:8]
+        """Map anything a client sends to a lane id. Empty/garbage → A.
+
+        Lane ids are short (8), except a remote-deck lane, which carries a
+        longer hash so another deck name cannot land in the same lane."""
+        lane = re.sub(r"[^A-Za-z0-9_-]", "", str(raw or "")).upper()
+        lane = lane[:24] if lane.startswith(WebServer.REMOTE_LANE_PREFIX) else lane[:8]
         return lane or WebServer.LANE_MAIN
 
     def _lane_send(self, lane: str):
@@ -527,6 +540,10 @@ class WebServer:
             if remote:
                 scoped["warm_owner_caches"] = False
             agent = await self._build_scoped_agent(session, self._lane_send(lane), **scoped)
+            if remote:
+                # Someone else's deck asks: no owner profile, context packs,
+                # topic recall or members' data (as a BotPort dispatch agent).
+                agent._tenant_hidden = True  # type: ignore[attr-defined]
             self._lane_agents[lane] = agent
             log.info("Created lane agent", lane=lane, session_id=session.id)
             return agent

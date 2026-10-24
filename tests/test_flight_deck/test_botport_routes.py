@@ -58,6 +58,7 @@ async def deck(tmp_path: Path, monkeypatch):
     fd_crypto.reset_for_tests()
 
     link = bl.BotPortLink()
+    link.settings = bl.LinkSettings.from_dict({"enabled": True, "url": "hub:23180", "deck_name": "vps1"})
     link.state, link._ws = "connected", object()
     link.network = {"decks": [{"name": "pi", "status": "connected", "agents": [
         {"name": "Researcher", "slug": "researcher", "description": "Finds things", "status": "running"}]}],

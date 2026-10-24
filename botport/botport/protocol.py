@@ -42,7 +42,8 @@ class RegisterMessage(BaseMessage):
     protocol: int = 1
     deck_id: str = ""              # stable per-deck id (persisted by the deck)
     in_flight: list[str] = Field(default_factory=list)   # concerns this deck is still working on
-    awaiting: list[str] = Field(default_factory=list)    # concerns this deck still waits for
+    awaiting: list[str] = Field(default_factory=list)    # acked concerns this deck still waits for
+    submitted: list[str] = Field(default_factory=list)   # sent, ack never seen (resubmitted next)
 
 
 class RegisteredMessage(BaseMessage):

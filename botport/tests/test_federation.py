@@ -330,3 +330,118 @@ async def test_hub_restart_tells_the_requester_its_concern_is_gone(make_hub):
     a = await hub.deck("vps1", awaiting=["0123456789abcdef"])
     res = await a.expect("concern_result", concern_id="0123456789abcdef")
     assert not res["ok"] and "no longer knows" in res["error"]
+
+
+async def test_lost_ack_does_not_kill_the_request(make_hub):
+    """The ack never reached the requester: on reconnect it lists the request as
+    `submitted` and resubmits — the hub keeps the work alive."""
+    hub = await make_hub()
+    a = await hub.deck("vps1")
+    b = await hub.deck("vps2", [RESEARCHER])
+    cid = _cid()
+    await _consult(a, cid)
+    await b.expect("dispatch", concern_id=cid)
+    await a.close()
+    await asyncio.sleep(0.1)
+    a2 = await hub.deck("vps1", submitted=[cid])
+    await _consult(a2, cid)
+    assert (await a2.expect("concern_ack", concern_id=cid))["ok"]
+    await b.nothing("concern_closed")
+    await b.send({"type": "result", "concern_id": cid, "ok": True, "response": "still delivered"})
+    assert (await a2.expect("concern_result", concern_id=cid))["response"] == "still delivered"
+
+    # Neither awaited nor submitted: the requester forgot it, the worker stops.
+    cid2 = _cid()
+    await _consult(a2, cid2)
+    await b.expect("dispatch", concern_id=cid2)
+    await a2.close()
+    await asyncio.sleep(0.1)
+    await hub.deck("vps1")
+    closed = await b.expect("concern_closed", concern_id=cid2)
+    assert closed["reason"] == "originator_restarted"
+
+
+async def test_resubmit_after_eviction_is_not_run_twice(make_hub):
+    hub = await make_hub()
+    a = await hub.deck("vps1")
+    b = await hub.deck("vps2", [RESEARCHER])
+    cid = _cid()
+    await _consult(a, cid)
+    await b.expect("dispatch", concern_id=cid)
+    await b.send({"type": "result", "concern_id": cid, "ok": True, "response": "done"})
+    await a.expect("concern_result", concern_id=cid)
+    await a.send({"type": "result_ack", "concern_id": cid})
+    await asyncio.sleep(0.1)
+    hub.server.concerns.evict(cid)
+    await _consult(a, cid)
+    ack = await a.expect("concern_ack", concern_id=cid)
+    assert not ack["ok"] and "already finished" in ack["error"]
+    await b.nothing("dispatch")
+
+
+async def test_capacity_is_recounted_when_a_deck_registers(make_hub):
+    hub = await make_hub()
+    await hub.deck("vps2", [RESEARCHER])
+    hub.server.connections.get_instance("deck:vps2").active_concerns = 4  # a leaked count
+    await hub.deck("vps2", [RESEARCHER])
+    assert hub.server.connections.get_instance("deck:vps2").active_concerns == 0
+
+
+async def test_a_new_deck_gets_the_roster_at_once(make_hub):
+    hub = await make_hub()
+    await hub.deck("vps1", [CODER])
+    b = await hub.deck("vps2")
+    net = await b.expect("network", timeout=1.0)
+    assert [d["name"] for d in net["decks"]] == ["vps1"]
+
+
+async def test_names_are_bound_for_agents_and_unbound_keys_cannot_be_decks(make_hub):
+    hub = await make_hub(auth=[
+        {"instance": "vps1", "key": "k1", "secret": "s" * 20},
+        {"instance": "", "key": "loose", "secret": "l" * 20},
+        {"instance": "helper", "key": "kh", "secret": "h" * 20},
+    ])
+    await hub.deck("vps1", key="k1", secret="s" * 20)
+    # An unbound key may not register a deck (it could claim any name).
+    p = hub.peer()
+    reg = await p.connect(kind="deck", protocol=2, instance_name="vps2", deck_id="x", key="loose",
+                          secret="l" * 20, capabilities={})
+    assert not reg["ok"] and "not bound" in reg["error"] and reg["retry"] is False
+    # An agent cannot take a deck's name...
+    p = hub.peer()
+    reg = await p.connect(instance_name="vps1", key="loose", secret="l" * 20, capabilities={})
+    assert not reg["ok"] and "Flight Deck" in reg["error"]
+    # ...and a bound key names the agent, whatever it asks for.
+    p = hub.peer()
+    reg = await p.connect(instance_name="vps1", key="kh", secret="h" * 20, capabilities={})
+    assert reg["ok"]
+    assert hub.server.connections.get_instance(reg["instance_id"]).name == "helper"
+
+
+async def test_missing_deck_id_cannot_take_over_a_live_deck(make_hub):
+    hub = await make_hub()
+    await hub.deck("vps1", deck_id="real")
+    p = hub.peer()
+    reg = await p.connect(kind="deck", protocol=2, instance_name="vps1", deck_id="", capabilities={})
+    assert not reg["ok"] and reg["retry"] is True
+
+
+async def test_legacy_answered_concern_is_not_failed_by_a_deadline(make_hub):
+    hub = await make_hub()
+    agent_a = hub.peer()
+    await agent_a.connect(instance_name="asker", capabilities={})
+    agent_b = hub.peer()
+    await agent_b.connect(instance_name="answerer", capabilities={
+        "personas": [{"name": "Lawyer", "expertise_tags": ["legal"]}]})
+    await agent_a.send({"type": "concern", "concern_id": _cid(), "task": "legal q", "expertise_tags": ["legal"]})
+    d = await agent_b.expect("dispatch")
+    concern = hub.server.concerns.get_concern(d["concern_id"])
+    assert concern.deadline_at == 0.0, "legacy agents keep idle-only timing"
+    await agent_b.send({"type": "result", "concern_id": d["concern_id"], "ok": True, "response": "answer"})
+    assert (await agent_a.expect("concern_result"))["ok"]
+    concern.deadline_at = time.monotonic() - 1  # even if one were set
+    concern.timeout_at = "2000-01-01T00:00:00+00:00"
+    await hub.server.concerns._check_timeouts()
+    assert concern.status == "closed"
+    await agent_a.nothing("concern_result")
+    await agent_a.nothing("timeout_notice")

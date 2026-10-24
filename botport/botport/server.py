@@ -97,10 +97,7 @@ class BotPortServer:
         self.router = Router(self.registry)
         self.concerns = ConcernManager(self.store)
         self.concerns.on_expired = self._on_concern_expired
-        workspace = None
-        if config.server.data_dir and not os.environ.get("BOTPORT_WORKSPACE"):
-            workspace = config.data_dir / "workspace-botport"
-        self.file_manager = FileManager(workspace)
+        self.file_manager = FileManager(_workspace_root(config))
         self.auth_limiter = FailureLimiter()
         self._swarm_store_initialized = False
         self.swarm_engine: Any = None
@@ -115,6 +112,7 @@ class BotPortServer:
         self._last_progress: dict[str, float] = {}
         self._pending_progress: dict[str, ProgressMessage] = {}
         self._network_task: asyncio.Task[None] | None = None
+        self._roster_gen = 0
         self._bg_tasks: set[asyncio.Task[Any]] = set()
         self.dashboard_sockets: set[web.WebSocketResponse] = set()
         self.counters: dict[str, int] = {
@@ -176,9 +174,11 @@ class BotPortServer:
 
         instance_id: str | None = None
         try:
+            # The time limit covers waiting for the register frame only — not
+            # what follows (reconcile, re-dispatch, delivering queued results).
             try:
-                instance_id = await asyncio.wait_for(
-                    self._await_register(ws, addr), timeout=max(1.0, cfg.register_timeout_seconds),
+                reg = await asyncio.wait_for(
+                    self._await_register(ws), timeout=max(1.0, cfg.register_timeout_seconds),
                 )
             except asyncio.TimeoutError:
                 await self.connections.send_on(ws, RegisteredMessage(
@@ -186,11 +186,16 @@ class BotPortServer:
                 ))
                 await ws.close(code=CLOSE_REGISTER_TIMEOUT, message=b"register timeout")
                 return ws
+            if reg is None:
+                return ws
 
+            instance_id = await self._handle_register(ws, reg, addr)
             if not instance_id:
                 if not ws.closed:
                     await ws.close(code=CLOSE_REJECTED, message=b"registration rejected")
                 return ws
+            if reg.kind == "deck":
+                await self._after_deck_register(instance_id, reg)
 
             # Main message loop.
             async for raw_msg in ws:
@@ -222,8 +227,8 @@ class BotPortServer:
 
         return ws
 
-    async def _await_register(self, ws: web.WebSocketResponse, addr: str) -> str | None:
-        """Read until a valid ``register`` (or a fatal rejection)."""
+    async def _await_register(self, ws: web.WebSocketResponse) -> RegisterMessage | None:
+        """Read until a ``register`` frame (None if the socket closes first)."""
         async for raw_msg in ws:
             if raw_msg.type == web.WSMsgType.TEXT:
                 try:
@@ -236,10 +241,20 @@ class BotPortServer:
                         ok=False, error="First message must be 'register'",
                     ))
                     continue
-                return await self._handle_register(ws, msg, addr)
+                return msg
             if raw_msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
                 return None
         return None
+
+    async def _after_deck_register(self, instance_id: str, msg: RegisterMessage) -> None:
+        """A deck is registered (and owns its socket): line up state, send its
+        roster, then deliver queued results without blocking its read loop."""
+        try:
+            await self._reconcile_deck(instance_id, msg)
+        except Exception:
+            log.exception("Reconcile failed for %s", self._name(instance_id))
+        await self.connections.send_to(instance_id, self.network_for(instance_id))
+        self._spawn(self._flush_outbox(instance_id))
 
     # ── Registration ─────────────────────────────────────────────
 
@@ -275,13 +290,30 @@ class BotPortServer:
                 return None
             self.auth_limiter.record_success(bucket)
 
+        bound = entry.instance.strip() if entry else ""
         if msg.kind == "deck":
-            return await self._register_deck(ws, msg, addr, entry.instance.strip() if entry else "")
-        return await self._register_agent(ws, msg, addr)
+            if self.config.auth.enabled and not bound:
+                await self._reject(
+                    ws, "This key is not bound to a deck name: set `instance:` for it in the hub's auth.keys",
+                    retry=False, code=CLOSE_REJECTED,
+                )
+                return None
+            return await self._register_deck(ws, msg, addr, bound)
+        return await self._register_agent(ws, msg, addr, bound)
 
-    async def _register_agent(self, ws: web.WebSocketResponse, msg: RegisterMessage, addr: str) -> str:
+    async def _register_agent(
+        self, ws: web.WebSocketResponse, msg: RegisterMessage, addr: str, bound_name: str = "",
+    ) -> str | None:
+        # A key that names an instance names it for agents too; and no agent
+        # may take a deck's name (decks trust each other by name).
+        name = (bound_name or msg.instance_name or "").strip()
+        if name and self.connections.find_deck(name) is not None:
+            await self._reject(ws, f"'{name}' is the name of a Flight Deck on this hub",
+                               retry=False, code=CLOSE_REJECTED)
+            return None
         instance_id = str(uuid.uuid4())
-        info, _ = await self.connections.register(ws, msg, instance_id, remote_addr=addr)
+        info, _ = await self.connections.register(ws, msg, instance_id, name=name, remote_addr=addr)
+        info.max_concurrent = min(info.max_concurrent, max(1, self.config.concerns.max_concurrent_per_instance))
         await self.connections.send_on(ws, RegisteredMessage(
             instance_id=instance_id,
             botport_version=__version__,
@@ -317,8 +349,8 @@ class BotPortServer:
         live_ws = self.connections.get_ws(instance_id)
         if (
             live_ws is not None and not live_ws.closed
-            and existing is not None and existing.deck_id and msg.deck_id
-            and existing.deck_id != msg.deck_id
+            and existing is not None and existing.deck_id
+            and existing.deck_id != (msg.deck_id or "")
         ):
             # Two different Flight Decks claim one name. Refuse the newcomer
             # (it retries); if the old socket is really dead, the WS heartbeat
@@ -331,6 +363,9 @@ class BotPortServer:
 
         resumed = existing is not None
         info, old_ws = await self.connections.register(ws, msg, instance_id, name=name, remote_addr=addr)
+        info.max_concurrent = min(info.max_concurrent, max(1, self.config.concerns.max_concurrent_per_instance))
+        # The load is the hub's own bookkeeping: what is really assigned there.
+        info.active_concerns = self._counted_for(instance_id)
         if old_ws is not None and not old_ws.closed:
             self.counters["superseded"] += 1
             self._spawn(old_ws.close(code=CLOSE_SUPERSEDED, message=b"superseded by a new connection"))
@@ -350,31 +385,35 @@ class BotPortServer:
             "reconnected" if resumed else "registered", name, len(info.agents), info.version or "?", addr,
         )
 
-        await self._reconcile_deck(instance_id, msg)
         self._dashboard_event({"type": "instance_connected", "instance": info.to_dict()})
         self._schedule_network()
         return instance_id
 
+    def _counted_for(self, instance_id: str) -> int:
+        return sum(1 for c in self.concerns.get_concerns_for_instance(instance_id) if c.counted_active)
+
     async def _reconcile_deck(self, instance_id: str, msg: RegisterMessage) -> None:
         """Line the hub's view of a (re)connecting deck up with the deck's own.
 
-        ``in_flight``: concerns the deck is still working on. ``awaiting``:
-        concerns it submitted, had ACKED, and still waits for (unacked ones
-        it simply resubmits — submission is idempotent).
+        ``in_flight``: concerns the deck is still working on (or finished, with
+        the result not yet acknowledged). ``awaiting``: concerns it submitted,
+        had acked, and still waits for. ``submitted``: ones it sent but never
+        saw acked — it resubmits them right after (submission is idempotent).
         """
         if int(msg.protocol or 1) < 2:
-            await self._flush_outbox(instance_id)
             return
         in_flight = set(msg.in_flight or [])
         awaiting = set(msg.awaiting or [])
+        submitted = set(msg.submitted or [])
+        keep = awaiting | submitted
 
         # Concerns assigned to this deck.
         known_assigned: set[str] = set()
         for concern in self.concerns.get_concerns_for_instance(instance_id):
             known_assigned.add(concern.id)
             concern.assignee_offline_since = 0.0
-            if concern.id in in_flight:
-                continue
+            if concern.id in in_flight or concern.status == "responded":
+                continue  # still working on it — or already answered
             pending = self._pending_dispatch.get(concern.id)
             if pending is not None and concern.status in ("pending", "assigned"):
                 # The dispatch was lost in the drop: send it again.
@@ -395,20 +434,22 @@ class BotPortServer:
         # Concerns this deck originated.
         outbox = self._outbox.get(instance_id, {})
         for concern in self.concerns.get_concerns_from_instance(instance_id):
-            if concern.id in awaiting:
+            if concern.id in keep:
                 continue
             # Nobody on the deck waits for it any more (it restarted).
             await self._close_and_release(concern, reason="originator_restarted", notify_assignee=True)
-        for cid in awaiting:
+        for cid in awaiting - submitted:
             concern = self.concerns.get_concern(cid)
             if concern is None and cid not in outbox:
                 await self.connections.send_to(instance_id, ConcernResultMessage(
                     concern_id=cid, ok=False,
                     error="BotPort no longer knows this request (the hub restarted). Please retry.",
                 ))
-
-        # Deliver what waited for this deck.
-        await self._flush_outbox(instance_id)
+        # Results it already has (it stopped waiting for them) need no resend.
+        for cid in [c for c in outbox if c not in keep]:
+            outbox.pop(cid, None)
+        if not outbox:
+            self._outbox.pop(instance_id, None)
 
     async def _handle_disconnect(self, instance_id: str, ws: web.WebSocketResponse) -> None:
         """Handle a socket closing (no-op for a socket that was superseded)."""
@@ -418,9 +459,11 @@ class BotPortServer:
         name = info.name
 
         if info.is_deck:
-            # Give it time to come back before failing what it was doing.
+            # Give it time to come back before failing what it was doing
+            # (an already answered concern is not "in progress" any more).
             now = time.monotonic()
-            assigned = self.concerns.get_concerns_for_instance(instance_id)
+            assigned = [c for c in self.concerns.get_concerns_for_instance(instance_id)
+                        if c.status != "responded"]
             for concern in assigned:
                 concern.assignee_offline_since = now
             log.warning(
@@ -449,16 +492,23 @@ class BotPortServer:
     # ── Network roster ───────────────────────────────────────────
 
     def _schedule_network(self) -> None:
-        """Push the roster to every deck soon (coalescing bursts of changes)."""
+        """Push the roster to every deck soon, coalescing bursts of changes —
+        and never losing one: a change while a push is under way (or waiting)
+        causes one more push."""
+        self._roster_gen += 1
         if self._network_task is not None and not self._network_task.done():
             return
 
-        async def _later() -> None:
-            await asyncio.sleep(0.3)
-            await self.broadcast_network()
+        async def _loop() -> None:
+            while True:
+                gen = self._roster_gen
+                await asyncio.sleep(0.3)
+                await self.broadcast_network()
+                if gen == self._roster_gen:
+                    return
 
         try:
-            self._network_task = asyncio.ensure_future(_later())
+            self._network_task = asyncio.ensure_future(_loop())
         except RuntimeError:
             self._network_task = None
 
@@ -519,12 +569,8 @@ class BotPortServer:
             await self._handle_context_reply(instance_id, msg)
         elif isinstance(msg, CloseConcernMessage):
             await self._handle_close_concern(instance_id, msg)
-        elif isinstance(msg, FileUploadMessage):
-            await self._handle_file_upload(instance_id, msg)
-        elif isinstance(msg, FileListMessage):
-            await self._handle_file_list(instance_id, msg)
-        elif isinstance(msg, FileRequestMessage):
-            await self._handle_file_request(instance_id, msg)
+        elif isinstance(msg, (FileUploadMessage, FileListMessage, FileRequestMessage)):
+            await self._handle_file_frame(instance_id, msg)
         else:
             log.warning("Unhandled message type from %s: %s", self._name(instance_id), msg.type)
 
@@ -576,7 +622,17 @@ class BotPortServer:
 
         # Idempotent resubmission (a deck resends after a reconnect).
         if msg.concern_id:
+            if msg.concern_id in self._outbox.get(instance_id, {}):
+                await self._flush_outbox(instance_id, only=msg.concern_id)
+                return
             existing = self.concerns.get_concern(msg.concern_id)
+            if existing is None and from_is_deck:
+                # Finished and evicted from memory? The store remembers it.
+                stored = await self.store.load_concern(msg.concern_id)
+                if stored is not None and (stored.is_terminal or stored.from_instance != instance_id):
+                    existing = stored
+                # (still "active" in the store but unknown in memory: the hub
+                # restarted — run it again as a new request)
             if existing is not None:
                 if existing.from_instance != instance_id:
                     await self._ack(instance_id, msg.concern_id, ok=False, error="concern_id already in use")
@@ -588,10 +644,8 @@ class BotPortServer:
                         target_deck=existing.target_deck, target_agent=existing.target_agent,
                     )
                     return
-                if existing.id in self._outbox.get(instance_id, {}):
-                    await self._flush_outbox(instance_id, only=existing.id)
-                    return
-                await self._ack(instance_id, existing.id, ok=False, error="concern already finished")
+                await self._ack(instance_id, existing.id, ok=False,
+                                error="This request already finished and its result is no longer held")
                 return
 
         if not msg.task.strip():
@@ -609,8 +663,16 @@ class BotPortServer:
                     return
 
         cfg = self.config.concerns
-        timeout = float(msg.timeout_seconds or 0) or float(cfg.default_timeout_seconds)
-        timeout = max(10.0, min(timeout, float(cfg.max_timeout_seconds)))
+
+        def _clamp(t: float) -> float:
+            return max(10.0, min(t, float(cfg.max_timeout_seconds)))
+
+        requested = float(msg.timeout_seconds or 0)
+        # How long the assignee may work (sent with the dispatch) …
+        timeout = _clamp(requested or float(cfg.default_timeout_seconds))
+        # … and a hard deadline only when one was asked for or a deck asks.
+        # Legacy agents keep idle-only timing: their follow-ups refresh it.
+        deadline = _clamp(requested) if requested else (timeout if from_is_deck else 0.0)
 
         concern = await self.concerns.create_concern(
             from_instance=instance_id,
@@ -624,7 +686,7 @@ class BotPortServer:
             target_agent=msg.target_agent.strip(),
             from_agent=msg.from_agent.strip()[:128],
             mode=msg.mode,
-            timeout_seconds=timeout,
+            timeout_seconds=deadline,
         )
         if msg.concern_id and concern.id != msg.concern_id:
             log.debug("Ignoring malformed client concern id %r", msg.concern_id[:40])
@@ -636,6 +698,11 @@ class BotPortServer:
             route_result = None
             error = str(exc)
 
+        if concern.is_terminal:
+            # Closed while it was being created / routed (its deck reconnected
+            # and no longer waits for it, or it was cancelled).
+            await self._ack(instance_id, concern.id, ok=False, error="The request was closed")
+            return
         if route_result is None:
             self.counters["concerns_rejected"] += 1
             await self.concerns.fail_concern(concern.id, reason=error)
@@ -658,15 +725,6 @@ class BotPortServer:
             concern.target_deck = target.name
         assigned_label = route_result.label
         concern.assigned_instance_name = assigned_label
-        await self.concerns.assign_concern(concern.id, target.id, assigned_label)
-        self.connections.increment_active(target.id)
-        concern.counted_active = True
-
-        agent_name = route_result.agent.name if route_result.agent else ""
-        await self._ack(
-            instance_id, concern.id, ok=True, assigned_to_name=assigned_label,
-            target_deck=target.name if target.is_deck else "", target_agent=agent_name,
-        )
 
         dispatch = DispatchMessage(
             concern_id=concern.id,
@@ -680,8 +738,26 @@ class BotPortServer:
             mode=concern.mode,
             timeout_seconds=timeout,
         )
+        # One synchronous step (no await): assigned, counted and — for a deck —
+        # remembered as an unacknowledged dispatch. Whatever ends the concern
+        # from here on releases exactly that slot, and a reconnect of the
+        # assignee in the meantime re-sends the dispatch instead of failing it.
+        self.concerns.mark_assigned(concern.id, target.id)
+        self.connections.increment_active(target.id)
+        concern.counted_active = True
         if target.is_deck:
             self._pending_dispatch[concern.id] = dispatch
+        await self.concerns.persist(concern)
+        if concern.is_terminal:
+            return
+
+        agent_name = route_result.agent.name if route_result.agent else ""
+        await self._ack(
+            instance_id, concern.id, ok=True, assigned_to_name=assigned_label,
+            target_deck=target.name if target.is_deck else "", target_agent=agent_name,
+        )
+        if concern.is_terminal:
+            return
         sent = await self.connections.send_to(target.id, dispatch)
         if not sent:
             if target.is_deck:
@@ -709,12 +785,12 @@ class BotPortServer:
                 concern_id=msg.concern_id, reason="unknown_concern",
             ))
             return
-        if concern.assigned_instance != instance_id:
-            return
         if concern.is_terminal:
             await self.connections.send_to(instance_id, ConcernClosedMessage(
                 concern_id=concern.id, reason=concern.status,
             ))
+            return
+        if concern.assigned_instance != instance_id:
             return
         self._pending_dispatch.pop(concern.id, None)
         await self.concerns.note_progress(concern.id)
@@ -760,6 +836,9 @@ class BotPortServer:
             return
 
         if concern.assigned_instance != instance_id:
+            if concern.is_terminal and sender_is_deck:
+                # Nothing to deliver any more; let it drop the frame.
+                await self.connections.send_to(instance_id, ResultAckMessage(concern_id=concern.id))
             log.warning("Ignoring result for concern %s from %s (not its assignee)",
                         concern.id[:8], self._name(instance_id))
             return
@@ -1009,6 +1088,36 @@ class BotPortServer:
 
     # ── File transfer ──────────────────────────────────────────
 
+    async def _handle_file_frame(self, instance_id: str, msg: BaseMessage) -> None:
+        """Swarm file transfer — for legacy agents working on an existing swarm."""
+        info = self.connections.get_instance(instance_id)
+        swarm_id = str(getattr(msg, "swarm_id", "") or "")
+        refusal = ""
+        if info is not None and info.is_deck:
+            refusal = "File transfer is for swarm agents; Flight Decks do not use it"
+        elif swarm_id:
+            try:
+                swarm = await self.swarm_store.get_swarm(swarm_id)
+            except Exception:
+                swarm = None
+            if swarm is None:
+                refusal = "Unknown swarm"
+        if refusal:
+            if isinstance(msg, FileUploadMessage):
+                await self.connections.send_to(instance_id, FileUploadAckMessage(ok=False, error=refusal))
+            elif isinstance(msg, FileListMessage):
+                await self.connections.send_to(instance_id, FileListResponseMessage(swarm_id=swarm_id, files=[]))
+            else:
+                await self.connections.send_to(instance_id, FileResponseMessage(
+                    swarm_id=swarm_id, ok=False, error=refusal))
+            return
+        if isinstance(msg, FileUploadMessage):
+            await self._handle_file_upload(instance_id, msg)
+        elif isinstance(msg, FileListMessage):
+            await self._handle_file_list(instance_id, msg)
+        else:
+            await self._handle_file_request(instance_id, msg)
+
     async def _handle_file_upload(
         self, instance_id: str, msg: FileUploadMessage,
     ) -> None:
@@ -1023,7 +1132,14 @@ class BotPortServer:
             return
 
         try:
-            file_data = decode_file(msg.data, msg.compressed)
+            mb = 1024 * 1024
+            used = self.file_manager.workspace_size(msg.swarm_id)
+            free = _free_bytes(self.file_manager._root) - max(0, self.config.server.min_free_disk_mb) * mb
+            remaining = min(max(1, self.config.server.swarm_workspace_mb) * mb - used, free)
+            if remaining <= 0:
+                raise ValueError("No room for more files (swarm quota reached or the disk is nearly full)")
+            from botport.swarm.file_manager import MAX_FILE_SIZE
+            file_data = decode_file(msg.data, msg.compressed, max_size=min(MAX_FILE_SIZE, remaining))
             meta = self.file_manager.store_file(
                 swarm_id=msg.swarm_id,
                 agent_name=agent_name,
@@ -1157,6 +1273,8 @@ class BotPortServer:
             self._schedule_network()
         self._prune_outbox()
         self.auth_limiter.prune()
+        for deck in self.connections.list_decks(connected_only=False):
+            deck.active_concerns = self._counted_for(deck.id)  # self-healing load figure
         live = {c.id for c in self.concerns.get_active_concerns()}
         for cid in [c for c in self._pending_dispatch if c not in live]:
             self._pending_dispatch.pop(cid, None)
@@ -1202,6 +1320,32 @@ class BotPortServer:
         await self.router.close()
         await self.store.close()
         log.info("BotPort server shut down.")
+
+
+def _workspace_root(config: BotPortConfig) -> Path | None:
+    """Swarm files live under the data dir (BOTPORT_WORKSPACE overrides). An
+    older ./workspace-botport in the working directory keeps being used so
+    files stored before stay reachable."""
+    if os.environ.get("BOTPORT_WORKSPACE"):
+        return None  # FileManager reads it
+    legacy = Path("workspace-botport")
+    if legacy.is_dir() and not (config.data_dir / "workspace-botport").exists():
+        log.warning("Using swarm files in %s (move it to %s to keep them with the data dir)",
+                    legacy.resolve(), config.data_dir / "workspace-botport")
+        return legacy.resolve()
+    return config.data_dir / "workspace-botport"
+
+
+def _free_bytes(path: Path) -> int:
+    import shutil
+
+    p = path
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    try:
+        return shutil.disk_usage(p).free
+    except OSError:
+        return 0
 
 
 async def _safe_send(ws: web.WebSocketResponse, text: str) -> None:

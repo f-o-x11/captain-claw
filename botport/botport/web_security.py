@@ -29,15 +29,17 @@ _LOOPBACK = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def client_addr(request: web.BaseRequest, config: BotPortConfig | None = None) -> str:
-    """The caller's address. Behind a proxy: the LAST X-Forwarded-For hop —
-    the one our proxy appended; anything to its left came from the client
-    and can be forged."""
+    """The caller's address. Behind a proxy, for a request that came from one
+    of ``server.trusted_proxies``: the LAST X-Forwarded-For hop — the one our
+    proxy appended; anything to its left came from the client and can be
+    forged, and an X-Forwarded-For from anyone else is ignored."""
     cfg = config or get_config()
-    if cfg.server.behind_proxy:
+    remote = request.remote or ""
+    if cfg.server.behind_proxy and remote in cfg.server.trusted_proxies:
         hops = [h.strip() for h in request.headers.get("X-Forwarded-For", "").split(",") if h.strip()]
         if hops:
             return hops[-1]
-    return request.remote or ""
+    return remote
 
 
 def is_loopback(request: web.BaseRequest) -> bool:

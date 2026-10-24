@@ -7,7 +7,8 @@
 #   botport -c ~/.botport/config.yaml
 # Lookup without -c: $BOTPORT_CONFIG, ./botport.yaml, ./config.yaml (only if
 # it is a BotPort config), ~/.botport/config.yaml. Every value can also be set
-# by environment, e.g. BOTPORT_SERVER__PORT=23180, BOTPORT_AUTH__ENABLED=true.
+# by environment, e.g. BOTPORT_SERVER__PORT=23180, BOTPORT_AUTH__ENABLED=true
+# (scripts/botport-tmux.sh also reads such lines from ~/.botport/env).
 # Full guide: docs/botport-deployment.md
 
 server:
@@ -17,19 +18,24 @@ server:
   # Bearer token for the dashboard + REST API. Without one (and with auth on)
   # they answer only requests from this machine. Generate: openssl rand -hex 24
   admin_token: ""
-  # true when a reverse proxy on this host (Caddy, nginx) terminates TLS.
+  # true when a reverse proxy / tunnel on this host (Caddy, nginx, cloudflared)
+  # carries the traffic; then bind host to 127.0.0.1 so only the proxy reaches it.
   behind_proxy: false
+  trusted_proxies: ["127.0.0.1", "::1"]   # whose X-Forwarded-For is believed
   # Serve wss:// directly instead (leave empty behind a TLS proxy).
   tls_cert: ""
   tls_key: ""
   ws_heartbeat_seconds: 25   # keeps NAT mappings alive, detects dead sockets
   data_dir: ""               # database + swarm files; empty = ~/.botport
   cors_origins: []           # browser origins allowed to call the REST API
+  swarm_workspace_mb: 1024   # swarm file uploads (legacy agents): per-swarm cap
+  min_free_disk_mb: 512      # never fill the disk (SD card) past this
 
 auth:
   enabled: true
   # One entry per Flight Deck (and per legacy agent). `instance` binds the
-  # deck name: a deck connecting with this key IS that deck.
+  # name: a deck connecting with this key IS that deck (a deck's key must have
+  # one), and an agent using it is registered under that name.
   # Generate an entry with:  botport gen-key <deck-name>
   keys:
     # - instance: "vps1"
@@ -51,13 +57,10 @@ concerns:
   reconnect_grace_seconds: 90    # a deck that drops mid-task may come back this long
   result_retention_seconds: 900  # results for an offline requester wait this long
   max_follow_ups: 20
-  max_concurrent_per_instance: 10
+  max_concurrent_per_instance: 10  # cap on what any deck/agent may run at once (each also sets its own)
 
-routing:
-  # Requests to Agent@deck go straight there. Unaddressed ones (legacy agents)
-  # try tags → LLM (if enabled) → least loaded.
-  strategy: "auto"
-  fallback: "reject"
+# Routing: requests to Agent@deck go straight there. Unaddressed ones (legacy
+# agents) try tags → LLM (if enabled) → least loaded; nothing to configure.
 
 logging:
   level: "INFO"
@@ -65,8 +68,7 @@ logging:
   file_max_mb: 10
   file_backups: 5
   color: "auto"            # auto | always | never
-  concern_history: true
-  retention_days: 30
+  retention_days: 30       # finished requests kept in the database
 
 # LLM-assisted routing for unaddressed requests (needs: pip install 'botport[llm]').
 llm:

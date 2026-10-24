@@ -541,16 +541,12 @@ class SwarmEngine:
         await store.save_task(task)
 
         # Assign concern and dispatch.
-        concern.assigned_instance_name = target.name
-        await self._server.concerns.assign_concern(concern.id, target.id, target.name)
-        self._server.connections.increment_active(target.id)
-
         from botport.protocol import DispatchMessage
+        concern.assigned_instance_name = getattr(route_result, "label", target.name)
         concern.target_agent = getattr(route_result, "target_agent", "")
-        concern.counted_active = True  # increment_active above; released once
         if target.is_deck:
             concern.target_deck = target.name
-        await self._server.connections.send_to(target.id, DispatchMessage(
+        dispatch = DispatchMessage(
             concern_id=concern.id,
             from_instance_name=concern.from_instance_name,
             task=concern.task,
@@ -558,7 +554,19 @@ class SwarmEngine:
             persona_hint=persona_hint,
             target_agent=concern.target_agent,
             timeout_seconds=float(task.timeout_seconds or 0),
-        ))
+        )
+        # Assigned + counted (+ pending, for a deck) in one step with no await,
+        # so whatever ends the concern meanwhile releases exactly this slot.
+        if not self._server.concerns.mark_assigned(concern.id, target.id):
+            return
+        self._server.connections.increment_active(target.id)
+        concern.counted_active = True
+        if target.is_deck:
+            self._server._pending_dispatch[concern.id] = dispatch
+        await self._server.concerns.persist(concern)
+        if concern.is_terminal:
+            return
+        await self._server.connections.send_to(target.id, dispatch)
 
         await store.add_audit_entry(SwarmAuditEntry(
             swarm_id=swarm.id,

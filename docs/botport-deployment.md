@@ -40,8 +40,8 @@ python3 -m venv ~/botport-venv
 
 The hub package is small (aiohttp, aiosqlite, pydantic, pyyaml). LLM-assisted
 routing of *unaddressed* requests is optional and pulls in `litellm`:
-`pip install '~/captain-claw/botport[llm]'`. Deck-to-deck requests are
-addressed (`Agent@deck`) and never need it.
+`~/botport-venv/bin/pip install "$HOME/captain-claw/botport[llm]"`.
+Deck-to-deck requests are addressed (`Agent@deck`) and never need it.
 
 ## 2. Keys — one per deck
 
@@ -53,7 +53,9 @@ addressed (`Agent@deck`) and never need it.
 
 Each prints an `auth.keys` entry for the hub and the three values to enter in
 that Flight Deck. The `instance:` name is **binding**: a deck that connects with
-that key *is* that deck — it cannot pretend to be another.
+that key *is* that deck — it cannot pretend to be another. A key without an
+`instance` cannot be used by a Flight Deck at all (only by a legacy agent), and
+no agent may register under a deck's name.
 
 ## 3. Configure the hub
 
@@ -98,7 +100,10 @@ Where settings come from: `-c FILE` (or `$BOTPORT_CONFIG`), else
 Claw's own `config.yaml` in the repository root is ignored), else
 `~/.botport/config.yaml`. Environment variables override the file:
 `BOTPORT_<SECTION>__<KEY>`, e.g. `BOTPORT_SERVER__ADMIN_TOKEN=…`,
-`BOTPORT_AUTH__ENABLED=true` — handy for keeping secrets out of the file.
+`BOTPORT_AUTH__ENABLED=true`. To keep secrets out of the file, put such lines
+in `~/.botport/env` (`chmod 600`): the tmux script below loads it for `check`,
+for every (re)start of the hub and at boot — variables only exported in your
+shell would not reach a hub started by cron.
 
 ## 4. Run it in tmux
 
@@ -110,8 +115,10 @@ Claw's own `config.yaml` in the repository root is ignored), else
 ~/captain-claw/scripts/botport-tmux.sh stop
 ```
 
-The script uses `~/botport-venv/bin/botport` and `~/.botport/config.yaml`;
-override with `BOTPORT_BIN=…` / `BOTPORT_CONFIG=…`. To start it at boot:
+The script uses `~/botport-venv/bin/botport`, `~/.botport/config.yaml` and
+(if present) `~/.botport/env`; override with `BOTPORT_BIN=…`,
+`BOTPORT_CONFIG=…`, `BOTPORT_ENV_FILE=…`. `restart` checks the configuration
+first and leaves a running hub alone when it does not pass. To start it at boot:
 `crontab -e` and add
 
 ```
@@ -145,11 +152,15 @@ agents' work — **never use plain `ws://` across the internet**. Pick one:
 | **Port forward + Caddy** | `host: "127.0.0.1"`, `behind_proxy: true` | `wss://botport.example.com/ws` | Router forwards 443 to the Pi; `Caddyfile`: `botport.example.com { reverse_proxy 127.0.0.1:23180 }` (needs a domain / DDNS). |
 | **Port forward + built-in TLS** | `tls_cert`, `tls_key` set | `wss://botport.example.com:23180/ws` | Certificates you renew yourself. |
 
-With `behind_proxy: true` the hub takes the client address from the last
-`X-Forwarded-For` hop (the one your proxy added) and no longer treats loopback
-as "local" — so set `admin_token` to use the dashboard.
+With `behind_proxy: true`, bind the hub to `127.0.0.1` (so only the proxy
+reaches it): it then takes the client address from the last `X-Forwarded-For`
+hop — believed only from `server.trusted_proxies`, loopback by default — and no
+longer treats loopback as "local", so set `admin_token` to use the dashboard.
 
-The Pi's own Flight Deck connects locally: `ws://127.0.0.1:23180/ws`.
+The Pi's own Flight Deck connects locally, `ws://127.0.0.1:23180/ws`, when the
+hub listens on `0.0.0.0` or `127.0.0.1` without built-in TLS. Bound to the
+tailnet IP, use that IP; with built-in TLS, use the public `wss://` name (the
+certificate does not name 127.0.0.1).
 
 ## 6. Connect each Flight Deck
 
@@ -217,20 +228,31 @@ one deck has it; local agents always win an ambiguous name.
 
 What a remote request can and cannot do on the receiving deck:
 
-* It runs in **its own lane** of the target agent (`BP` + a hash of the asking
-  deck's name): never in the owner's main chat, never in another deck's
-  history.
+* It runs in **its own lane** of the target agent (`BP` + 80 bits of a hash of
+  the asking deck's hub-verified name): never in the owner's main chat, never
+  in another deck's history. The lane sees no owner profile, context packs,
+  topic recall or members' data.
 * It can **never write or send email**, never triggers the agent's Flows, and
-  its reply goes only back to the requester (not to the agent's channels).
-* It cannot use `flight_deck`, `consult_peer` or `botport` — no A → B → A
-  loops, no fan-out on someone else's behalf — plus whatever you deny.
+  its reply goes only back to the requester (not to the agent's channels). An
+  answer that drew on members' private data is not sent off the deck.
+* It never gets the network tools (`flight_deck`, `consult_peer`, `botport` —
+  no A → B → A loops, no fan-out on someone else's behalf) or the tools bound
+  to the owner's own session and memory (`cron`, `sessions`, `history`,
+  `topics`, `personality`, `terminal`, `insights`, `intentions`,
+  `shared_agent_usage`) — the agent itself enforces this for every `BP` lane —
+  plus whatever you deny (for an agent exposed to someone else's deck, consider
+  `shell, scripts, write, edit`).
+* Only Flight Decks are identified by the hub. A legacy agent (or a hub swarm)
+  asking is let in only when *Accept requests from* is `*`, and gets a lane of
+  its own.
 * File attachments do not cross decks yet: put the content in the message.
 
 ## 8. Reliability — what happens when things drop
 
 | Event | What happens |
 |---|---|
-| A deck's connection drops | It reconnects by itself (1 s → 60 s backoff with jitter). |
+| A deck's connection drops | It reconnects by itself: about 1 s after a drop that ended a healthy session; repeated failures back off up to 60 s (with jitter). |
+| A request's acknowledgement is lost in a drop | The deck reports it as not-yet-acknowledged and resubmits it; the hub keeps the work running. |
 | The **asking** deck drops mid-task | The answer waits on the hub (`result_retention_seconds`, 15 min) and is delivered when it reconnects. |
 | The **working** deck drops mid-task | The task keeps running there; the hub waits `reconnect_grace_seconds` (90 s); the result is sent after the reconnect. |
 | The working deck **restarts** | The hub sees the task is gone and tells the requester at once. |
@@ -238,6 +260,7 @@ What a remote request can and cannot do on the receiving deck:
 | The hub restarts | Decks reconnect; requests that were in flight fail with "the hub restarted — retry". |
 | No progress for `idle_timeout_seconds` | Both sides are told; the worker stops. |
 | The requester gives up | The worker is told to stop and hangs up on its agent. |
+| Two Flight Deck processes share one deck identity | The one taken over says so ("took over the link (code 4000)") and waits 5 min instead of taking the link back. |
 
 ## 9. Check that it works
 
@@ -246,8 +269,9 @@ curl -s http://127.0.0.1:23180/healthz                       # {"ok": true, "pro
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:23180/api/status | python3 -m json.tool
 ```
 
-`/api/status` lists every deck (connected or not), its agents, load, and the
-hub's counters. The dashboard at `http://<hub>:23180/` shows the same (it asks
+`/api/status` lists the decks (a disconnected one for about
+`reconnect_grace_seconds` + 2 min after it dropped), their agents, load, and
+the hub's counters. The dashboard at `http://<hub>:23180/` shows the same (it asks
 for the admin token once).
 
 ## 10. Troubleshooting
@@ -255,6 +279,8 @@ for the admin token once).
 | Symptom | Cause / fix |
 |---|---|
 | "Authentication failed" | Key or secret wrong. `botport check` shows the configured keys (masked). After 10 failures a minute the address is blocked for that key for 5 min ("Too many failed registrations"). |
+| "This key is not bound to a deck name" | Give the key an `instance:` (the deck's name) in the hub's `auth.keys`. |
+| "the hub speaks BotPort protocol 1" | The hub is older than the decks: update BotPort on the Pi. |
 | "A different Flight Deck is already connected as 'x'" | Two decks use the same name — or a deck's data directory was reset and its old connection has not timed out yet (it does within ~1 min). |
 | Link flips with "another connection of this deck took over (code 4000)" | Two Flight Deck processes run with the same deck settings. |
 | "hub answered 404" | URL path: it ends in `/ws`. |

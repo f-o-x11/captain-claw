@@ -122,17 +122,28 @@ def test_cli_gen_key_and_check(tmp_path, capsys):
     assert cli.main(["check", "-c", str(p)]) == 1
 
 
-def test_behind_proxy_uses_the_hop_our_proxy_added():
+def _req_from(peer: str, xff: str):
+    from unittest import mock
+
     from aiohttp.test_utils import make_mocked_request
 
+    transport = mock.Mock()
+    transport.get_extra_info.side_effect = lambda k, d=None: (peer, 40000) if k == "peername" else d
+    return make_mocked_request("GET", "/ws", headers={"X-Forwarded-For": xff}, transport=transport)
+
+
+def test_behind_proxy_uses_the_hop_our_proxy_added():
     from botport.web_security import client_addr
 
     cfg = BotPortConfig()
     cfg.server.behind_proxy = True
-    forged = make_mocked_request("GET", "/ws", headers={"X-Forwarded-For": "6.6.6.6, 203.0.113.7"})
-    assert client_addr(forged, cfg) == "203.0.113.7"
+    via_proxy = _req_from("127.0.0.1", "6.6.6.6, 203.0.113.7")
+    assert client_addr(via_proxy, cfg) == "203.0.113.7"
+    # Straight to the port, not through the proxy: the header is not believed.
+    direct = _req_from("198.51.100.4", "203.0.113.99")
+    assert client_addr(direct, cfg) == "198.51.100.4"
     cfg.server.behind_proxy = False
-    assert client_addr(forged, cfg) != "203.0.113.7"
+    assert client_addr(via_proxy, cfg) == "127.0.0.1"
 
 
 async def test_failed_logins_block_only_that_key_from_that_address(make_hub):
@@ -185,3 +196,16 @@ def test_short_tags_do_not_match_everything():
     assert Registry._count_fuzzy_matches(["m&a"], ["m&a / deal advisory"]) == 1
     assert Registry._count_fuzzy_matches(["valuation"], ["valuation support"]) == 1
     assert PersonaInfo.from_dict({"name": "x", "expertise_tags": "legal"}).expertise_tags == ["legal"]
+
+
+async def test_decks_cannot_use_swarm_file_frames(make_hub):
+    hub = await make_hub()
+    d = await hub.deck("vps1")
+    await d.send({"type": "file_upload", "swarm_id": "s1", "filename": "x.txt", "data": "aGk="})
+    ack = await d.expect("file_upload_ack")
+    assert not ack["ok"] and "Flight Decks" in ack["error"]
+    agent = hub.peer()
+    await agent.connect(instance_name="old-claw", capabilities={})
+    await agent.send({"type": "file_upload", "swarm_id": "nope", "filename": "x.txt", "data": "aGk="})
+    ack = await agent.expect("file_upload_ack")
+    assert not ack["ok"] and "Unknown swarm" in ack["error"]

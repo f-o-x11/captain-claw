@@ -3674,8 +3674,8 @@ Agent ──flight_deck tool──▶ Flight Deck A ══ws(s)══▶ BotPort
 
 ```bash
 python3 -m venv ~/botport-venv && ~/botport-venv/bin/pip install ./botport
-~/botport-venv/bin/botport gen-key vps1            # one per deck → auth.keys
-cp botport/config.example.yaml ~/.botport/config.yaml && chmod 600 ~/.botport/config.yaml
+mkdir -p ~/.botport && cp botport/config.example.yaml ~/.botport/config.yaml && chmod 600 ~/.botport/config.yaml
+~/botport-venv/bin/botport gen-key vps1            # one per deck: paste each entry under auth.keys
 ~/botport-venv/bin/botport check -c ~/.botport/config.yaml
 scripts/botport-tmux.sh start                      # or: botport -c ~/.botport/config.yaml
 ```
