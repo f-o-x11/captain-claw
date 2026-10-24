@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.2"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.3"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -591,7 +591,7 @@ static String asleepLabel() {
 }
 
 static String powerOffLabel() {
-  if (board::kEpaper) return String(settings.powerOffMin) + " min";
+  if (board::kEpaper) return powerOffText(settings.powerOffMin);
   return settings.powerOffS >= 60 && settings.powerOffS % 60 == 0 ? String(settings.powerOffS / 60) + " min"
                                                                   : String(settings.powerOffS) + " s";
 }
@@ -1060,8 +1060,12 @@ static void chooseMenuRow() {
     case MLead: settings.cueLeadS = settings.cueLeadS == 1 ? 2 : 1; break;
     case MScreenOff: settings.screenOffS = settings.screenOffS == 5 ? 10 : settings.screenOffS == 10 ? 15 : 5; break;
     case MPowerOff:
-      if (board::kEpaper) settings.powerOffMin = settings.powerOffMin == 1 ? 3 : settings.powerOffMin == 3 ? 10 : 1;
-      else settings.powerOffS = settings.powerOffS == 15 ? 30 : settings.powerOffS == 30 ? 60 : settings.powerOffS == 60 ? 180 : 15;
+      if (board::kEpaper) {  // the next choice, round to the first
+        const int n = sizeof(kPowerOffMins);
+        int i = 0;
+        while (i < n && kPowerOffMins[i] != settings.powerOffMin) ++i;
+        settings.powerOffMin = kPowerOffMins[(i + 1) % n];
+      } else settings.powerOffS = settings.powerOffS == 15 ? 30 : settings.powerOffS == 30 ? 60 : settings.powerOffS == 60 ? 180 : 15;
       break;
     case MUpdate:
       updateSoftware();

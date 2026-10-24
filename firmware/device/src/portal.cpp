@@ -195,14 +195,24 @@ static void handleRoot() {
   h += F("<h2>Power</h2>");
   if (board::kEpaper) {
     h += F("<label>Power off when idle</label><select name=pwroffm>");
-    for (int m : {1, 3, 10}) h += option(String(m), String(m) + " min", settings.powerOffMin == m);
-    h += F("</select><label>Redraw the sleeping screen</label><select name=slpref>");
-    h += option("0", "Never", settings.asleepRefreshMin == 0);
-    h += option("30", "Every 30 min", settings.asleepRefreshMin == 30);
-    h += option("60", "Every hour", settings.asleepRefreshMin == 60);
-    h += option("180", "Every 3 hours", settings.asleepRefreshMin == 180);
-    h += F("</select><small>Asleep, the paper keeps the last answer (or a pinned one) with the date, the room's"
-           " temperature and the battery; a redraw takes ~20 s of battery.</small>");
+    for (uint8_t m : kPowerOffMins) {
+      String text = powerOffText(m);
+      text.setCharAt(0, toupper(text[0]));
+      h += option(String(m), m ? "After " + text : text, settings.powerOffMin == m);
+    }
+    h += F("</select>");
+    if (board::kPaperB) {
+      h += F("<small>Asleep or awake, the dashboard is redrawn every half hour. Never sleeping keeps Wi-Fi on:"
+             " the battery lasts hours, not days.</small>");
+    } else {
+      h += F("<label>Redraw the sleeping screen</label><select name=slpref>");
+      h += option("0", "Never", settings.asleepRefreshMin == 0);
+      h += option("30", "Every 30 min", settings.asleepRefreshMin == 30);
+      h += option("60", "Every hour", settings.asleepRefreshMin == 60);
+      h += option("180", "Every 3 hours", settings.asleepRefreshMin == 180);
+      h += F("</select><small>Asleep, the paper keeps the last answer (or a pinned one) with the date, the room's"
+             " temperature and the battery; a redraw takes ~20 s of battery.</small>");
+    }
   } else {
     h += F("<label>Screen off when idle</label><select name=scroff>");
     for (int s : {5, 10, 15}) {
@@ -259,8 +269,8 @@ static void handleSave() {
   settings.boostDb = constrain(server.arg("boost").toInt(), 0, 10);
   if (board::kEpaper) {
     int pm = server.arg("pwroffm").toInt(), sr = server.arg("slpref").toInt();
-    settings.powerOffMin = (pm == 1 || pm == 10) ? pm : 3;
-    settings.asleepRefreshMin = (sr == 0 || sr == 30 || sr == 180) ? sr : 60;
+    if (server.hasArg("pwroffm") && powerOffMinValid(pm)) settings.powerOffMin = pm;
+    if (server.hasArg("slpref")) settings.asleepRefreshMin = (sr == 0 || sr == 30 || sr == 180) ? sr : 60;
     settings.rotation = constrain(server.arg("rot").toInt(), 0, 3);
     settings.ledLevel = constrain(server.arg("leds").toInt(), 0, 2);
     settings.keyClicks = server.arg("clicks") != "0";

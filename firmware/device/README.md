@@ -105,7 +105,8 @@ at all. So it's voice-first and redraws when you put it down:
   (and installs) a software update.
 - **Home screen:** the date, the room (temperature, humidity), whether it's
   ready, and the newest answer.
-- **Asleep** (after 1 / 3 / 10 idle minutes) the paper keeps what it shows. It
+- **Asleep** (after 1, 3, 10 or 30 idle minutes, 1 or 2 hours, or never — the
+  phone page) the paper keeps what it shows. It
   redraws it every 30 min / 1 h / 3 h without Wi-Fi (settings), for the date,
   the room and the battery. The last answer lives in flash, so it survives
   the sleep; press B after waking to read it again.
@@ -164,6 +165,10 @@ paper changes only when it must:
   crash|watchdog|brownout|button|timer` in its log).
 - **Downloading an update** (1.0.2): the lights blink purple left, then
   right, one a second, until it restarts into the new version (or gives up).
+- **Power off** (1.0.3): after 1, 3, 10 or 30 idle minutes, 1 or 2 hours, or
+  never (phone page). Awake it stays on Wi-Fi, so it answers at once but the
+  battery lasts hours rather than days; the dashboard is redrawn every half
+  hour either way.
 
 | | C (top) | A | B |
 |---|---|---|---|
