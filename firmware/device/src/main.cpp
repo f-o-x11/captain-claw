@@ -49,9 +49,9 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.16"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.17"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.18.1"
+#define FW_VERSION "0.18.2"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -1734,6 +1734,22 @@ static void replayLocal() {
   ui::followVoice(0);  // from the start, the page with it
   if (settings.iconMode && mode == Mode::Image) mode = Mode::Reply;
   if (!flashing) redraw();
+}
+
+// The deck's voice into the ring: "audio_hold" while it has as much still to
+// play as it can keep (a long answer arrives faster than it's spoken; a pause
+// holds it there), "audio_go" once some has played. A deck that doesn't know
+// these sends it all: what doesn't fit is dropped, and a replay comes from it.
+static void audioFlow() {
+  static bool held = false;
+  if (!wsUp) {
+    held = false;  // a new link: the deck sends
+    return;
+  }
+  const bool hold = audio::holdWanted();
+  if (hold == held) return;
+  held = hold;
+  sendType(held ? "audio_hold" : "audio_go");
 }
 
 static void replayAnswer() {
@@ -3518,6 +3534,7 @@ void loop() {
   pfLastPoll = audio::playing() ? micros() : 0;
 #endif
   audio::playPoll();
+  audioFlow();
   // The answer's sound played to its end: the cue again, the other way round
   // — a moment later, so an agent-made sound that follows comes first.
   if (audio::takeFinished() && settings.cueBeep && !quietSpeech && !speechMore) {

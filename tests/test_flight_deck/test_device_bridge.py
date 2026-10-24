@@ -348,6 +348,72 @@ async def test_stream_pcm_frames_audio_and_keeps_samples_whole():
     assert conn.ws.sent[-1] == {"type": "audio_end"}
 
 
+def _audio_frames(conn):
+    return [m for m in conn.ws.sent if isinstance(m, bytes)]
+
+
+@pytest.mark.asyncio
+async def test_the_voice_waits_while_the_device_holds():
+    conn = _conn()
+    conn.audio_go.clear()  # the device's ring is full of what's still to play
+    pulled = []
+
+    async def _chunks():
+        for _ in range(3):
+            pulled.append(1)
+            yield b"\x00" * db.PCM_CHUNK
+
+    task = asyncio.create_task(conn._stream_pcm(_chunks()))
+    await asyncio.sleep(0.05)
+    assert conn.ws.sent[0]["type"] == "audio_start" and _audio_frames(conn) == []  # held…
+    assert len(pulled) == 3  # …but the voice is still taken from TTS as it comes
+    conn.audio_go.set()  # "audio_go"
+    await task
+    assert len(_audio_frames(conn)) == 3 and conn.ws.sent[-1] == {"type": "audio_end"}
+
+
+@pytest.mark.asyncio
+async def test_a_hold_is_let_go_by_a_stop_and_by_time(monkeypatch):
+    conn = _conn()
+    conn.audio_go.clear()
+    await conn.stop_audio()
+    assert conn.audio_go.is_set()  # a stopped answer holds nothing back
+
+    monkeypatch.setattr(db, "AUDIO_HOLD_MAX_S", 0.05)
+    conn.audio_go.clear()  # a device that asked to hold and never said go
+
+    async def _chunks():
+        yield b"\x00" * db.PCM_CHUNK
+
+    await asyncio.wait_for(conn._stream_pcm(_chunks()), 2)
+    assert len(_audio_frames(conn)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_line_said_aside_is_never_held():
+    conn = _conn()
+    conn.audio_go.clear()
+
+    async def _chunks():
+        yield b"\x00" * db.PCM_CHUNK
+
+    await asyncio.wait_for(conn._stream_pcm(_chunks(), aside=True), 1)
+    assert len(_audio_frames(conn)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_voice_that_fails_is_still_a_voice_error():
+    conn = _conn()
+
+    async def _chunks():
+        yield b"\x00" * db.PCM_CHUNK
+        raise db.gb.SonioxTTSError("quota")
+
+    with pytest.raises(db.gb.SonioxTTSError):
+        await conn._stream_pcm(_chunks())
+    assert conn.ws.sent[-1] == {"type": "audio_end"}
+
+
 @pytest.mark.asyncio
 async def test_stop_audio_cancels_the_sound_and_keeps_the_worker():
     conn = _conn()
