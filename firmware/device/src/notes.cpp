@@ -16,13 +16,15 @@ namespace notes {
 // A note is "<id>.adp": a 16-byte header ("CCA1", rate, samples, 0), then
 // two 4-bit ADPCM codes a byte, low nibble first. Older firmware kept 16 kHz
 // PCM WAVs ("<id>.wav"); those are read as they are.
-static constexpr const char* kDir = "/claw-notes";
+static constexpr const char* kDir = "/captain-notes";
+static constexpr const char* kOldDir = "/claw-notes";  // before 1.0.15: its notes move to kDir
 static constexpr size_t kHead = 16;
 static constexpr size_t kWavHead = 44;
 static constexpr size_t kKeepFree = 128 * 1024;  // room left for the paper's answer cards
 static bool mounted = false;
 static fs::FS* store = nullptr;  // the card, or the flash
 static bool card = false;
+static bool flashUp = false;     // the flash (LittleFS) is mounted
 static int cachedCount = 0;
 static uint32_t cachedMs = 0;
 static uint64_t cachedFree = 0;
@@ -67,6 +69,17 @@ static Note noteOf(const Entry& e) {
   return n;
 }
 
+// A note's file as the device names it — "<10-digit epoch>-<8 hex>" and its
+// kind (.adp; .wav from older firmware). Nothing else in the folder — a file
+// someone put on the card — is ever read, sent or removed.
+static bool deviceNote(const String& name, const char* ext) {
+  if (name.length() != 23 || name[10] != '-' || !name.endsWith(ext)) return false;
+  for (int i = 0; i < 19; ++i) {
+    if (i != 10 && !(i < 10 ? isdigit((unsigned char)name[i]) : isxdigit((unsigned char)name[i]))) return false;
+  }
+  return true;
+}
+
 // Each kept note; broken leftovers (a write cut short) are removed.
 static std::vector<Entry> scan() {
   std::vector<Entry> out;
@@ -79,8 +92,8 @@ static std::vector<Entry> scan() {
     if (slash >= 0) name = name.substring(slash + 1);
     size_t size = f.size();
     f.close();
-    bool packed = name.endsWith(".adp");
-    if (!packed && !name.endsWith(".wav")) continue;
+    bool packed = deviceNote(name, ".adp");
+    if (!packed && !deviceNote(name, ".wav")) continue;
     if (size <= (packed ? kHead : kWavHead)) broken.push_back(name);
     else out.push_back({name.substring(0, name.length() - 4), size, packed});
   }
@@ -111,7 +124,8 @@ static void moveToCard() {
     String name = f.name();
     f.close();
     int slash = name.lastIndexOf('/');
-    names.push_back(slash >= 0 ? name.substring(slash + 1) : name);
+    if (slash >= 0) name = name.substring(slash + 1);
+    if (deviceNote(name, ".adp") || deviceNote(name, ".wav")) names.push_back(name);
   }
   dir.close();
   static uint8_t buf[4096];
@@ -134,25 +148,73 @@ static void moveToCard() {
   if (moved) Serial.printf("[claw] offline notes: %d moved from flash to the card\n", moved);
 }
 
+// Notes in the folder's old name ("claw-notes") move into kDir, on the same
+// store (a rename); the old folder goes once it's empty.
+static void moveOldNotes(fs::FS& fs) {
+  if (!fs.exists(kOldDir)) return;
+  if (!fs.exists(kDir)) fs.mkdir(kDir);
+  File dir = fs.open(kOldDir);
+  std::vector<String> names;
+  bool other = false;  // something that isn't a note: the old folder stays
+  for (File f = dir ? dir.openNextFile() : File(); f; f = dir.openNextFile()) {
+    String name = f.name();
+    f.close();
+    int slash = name.lastIndexOf('/');
+    if (slash >= 0) name = name.substring(slash + 1);
+    if (deviceNote(name, ".adp") || deviceNote(name, ".wav")) names.push_back(name);
+    else other = true;
+  }
+  if (dir) dir.close();
+  for (auto& name : names) fs.rename(String(kOldDir) + "/" + name, String(kDir) + "/" + name);
+  if (!other) fs.rmdir(kOldDir);
+  if (!names.empty()) Serial.printf("[claw] offline notes: %d moved from %s to %s\n", (int)names.size(), kOldDir, kDir);
+}
+
+// The card mounted (FAT32 or FAT16: this SD library has no exFAT). The
+// panel's driver set the shared bus up as Arduino's SPI (and locks it for
+// each of its transfers): the card only needs its chip select.
+static bool mountCard() {
+  const int cs = M5.getPin(m5::pin_name_t::sd_spi_ss);
+  if (cs < 0 || cs >= 255) return false;
+  SD.end();  // (after a try that failed, or a card that went)
+  return SD.begin(cs, SPI, 10000000, "/sd", 2);
+}
+
+static bool cardThere() {
+  File d = SD.open(kDir);
+  const bool there = d && d.isDirectory();
+  if (d) d.close();
+  return there;
+}
+
+// The card is in: notes go there, and those in flash move over.
+static void useCard() {
+  store = &SD;
+  card = mounted = true;
+  moveOldNotes(SD);
+  if (!SD.exists(kDir)) SD.mkdir(kDir);
+  if (flashUp && LittleFS.exists(kDir)) moveToCard();
+  recount();
+}
+
+// The card is gone: back to the flash.
+static void useFlash() {
+  closeRead();
+  if (card) SD.end();
+  card = false;
+  store = flashUp ? &LittleFS : nullptr;
+  mounted = store != nullptr;
+  if (mounted && !store->exists(kDir)) store->mkdir(kDir);
+  recount();
+}
+
 bool begin() {
   if (!board::kOfflineNotes) return false;
-  const bool flash = LittleFS.begin(true, "/littlefs", 10, "spiffs");
-  if (board::kHasSdCard) {
-    // The panel's driver set the shared bus up as Arduino's SPI (and locks
-    // it for each of its transfers): the card only needs its chip select.
-    // No card: SD.begin fails and the flash is used.
-    const int cs = M5.getPin(m5::pin_name_t::sd_spi_ss);
-    if (cs >= 0 && cs < 255 && SD.begin(cs, SPI, 10000000, "/sd", 2)) {
-      store = &SD;
-      card = true;
-    }
-  }
-  if (!store && flash) store = &LittleFS;
-  mounted = store != nullptr;
+  flashUp = LittleFS.begin(true, "/littlefs", 10, "spiffs");
+  if (flashUp) moveOldNotes(LittleFS);
+  if (board::kHasSdCard && mountCard()) useCard();  // no card: the flash
+  else useFlash();
   if (!mounted) return false;
-  if (!store->exists(kDir)) store->mkdir(kDir);
-  if (card && flash && LittleFS.exists(kDir)) moveToCard();
-  recount();
   Serial.printf("[claw] offline notes on %s: %d waiting, %llu KB free (~%lu min)\n", card ? "the card" : "flash",
                 cachedCount, (unsigned long long)(cachedFree / 1024), (unsigned long)(room(16000) / 16000 / 60));
   return true;
@@ -162,6 +224,20 @@ bool ready() { return mounted; }
 
 bool onCard() { return card; }
 
+bool poll() {
+  if (!board::kOfflineNotes || !board::kHasSdCard) return false;
+  if (card) {
+    if (cardThere()) return false;
+    useFlash();
+    Serial.println("[claw] microSD card taken out: offline notes in flash");
+    return true;
+  }
+  if (!mountCard()) return false;
+  useCard();
+  Serial.printf("[claw] microSD card in: %d offline notes on it\n", cachedCount);
+  return true;
+}
+
 uint64_t freeBytes() { return cachedFree; }
 
 size_t room(uint32_t rate) {
@@ -170,7 +246,18 @@ size_t room(uint32_t rate) {
   return (size_t)min<uint64_t>((cachedFree - kKeepFree - kHead) * rate / perSecond, 0x7FFFFFFF);
 }
 
+static bool write(const int16_t* pcm, size_t samples, uint32_t rate, time_t when);
+
+// Kept on the card — or, when the card was taken out since it was last looked
+// for, in flash.
 bool save(const int16_t* pcm, size_t samples, uint32_t rate, time_t when) {
+  if (write(pcm, samples, rate, when)) return true;
+  if (!card || cardThere()) return false;  // (a full card stays the card)
+  useFlash();
+  return write(pcm, samples, rate, when);
+}
+
+static bool write(const int16_t* pcm, size_t samples, uint32_t rate, time_t when) {
   if (!mounted || !samples || samples > room(rate)) return false;
   const bool halve = keptRate(rate) != rate;
   const size_t kept = halve ? samples / 2 : samples;

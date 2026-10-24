@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.14"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.15"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -1298,6 +1298,7 @@ static void keepOffline(uint32_t stopAt) {
   M5.Mic.end();  // nothing more lands in the buffer
   time_t when = telemetry::clockSet() ? time(nullptr) - (time_t)((millis() - prerollStartMs) / 1000) : 0;
   if (!board::kEpaper) ui::showMessage("Saving", "Keeping the voice note offline…", kText);
+  if (board::kHasSdCard) notes::poll();  // a card put in since it was last looked for: this note goes there
   bool kept = board::kOfflineNotes && n >= audio::kMicRate && notes::save(preroll, n, audio::kMicRate, when);
   if (kept) notesDeclined = -1;  // something new to ask about
   bool knewOffline = prerollOffline;
@@ -2523,6 +2524,26 @@ static void trackLinks() {
 #endif
 }
 
+// A microSD card put in or taken out while awake (the slot has no
+// card-detect line): looked for once a minute while the device is left
+// alone — never while it records, works, uploads notes or redraws (the card
+// shares the panel's bus) — and before an offline note is kept.
+static void pollCard() {
+  if (!board::kHasSdCard) return;
+  static uint32_t lastMs = 0;
+  if (millis() - lastMs < 60000 || millis() - lastActivityMs < 10000) return;
+  if (prerollOn || mode == Mode::Listening || mode == Mode::Waiting || !upNotes.empty() || upOpen ||
+      ui::busy()) {
+    return;
+  }
+  lastMs = millis();
+  if (!notes::poll()) return;
+  notesDeclined = -1;  // (devices that ask: ask anew)
+#if defined(PAPER_B)
+  ui::notesChanged();
+#endif
+}
+
 static void updateLeds() {
   using S = leds::State;
   static int batteryPct = 100;
@@ -3101,6 +3122,7 @@ void loop() {
   holdTurn();
   paperAnswerPoll();
   trackLinks();
+  pollCard();
   // Raise to wake: a wrist raise lights a dark or dimmed screen; lowering
   // the wrist on an idle screen puts it out (the watch sleeps on its timer
   // as before — set Power off to 3 min to keep it wakeable longer).

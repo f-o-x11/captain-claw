@@ -1397,6 +1397,12 @@ void linksChanged() {
   askDashboard(false);
 }
 
+// A microSD card put in or taken out: the dashboard again, when it's what
+// the paper shows (the notes' room: GB on a card, minutes in flash).
+void notesChanged() {
+  if (shownKind == Kind::Dash && !viewing && !held) askDashboard(false);
+}
+
 // ── everything else: the lights and the voice carry it ─────────────────
 
 void showMessage(const char*, const String&, uint16_t) {}

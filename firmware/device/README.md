@@ -204,12 +204,19 @@ speaking and trouble exactly as above; the voice carries the answers:
   code, gives a short beep (the options button higher, B lower); in the
   setup hotspot every press beeps. "Beep off" or *Key beeps: off* on the
   phone page silences them.
-- **microSD card** (1.0.5): with a card in the slot, voice notes recorded
-  offline are kept on it (hours of room; the dashboard says how much is
-  free) and notes already in flash move onto it at start-up; with none,
-  they stay in flash (about 14 min) as before. The card shares the panel's
-  bus, so it waits while the paper redraws. Each note is still at most
-  60 s (it's held in memory while you talk).
+- **microSD card** (1.0.5; 1.0.15 put in or out while awake): with a card
+  in the slot, voice notes recorded offline are kept on it (hours of room;
+  the dashboard says how much is free) and notes already in flash move onto
+  it; with none, they stay in flash (about 14 min) as before. It's found at
+  every start and wake, within a minute while the paper is left alone, and
+  right before an offline note is kept; taken out, the notes go to flash
+  again. FAT32 (or FAT16) only — this SD library has no exFAT, so a card
+  over 32 GB usually needs reformatting. The notes live in `captain-notes/`
+  (`claw-notes/` before 1.0.15 — moved over at start-up), and only files
+  named the way the device names them (`<epoch>-<8 hex>.adp`) are ever read,
+  sent to the agent or removed: anything else on the card is left alone.
+  The card shares the panel's bus, so it waits while the paper redraws.
+  Each note is still at most 60 s (it's held in memory while you talk).
 - **Recording lights** (1.0.7): the left light blinks red while it records
   (brighter as you speak); the right one, steady, says how long it's been —
   green for the first 20 s, yellow for the next 20 s, red after that.
