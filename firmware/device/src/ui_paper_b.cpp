@@ -496,8 +496,24 @@ struct PaperPanel : lgfx::Panel_ED2208 {
     end();
   }
 
-  // The controller's set-up as M5GFX sends it at start: a full refresh after
-  // partial windows starts from the same state as one after a boot.
+  // A reset pulse, then the set-up: the controller keeps a partial window
+  // through the set-up alone (and through the ESP32's deep sleep), and a
+  // "full" refresh then redrew only that window. The PaperColor's EPD reset
+  // is G12 (M5GFX pulses it at start; the panel's own reset pin is not it).
+  void reset() {
+    lgfx::gpio_hi(kResetPin);
+    lgfx::pinMode(kResetPin, lgfx::pin_mode_t::output);
+    lgfx::gpio_lo(kResetPin);
+    delay(10);
+    lgfx::gpio_hi(kResetPin);
+    delay(10);
+    for (uint32_t t0 = millis(); !idle() && millis() - t0 < 5000;) delay(10);
+    reinit();
+  }
+  static constexpr int kResetPin = GPIO_NUM_12;
+
+  // The controller's set-up as M5GFX sends it at start (its init list, then
+  // the resolution).
   void reinit() {
     static constexpr uint8_t kInit[] = {
         0xAA, 6, 0x49, 0x55, 0x20, 0x08, 0x09, 0x18, 0x01, 1, 0x3F, 0x00, 2, 0x5F, 0x69,
@@ -547,10 +563,10 @@ static void pushToPanel() {
       return;
     }
   }
-  if (partialsInARow) {
-    if (PaperPanel* p = paperPanel()) p->reinit();  // out of the partial window
-    partialsInARow = 0;
-  }
+  // Every full refresh starts from a reset controller: no partial window
+  // left from before (this boot's clock, or one before a deep sleep).
+  if (PaperPanel* p = paperPanel()) p->reset();
+  partialsInARow = 0;
 #endif
   M5.Display.display();
   waitPanel(45000);

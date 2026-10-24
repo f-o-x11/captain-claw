@@ -176,7 +176,10 @@ paper changes only when it must:
   one window, ~as long as a full refresh; the notes and links below don't
   change. Where that top ends is kept in flash from the last full redraw; if
   it isn't known (the first mark after this update), that mark redraws the
-  whole dashboard instead. The whole dashboard every half hour
+  whole dashboard instead. Every full redraw starts with a reset pulse to the
+  panel's controller (1.0.10): it keeps a partial window otherwise, and 1.0.8
+  and 1.0.9 then redrew only that window — the options code, an answer or the
+  dashboard didn't appear. The whole dashboard every half hour
   lands on a mark too (drawn early when it's due before the next one).
   Asleep the clock stops; it catches up on the next wake.
 - **microSD card** (1.0.5): with a card in the slot, voice notes recorded
