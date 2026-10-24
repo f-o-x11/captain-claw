@@ -402,7 +402,7 @@ static void waitPanel(uint32_t ms) {
 // rectangle given is driven, black and white. It takes about as long as a
 // full refresh, but only that window changes. The rest of the page may fade
 // a little over many of them, so after kClockPartialsMax in a row the next
-// minute redraws the whole dashboard instead. The bus is let go while the
+// tick redraws the whole dashboard instead. The bus is let go while the
 // panel works (the microSD card shares it).
 
 static int partialsInARow = 0;
@@ -783,7 +783,7 @@ static void drawHeader(const String& title = "", bool dots = true) {
 
 // The dashboard's clock (the header's title): the box its minute ticks in.
 static constexpr int kClockX = PAD - 6, kClockY = 6, kClockW = 136, kClockH = kHeadH - 14;
-static String clockShown;  // the time the paper's clock says
+static time_t clockShownAt = 0;  // when the time the paper's clock says was drawn
 
 // A keycap: the button's letter in a small black rounded square.
 static int drawKey(const char* key, int x, int y) {
@@ -967,7 +967,7 @@ static void drawDashboard(bool asleep) {
   char clock[16] = "";
   clockText(clock, sizeof(clock), "%H:%M", time(nullptr));
   drawHeader(clock, !asleep);
-  clockShown = clock;
+  clockShownAt = time(nullptr);
   const int x = PAD, w = W - 2 * PAD;
   int y = kHeadH + 14;
   y += drawDate(x, y, w);
@@ -1020,21 +1020,25 @@ static void drawDashboard(bool asleep) {
 static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asleep); }); }
 
 #ifndef PREVIEW
-// Every minute, while the dashboard is on the paper and it has been left
-// alone a while: only the clock's box, redrawn as a partial window (the
-// canvas may hold nothing else after a wake — only that box is driven).
+// On the five-minute marks (:00, :05 … :55) — or as soon after one as the
+// paper has been left alone — while the dashboard is on the paper: only the
+// clock's box, redrawn as a partial window (the canvas may hold nothing else
+// after a wake — only that box is driven). The whole page every half hour
+// comes on a mark too: when it's due before the next one, it's drawn now.
 static constexpr uint32_t kClockIdleMs = 20000;
+static constexpr uint32_t kClockEverySec = 5 * 60;
 static constexpr int kClockPartialsMax = 15;
 
 static void clockTick() {
   if (shownKind != Kind::Dash || viewing || millis() - lastUseMs < kClockIdleMs || !canPartial()) return;
+  const time_t t = time(nullptr);
   char now[16];
-  if (!clockText(now, sizeof(now), "%H:%M", time(nullptr)) || clockShown == now) return;
-  if (partialsInARow >= kClockPartialsMax || dashboardDueInSec() < 60) {
+  if (!clockText(now, sizeof(now), "%H:%M", t) || t / kClockEverySec == clockShownAt / kClockEverySec) return;
+  if (partialsInARow >= kClockPartialsMax || dashboardDueInSec() < kClockEverySec) {
     askDashboard(false);  // the whole page instead, readings and all
     return;
   }
-  clockShown = now;
+  clockShownAt = t;
   pictures.clear();
   canvas.fillRect(kClockX, kClockY, kClockW, kClockH, kPaper);
   font(vlw::Title);
