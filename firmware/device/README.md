@@ -165,6 +165,9 @@ paper changes only when it must:
   crash|watchdog|brownout|button|timer` in its log).
 - **Downloading an update** (1.0.2): the lights blink purple left, then
   right, one a second, until it restarts into the new version (or gives up).
+- **Key beeps** (1.0.4): A and B answer every press with a short beep, A
+  higher, B lower (the 14 ms click before was too short to survive the
+  speaker waking). "Beep off" or *Key beeps: off* on the phone page silences them.
 - **Power off** (1.0.3): after 1, 3, 10 or 30 idle minutes, 1 or 2 hours, or
   never (phone page). Awake it stays on Wi-Fi, so it answers at once but the
   battery lasts hours rather than days; the dashboard is redrawn every half
