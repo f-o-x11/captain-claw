@@ -25,6 +25,9 @@ struct Note {
 bool begin();
 // Kept on the microSD card (else in flash).
 bool onCard();
+// A card put in or taken out since (the slot has no card-detect line): call
+// now and then while idle. True when where the notes are kept changed.
+bool poll();
 // Free space where they're kept, in bytes (kept up to date, no I/O).
 uint64_t freeBytes();
 // Notes can be kept (the flash is mounted).

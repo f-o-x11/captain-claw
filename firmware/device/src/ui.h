@@ -189,6 +189,8 @@ void linksChanged();
 // A recording is going on: nothing is redrawn by itself (the five-minute
 // dashboard waits) until it ends.
 void hold(bool recording);
+// Where the notes are kept changed (a microSD card put in or taken out).
+void notesChanged();
 #endif
 
 // Conversation views (text mode).
