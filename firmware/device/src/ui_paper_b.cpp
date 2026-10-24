@@ -1033,7 +1033,12 @@ static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asl
 
 // On each five-minute mark, while the dashboard is on the paper: the whole
 // page again (a reset controller makes a full refresh quick).
+static bool held = false;  // a recording is going on (hold())
+
+void hold(bool recording) { held = recording; }
+
 static void dashTick() {
+  if (held) return;  // drawn once the recording ends
   if (shownKind == Kind::Dash && !viewing && !answerDue && dashDue()) askDashboard(false);
 }
 
@@ -1041,7 +1046,7 @@ static void dashTick() {
 static void dashboardIfDue() {
   const bool now = forceNext && millis() - forceAtMs < 3000;
   forceNext = false;
-  if (now || dashDue()) askDashboard(false);
+  if (now || (dashDue() && !held)) askDashboard(false);
 }
 
 void setHome(const Home& home) {

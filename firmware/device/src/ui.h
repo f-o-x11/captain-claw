@@ -186,6 +186,9 @@ void setHome(const Home& home);
 // The links have been down a while (or came back after that): what the
 // paper shows is drawn again with them.
 void linksChanged();
+// A recording is going on: nothing is redrawn by itself (the five-minute
+// dashboard waits) until it ends.
+void hold(bool recording);
 #endif
 
 // Conversation views (text mode).
