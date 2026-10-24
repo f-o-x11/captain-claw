@@ -357,7 +357,7 @@ export class AgentChatWS {
 
   /** Returns the frame's client_msg_id (the agent echoes it when it takes or
    *  refuses the turn), or undefined when the socket wasn't open. */
-  send(content: string, opts?: { noNextSteps?: boolean; imagePaths?: string[] }): string | undefined {
+  send(content: string, opts?: { noNextSteps?: boolean; imagePaths?: string[]; reasoningEffort?: string }): string | undefined {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return undefined
     const clientMsgId = `web_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
     this.sentIds.push(clientMsgId)
@@ -372,6 +372,9 @@ export class AgentChatWS {
       // word by word.
       ...(opts?.noNextSteps ? { no_next_steps: true, no_rephrase: true } : {}),
       ...(opts?.imagePaths?.length ? { image_paths: opts.imagePaths } : {}),
+      // The chat box's reasoning-effort pick for this turn (absent: the
+      // model's default).
+      ...(opts?.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
     }))
     return clientMsgId
   }

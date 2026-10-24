@@ -40,6 +40,7 @@ import {
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { ChatGreeting, SkillInputDialog, SkillsDialog, SkillsMenu } from './AgentSkills'
+import { EffortMenu } from './EffortMenu'
 import { AttachmentChip } from './AttachmentChip'
 import { appendAttachmentRefs, useFileAttachments } from '../../hooks/useFileAttachments'
 import { useAgentSkills } from '../../hooks/useAgentSkills'
@@ -86,6 +87,7 @@ import { agentFileViewUrl } from '../../utils/agentFileUrl'
 import { useQuotaStore } from '../../stores/quotaStore'
 import { PlanUsageBar } from '../common/PlanUsage'
 import type { ChatMessage, TokenUsage } from '../../services/agentChat'
+import type { ReasoningProfile } from '../../utils/reasoningEffort'
 
 // Plugin arrays hoisted to module scope so they keep a stable identity across
 // renders (react-markdown otherwise sees "new" plugins every render).
@@ -693,7 +695,7 @@ function ChatContent({
   onSend,
   onCancel,
 }: {
-  session: { containerId: string; containerName: string; messages: ChatMessage[]; connected: boolean; busy: boolean; statusText: string; nextStepOptions?: NextStepOption[]; liveTurnUsage?: TokenUsage | null; closed?: { code: number; reason: string } | null; unreachable?: string | null; hasOlder?: boolean; hasNewer?: boolean; holdScrollUntil?: number }
+  session: { containerId: string; containerName: string; messages: ChatMessage[]; connected: boolean; busy: boolean; statusText: string; nextStepOptions?: NextStepOption[]; liveTurnUsage?: TokenUsage | null; closed?: { code: number; reason: string } | null; unreachable?: string | null; hasOlder?: boolean; hasNewer?: boolean; holdScrollUntil?: number; reasoning?: ReasoningProfile | null }
   /** This lane's store key — for anything that reads or writes session state.
    *  The agent id lives on `session.containerId`. */
   sessionKey: string
@@ -1053,6 +1055,14 @@ function ChatContent({
                 onMore={() => setSkillsDialog(true)}
                 compact={isMobile}
               />
+              {!shared && session.reasoning && (
+                <EffortMenu
+                  agentId={session.containerId}
+                  profile={session.reasoning}
+                  disabled={!session.connected || closed}
+                  compact={isMobile}
+                />
+              )}
               <div className="flex-1" />
               {!isMobile && <span className="pr-2 text-xs text-zinc-500">Enter to send</span>}
               {session.busy ? (

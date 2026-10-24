@@ -11,6 +11,8 @@ import type { TraceSpan } from '../types'
 import { sanitizeAgentContent } from '../utils/sanitizeAgentContent'
 import { scrubUserText } from '../utils/cardScrub'
 import { SHARED_PREFIX, sharedContainerId, sharedSliceId } from '../utils/sharedAgent'
+import { clampLevel, parseProfile, type ReasoningProfile } from '../utils/reasoningEffort'
+import { effortFor } from './reasoningStore'
 
 // ── Chat persistence helpers ──
 
@@ -1445,6 +1447,9 @@ interface ChatSession {
   models: AgentModelInfo[]
   personalities: AgentPersonalityInfo[]
   activeModel: string
+  /** The reasoning-effort levels the agent's model offers (from its session
+   *  info); null when it has none to choose from, or for a shared agent. */
+  reasoning: ReasoningProfile | null
   activePersonality: string
   // Token generation speed tracking
   _busyStartedAt: number // timestamp (ms) when agent became busy
@@ -1699,6 +1704,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       models: [],
       personalities: [],
       activeModel: '',
+      reasoning: null,
       activePersonality: '',
       _busyStartedAt: 0,
       lastTokPerSec: 0,
@@ -1848,6 +1854,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     ws.on('session_info', (data) => {
       const id = String(data.id ?? '')
       if (!id) return
+      // A model change arrives here too: the picker follows the new model.
+      if (!shared && 'reasoning' in data) updateSession(key, { reasoning: parseProfile(data.reasoning) })
       // A transcript with no divider at all on the session the lane already
       // knows it is on is the agent's replay (no sign-in, or an unreadable
       // log): that session, not a return to an earlier one. Marking it added
@@ -1895,7 +1903,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
       const models = (data.models as AgentModelInfo[] || [])
       const personalities = (data.personalities as AgentPersonalityInfo[] || [])
-      const patch: Partial<ChatSession> = { models, personalities, agentSessionId }
+      const reasoning = parseProfile(sessionInfo?.reasoning)
+      const patch: Partial<ChatSession> = { models, personalities, agentSessionId, reasoning }
       if (name) patch.statusText = `Session: ${name}`
       updateSession(key, patch)
       reconcileTopic(key)
@@ -2758,7 +2767,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
     // Attached pictures go as image_paths; the bubble above keeps their refs.
     const frame = splitImageRefs(content)
-    const clientMsgId = session.ws.send(frame.text, { noNextSteps: !!opts?.fromQueue, imagePaths: frame.imagePaths })
+    // The chat box's reasoning-effort pick for this agent, fitted to what its
+    // model offers (an agent that sent no levels gets nothing).
+    const pick = session.reasoning && !session.shared ? effortFor(session.containerId) : 'auto'
+    const reasoningEffort = pick !== 'auto' && session.reasoning ? clampLevel(pick, session.reasoning) : undefined
+    const clientMsgId = session.ws.send(frame.text, { noNextSteps: !!opts?.fromQueue, imagePaths: frame.imagePaths, reasoningEffort })
     // Whose frame this is (the queue's, for the item in flight, or yours),
     // for the agent's answer to it: taken, or refused.
     const itemId = opts?.fromQueue ? get().sessions.get(containerId)?.queueDispatchedId ?? null : null

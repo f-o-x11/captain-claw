@@ -7,7 +7,7 @@ from typing import Any
 
 from captain_claw.config import get_config
 from captain_claw.exceptions import GuardBlockedError
-from captain_claw.llm import Message, is_reasoning_backfill_placeholder
+from captain_claw.llm import Message, is_reasoning_backfill_placeholder, reasoning
 from captain_claw.logging import get_logger
 
 
@@ -38,6 +38,26 @@ _BACKGROUND_MAINTENANCE_LABELS = {
     # Naming the session just left behind (/new): the user is already typing
     # into the new topic, so this must not flip the chat to busy.
     "session_title",
+}
+
+# Helper calls made inside a turn that keep the model's default reasoning even
+# when the user picked an effort in the chat box: rewording, summaries,
+# extraction and checks — cheap jobs that don't get better with deep thinking.
+_REASONING_EXEMPT_LABELS = _BACKGROUND_MAINTENANCE_LABELS | {
+    "compaction_summary",
+    "task_rephrase",
+    "script_rephrase",
+    "orchestrator_rephrase",
+    "task_contract_critic",
+    "list_task_extractor",
+    "research_keyword_extraction",
+    "session_description",
+    "tool_output_rewrite",
+    "terminal_watcher",
+    "intentions_generator",
+    "playbook_distill",
+    "skill_search",
+    "memory_summarize_chunk",
 }
 
 
@@ -493,12 +513,13 @@ class AgentGuardMixin:
         # should read out as the answer.
         self._stream_label = _label or "conversation"
         try:
-            response = await self.provider.complete_with_callback(
-                messages=messages,
-                tools=tools if getattr(self.provider, "supports_tools", True) else None,
-                max_tokens=max_tokens,
-                on_chunk=_on_chunk,
-            )
+            with reasoning.call_effort(_label not in _REASONING_EXEMPT_LABELS):
+                response = await self.provider.complete_with_callback(
+                    messages=messages,
+                    tools=tools if getattr(self.provider, "supports_tools", True) else None,
+                    max_tokens=max_tokens,
+                    on_chunk=_on_chunk,
+                )
         except Exception:
             _error_occurred = True
             raise

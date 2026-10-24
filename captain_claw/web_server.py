@@ -246,6 +246,18 @@ def _is_speaker_agent(agent: Any) -> bool:
     return is_speaker_agent(agent)
 
 
+def _reasoning_profile_wire(agent: Any) -> dict | None:
+    """The reasoning-effort picker for *agent*'s model, or None (no agent, a
+    model without thinking controls, or a shared-agent member — the owner
+    pays for the thinking)."""
+    if agent is None or _is_speaker_agent(agent):
+        return None
+    from captain_claw.llm import reasoning
+
+    profile = reasoning.profile_for_provider(getattr(agent, "provider", None))
+    return profile.to_wire() if profile else None
+
+
 class SpeakerCapacityError(Exception):
     """No room for another shared-agent speaker instance (global or per member)."""
 
@@ -1325,6 +1337,9 @@ class WebServer:
             "playbook_id": active_pbid,
             "playbook_name": playbook_name,
             "force_script": bool(getattr(agent, "_force_script_mode", False)),
+            # The chat box's reasoning-effort picker: the levels this model
+            # offers and the one it runs at by default (None: no picker).
+            "reasoning": _reasoning_profile_wire(agent),
         }
 
     # ── Cron runtime context ─────────────────────────────────────────
