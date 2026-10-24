@@ -707,6 +707,60 @@ async def test_notes_wait_while_the_user_is_over_their_limit(monkeypatch):
     assert [m["type"] for m in conn.ws.sent if isinstance(m, dict)] == ["notes_failed"]
 
 
+# ── spoken sound commands ──────────────────────────────────────────────
+
+
+def test_a_sound_command_is_the_whole_recording():
+    assert db.sound_command("Volume up.") == "volume_up"
+    assert db.sound_command("volume-down please") == "volume_down"
+    assert db.sound_command("Beep, off!") == "beep_off"
+    assert db.sound_command("Beeps on") == "beep_on"
+    assert db.sound_command("Pojačaj, molim te.") == "volume_up"
+    assert db.sound_command("tiše") == "volume_down"
+    assert db.sound_command("Turn up the volume on the kitchen speaker") is None
+    assert db.sound_command("volume up and tell me the weather") is None
+    assert db.sound_command("What's the volume of a sphere?") is None
+
+
+async def _heard(monkeypatch, conn, words):
+    from captain_claw.flight_deck import soniox_routes
+
+    async def _stt(*a, **k):
+        return words, ""
+
+    async def _spent(_user):
+        return None
+
+    sent: list = []
+
+    async def _to_agent(text, ctx=None, **k):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(soniox_routes, "transcribe_text", _stt)
+    monkeypatch.setattr(db.usage_quota, "spent", _spent)
+    monkeypatch.setattr(conn, "send_to_agent", _to_agent)
+    conn.rec = bytearray(b"\x00\x01" * conn.rec_rate * 2)  # 2 s
+    await conn.finish_recording()
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_a_sound_command_goes_to_the_device_not_the_agent(monkeypatch):
+    conn = db._DeviceConn(_WS(), {"id": "u1"}, "paper", lang="", speak=True, screen=(400, 600),
+                          paper=True, sound_cmds=True)
+    assert await _heard(monkeypatch, conn, "Volume up.") == []
+    assert conn.ws.sent[-2:] == [{"type": "sound", "cmd": "volume_up"}, {"type": "state", "state": "ready"}]
+    assert not conn.pending
+
+
+@pytest.mark.asyncio
+async def test_a_device_without_sound_commands_asks_the_agent(monkeypatch):
+    conn = _conn()
+    assert await _heard(monkeypatch, conn, "Volume up.") == ["Volume up."]
+    assert {"type": "sound", "cmd": "volume_up"} not in conn.ws.sent
+
+
 # ── a spoken "new topic" ───────────────────────────────────────────────
 
 

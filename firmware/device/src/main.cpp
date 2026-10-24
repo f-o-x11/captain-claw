@@ -49,9 +49,9 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.0"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.1"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.17.0"
+#define FW_VERSION "0.17.1"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -315,6 +315,23 @@ static void sendType(const char* type) {
   JsonDocument d;
   d["type"] = type;
   sendJson(d);
+}
+
+// Why this boot happened, for the deck's log ("power", "button", "timer",
+// "brownout"…): a paper that redraws when it's moved shows up as a reset here.
+static const char* bootReason() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_DEEPSLEEP:
+      return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER ? "timer" : "button";
+    default: return "other";
+  }
 }
 
 static void sendPrefs() {
@@ -878,7 +895,10 @@ static void redraw() {
 }
 
 static void notice(const char* title, const String& body, uint16_t color) {
-  if (board::kPaperB) return;  // nothing to show it on: the lights and the voice carry what matters
+  if (board::kPaperB) {  // nothing to show it on: the lights and the voice carry what matters
+    if (mode == Mode::Waiting) mode = ui::hasReply() ? Mode::Reply : Mode::Idle;  // (a turn it ends)
+    return;
+  }
   ui::fade();
   mode = Mode::Notice;
   setBarState();
@@ -1588,6 +1608,47 @@ static void replayAnswer() {
 
 // ── server → device ──────────────────────────────────────────────────
 
+// A spoken sound command the deck recognised ("volume up", "beep off"):
+// changed, kept, and said back — at the new volume, so it's heard — or,
+// with speaking off, a beep at it. Volume moves a quarter at a time (25 %
+// to 100 %); the beeps are all of them: before speech, talking, key clicks.
+static void soundCommand(const String& cmd) {
+  String title, said;
+  if (cmd == "volume_up" || cmd == "volume_down") {
+    const int n = sizeof(kVolumeSteps) / sizeof(kVolumeSteps[0]);
+    int at = 0;  // the step it's on (or the nearest below)
+    for (int i = 0; i < n; ++i)
+      if (settings.volume >= kVolumeSteps[i]) at = i;
+    const int to = constrain(at + (cmd == "volume_up" ? 1 : -1), 0, n - 1);
+    const bool moved = kVolumeSteps[to] != settings.volume;
+    settings.volume = kVolumeSteps[to];
+    audio::setVolume(settings.volume);
+    const String pct = String((settings.volume * 100 + 127) / 255);
+    title = "Volume " + pct + "%";
+    said = moved ? "Volume " + pct + " percent."
+                 : String(cmd == "volume_up" ? "Volume is at the top, " : "Volume is at the lowest, ") + pct + " percent.";
+  } else if (cmd == "beep_on" || cmd == "beep_off") {
+    const bool on = cmd == "beep_on";
+    settings.cueBeep = settings.talkSounds = settings.keyClicks = on;
+    title = on ? "Beeps on" : "Beeps off";
+    said = on ? "Beeps on." : "Beeps off.";
+  } else {
+    return;  // a command from a newer deck
+  }
+  settings.save();
+  touch();
+  if (board::kHasMotor) buzz(40);
+  notice(title.c_str(), "Say “volume up”, “volume down”, “beep on” or “beep off”.", kGreen);
+  if (wsUp && settings.speak) {
+    JsonDocument d;
+    d["type"] = "say";
+    d["text"] = said;
+    sendJson(d);
+  } else if (cmd.startsWith("volume")) {
+    audio::beep();
+  }
+}
+
 static void onText(const char* payload, size_t len) {
   JsonDocument doc;
   if (deserializeJson(doc, payload, len)) return;
@@ -1781,6 +1842,8 @@ static void onText(const char* payload, size_t len) {
       notice("Offline notes not sent", String(doc["text"] | "Flight Deck couldn't take them.") + " They stay on the " +
                                            board::kNoun + ".", kOrange);
     }
+  } else if (type == "sound") {
+    soundCommand(doc["cmd"] | "");
   } else if (type == "pong") {
     if (doc["t"].is<uint32_t>()) rttMs = millis() - doc["t"].as<uint32_t>();
   } else if (type == "background") {
@@ -1978,6 +2041,8 @@ static void connectServer() {
   if (settings.lang.length()) path += "&lang=" + urlEncode(settings.lang);
   path += String("&voice=") + (settings.femaleVoice ? "female" : "male");
   path += String("&hw=") + board::kHw + "&fw=" FW_VERSION;
+  path += "&cmds=sound";                 // "volume up", "beep off": the deck sends them here
+  path += String("&boot=") + bootReason();  // in the deck's log: why this boot happened
   if (!settings.speak) path += "&speak=0";
 
   if (tls) {
@@ -2897,7 +2962,8 @@ void loop() {
   // Raise to wake: a wrist raise lights a dark or dimmed screen; lowering
   // the wrist on an idle screen puts it out (the watch sleeps on its timer
   // as before — set Power off to 3 min to keep it wakeable longer).
-  if (telemetry::raised() && (screenOff || dimmed)) touch();
+  // (The paper ignores motion: picking it up or moving it does nothing.)
+  if (!board::kEpaper && telemetry::raised() && (screenOff || dimmed)) touch();
   if (telemetry::lowered() && !screenOff && !board::kEpaper &&
       (mode == Mode::Idle || mode == Mode::Home || mode == Mode::Backdrop) && !audio::playing() && !flashing) {
     ui::brightness(0);

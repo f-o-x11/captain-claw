@@ -43,6 +43,11 @@ Device → Flight Deck
                                                  answer, never kept for a replay
   text  {"type":"update_check"}                  → update offer or {"type":"update_none"}
 
+  A device that connects with ``cmds=sound`` takes spoken sound commands: a
+  recording that is only "volume up / down" or "beep on / off" (English or
+  Croatian) never reaches the agent — the device gets {"type":"sound","cmd":…}
+  and changes it itself (sound_command()).
+
 Flight Deck → device
   text  {"type":"bound","agent":name,"slug":slug,"linked":bool} | {"type":"agents","items":[…],"current":slug}
   text  {"type":"state","state":"connected|agent_offline|transcribing|thinking|ready"}
@@ -57,6 +62,8 @@ Flight Deck → device
   text  {"type":"error","text":"…"} | {"type":"pong","t":<echoed>}
   text  {"type":"update","version","size","sha256","sig","notes","url"} | {"type":"update_none"}
   text  {"type":"replay_none"}                   nothing to replay (the device plays what it kept)
+  text  {"type":"sound","cmd":"volume_up|volume_down|beep_on|beep_off"}  a spoken sound command
+                                                 (cmds=sound devices), then state ready
 
 Auth: a personal access token (Profile → MCP agent access) names the owner;
 the device only ever reaches that owner's agents. With Flight Deck auth off
@@ -243,6 +250,34 @@ def _common_prefix(a: str, b: str) -> int:
     while i < n and a[i] == b[i]:
         i += 1
     return i
+
+
+# Spoken sound commands: the whole recording is the command (a "please"
+# either side allowed), so "turn up the volume on the kitchen speaker" still
+# goes to the agent.
+_SOUND_COMMANDS = {
+    "volume_up": ("volume up", "louder", "turn it up", "turn up the volume", "turn the volume up",
+                  "increase the volume", "raise the volume", "glasnije", "pojačaj", "pojačaj zvuk",
+                  "pojačaj glasnoću", "glasnoća gore"),
+    "volume_down": ("volume down", "quieter", "softer", "turn it down", "turn down the volume",
+                    "turn the volume down", "decrease the volume", "lower the volume", "tiše", "stišaj",
+                    "utišaj", "smanji zvuk", "smanji glasnoću", "glasnoća dolje"),
+    "beep_on": ("beep on", "beeps on", "beeping on", "turn on the beep", "turn on the beeps",
+                "turn the beeps on", "bip uključi", "uključi bip", "uključi bipove", "bipovi uključeni"),
+    "beep_off": ("beep off", "beeps off", "beeping off", "no beeps", "turn off the beep",
+                 "turn off the beeps", "turn the beeps off", "bip isključi", "isključi bip",
+                 "isključi bipove", "bipovi isključeni", "bez bipova"),
+}
+_SOUND_PHRASES = {p: cmd for cmd, phrases in _SOUND_COMMANDS.items() for p in phrases}
+_POLITE = re.compile(r"^(?:please|molim(?: te)?)\s+|\s+(?:please|molim(?: te)?)$")
+
+
+def sound_command(text: str) -> str | None:
+    """"volume_up" / "volume_down" / "beep_on" / "beep_off" when *text* is
+    only that command ("Volume up.", "Beep, off!", "pojačaj molim te")."""
+    said = re.sub(r"[^\w\s]", " ", text.lower().replace("-", " "))
+    said = _POLITE.sub("", " ".join(said.split())).strip()
+    return _SOUND_PHRASES.get(said)
 
 
 def cue_alone(text: str) -> bool:
@@ -485,10 +520,11 @@ class _DeviceConn:
     def __init__(self, ws: WebSocket, user: dict, device_id: str, *, lang: str,
                  speak: bool, screen: tuple[int, int], voice: str = "",
                  round_screen: bool = False, chunked: bool = False,
-                 paper: bool = False, hw: str = "", fw: str = "") -> None:
+                 paper: bool = False, hw: str = "", fw: str = "", sound_cmds: bool = False) -> None:
         self.ws = ws
         self.hw = hw  # device kind + firmware version, for over-the-air updates
         self.fw = fw
+        self.sound_cmds = sound_cmds  # it changes volume / beeps when told to ("cmds=sound")
         self.user = user
         self.user_id = str(user.get("id", ""))
         self.device_id = device_id
@@ -977,6 +1013,12 @@ class _DeviceConn:
             await self.send_json({"type": "error", "text": err or "Didn't catch that."})
             await self.send_json({"type": "state", "state": "ready"})
             return
+        cmd = sound_command(text) if self.sound_cmds else None
+        if cmd:  # "volume up", "beep off": the device's own business, not the agent's
+            log.info("device %s: sound command %s (%r)", self.device_id, cmd, text[:60])
+            await self.send_json({"type": "sound", "cmd": cmd})
+            await self.send_json({"type": "state", "state": "ready"})
+            return
         await self.send_json({"type": "transcript", "text": text})
         await self.send_to_agent(text, ctx)
 
@@ -1258,6 +1300,7 @@ async def device_ws(ws: WebSocket) -> None:
         voice=q.get("voice", ""), **_picture_options(q),
         hw=re.sub(r"[^a-z0-9_-]", "", (q.get("hw", "") or "").lower())[:24],
         fw=re.sub(r"[^0-9.]", "", q.get("fw", "") or "")[:16],
+        sound_cmds="sound" in (q.get("cmds", "") or "").split(","),
     )
     conn.start_audio_worker()
     _live.add(conn)
