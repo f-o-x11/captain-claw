@@ -51,7 +51,7 @@ For a quick overview and installation guide, see [README.md](README.md).
   - [web](#web)
   - [google_oauth](#google_oauth)
   - [orchestrator](#orchestrator)
-  - [botport_client](#botport_client)
+  - [botport](#botport-agent-config)
   - [scale](#scale)
   - [datastore](#datastore-1)
   - [deep_memory](#deep_memory)
@@ -1131,7 +1131,7 @@ Consult specialist agents through the BotPort agent-to-agent network. Use this t
 - **`status`** — Check BotPort connection status or concern status.
 - **`list_agents`** — List all connected agents and their capabilities (personas, tools, models).
 
-Requires `botport_client.enabled: true` and a valid BotPort server URL in config. See [BotPort](#botport) for setup details.
+Requires `botport.enabled: true` and a valid BotPort server URL in the agent's config (a legacy, per-agent link — agents on a Flight Deck reach other decks through the `flight_deck` tool instead). See [BotPort](#botport) for setup details.
 
 ### flight_deck
 
@@ -2060,10 +2060,15 @@ orchestrator:
   worker_max_retries: 2           # retries before failure
 ```
 
-### botport_client
+<a id="botport-agent-config"></a>
+### botport
+
+The agent's own, legacy, direct link to a BotPort hub. Agents running on a
+Flight Deck do not need it: the deck connects to BotPort and carries their
+requests (see [BotPort](#botport)).
 
 ```yaml
-botport_client:
+botport:
   enabled: false                    # enable BotPort connection
   url: ""                           # WebSocket URL (e.g. wss://botport.kstevica.com/ws)
   instance_name: "default"          # name to register with on the hub
@@ -3635,56 +3640,75 @@ Plan runs are long (executor + verifier + reviser cycles), so the WebSocket plum
 
 ## BotPort
 
-BotPort is an agent-to-agent task routing hub that connects multiple Captain Claw instances via persistent WebSocket connections. Agents can delegate tasks to specialist instances based on expertise, and receive structured results — enabling multi-agent collaboration across machines, networks, or cloud deployments.
+BotPort is the hub that connects **Flight Decks**: an agent on one deck can
+consult or delegate to an agent on another deck, wherever the two run. Each
+Flight Deck dials out to the hub and keeps one WebSocket open (so decks behind
+NAT work); the receiving deck proxies each request to its own agent and streams
+the answer back. **The step-by-step guide — Raspberry Pi + tmux hub, decks on
+VPSs, TLS / Tailscale / tunnels, troubleshooting — is
+[docs/botport-deployment.md](docs/botport-deployment.md).**
 
 ### Architecture
 
 ```
-┌──────────┐     WebSocket     ┌──────────┐     WebSocket     ┌──────────┐
-│  CC-A    │◄─────────────────►│  BotPort │◄─────────────────►│  CC-B    │
-│ (sender) │   concern/result  │  (hub)   │  dispatch/result  │(handler) │
-└──────────┘                   └──────────┘                   └──────────┘
+Agent ──flight_deck tool──▶ Flight Deck A ══ws(s)══▶ BotPort hub ◀══ws(s)══ Flight Deck B ──▶ Agent
+          "Researcher@pi"     /fd/consult-peer         routes Agent@deck        proxies to its agent
 ```
 
-- **CC-A (originator):** Sends a concern (task + context + expertise tags) to BotPort.
-- **BotPort (hub):** Routes the concern to the best-matched instance using tag matching, LLM-powered routing, or least-loaded fallback.
-- **CC-B (handler):** Receives the dispatch, spawns an ephemeral agent, processes the task, and returns the result.
+- **Agents** only ever talk to their own Flight Deck. Remote agents show up in
+  `flight_deck list_agents` as **`Agent@deck`** and are consulted/delegated by
+  that name, like local peers.
+- **Flight Deck** (Admin console → BotPort, or `FD_BOTPORT_*` environment)
+  connects to the hub, advertises the agents an admin chose to **expose**, and
+  runs requests from other decks on its agents — in a separate lane per remote
+  deck, never in the owner's main chat, with email writing and the
+  network-reaching tools (`flight_deck`, `consult_peer`, `botport`) denied.
+- **BotPort** authenticates each deck (key/secret; the key binds the deck's
+  name), routes addressed requests, relays progress, holds results for a
+  requester that dropped, and gives a deck that dropped mid-task time to come
+  back.
 
 ### Setup
 
-**1. Run BotPort:**
-
-BotPort is included with `pip install captain-claw`. Start the hub:
+**1. Run the hub** (any machine the decks can reach — the guide uses a Raspberry Pi):
 
 ```bash
-botport
+python3 -m venv ~/botport-venv && ~/botport-venv/bin/pip install ./botport
+~/botport-venv/bin/botport gen-key vps1            # one per deck → auth.keys
+cp botport/config.example.yaml ~/.botport/config.yaml && chmod 600 ~/.botport/config.yaml
+~/botport-venv/bin/botport check -c ~/.botport/config.yaml
+scripts/botport-tmux.sh start                      # or: botport -c ~/.botport/config.yaml
 ```
 
-BotPort starts on port `23180` by default. Configure via `~/.botport/config.yaml` or `./config.yaml`.
+BotPort listens on port `23180` by default and refuses to start (rather than
+move to another port) if that port is taken. `/healthz` answers without
+credentials.
 
-**2. Connect a Captain Claw instance:**
+**2. Connect each Flight Deck:** Admin console → **BotPort** — hub URL
+(`wss://…/ws`, or `ws://127.0.0.1:23180/ws` on the hub's own machine), deck
+name, key and secret, then pick the exposed agents. Or set
+`FD_BOTPORT_URL`, `FD_BOTPORT_DECK_NAME`, `FD_BOTPORT_KEY`, `FD_BOTPORT_SECRET`,
+`FD_BOTPORT_EXPOSE` (see the guide for the full list).
 
-Add to your Captain Claw `config.yaml`:
+**3. Use it:** "ask Researcher@pi to …" — the agent calls `flight_deck`
+(`consult` for a quick answer with live progress, `delegate` for work whose
+result comes back as a message).
+
+**Direct agent connections (legacy).** A Captain Claw agent can still connect
+to the hub on its own with the `botport:` section of its config:
 
 ```yaml
-botport_client:
+botport:
   enabled: true
-  url: "wss://botport.kstevica.com/ws"
+  url: "ws://localhost:23180/ws"
   instance_name: "my-agent"
   key: "my-key"                     # if auth is enabled on the hub
   secret: "my-secret"
 ```
 
-Or for a local BotPort server:
-
-```yaml
-botport_client:
-  enabled: true
-  url: "ws://localhost:23180/ws"
-  instance_name: "my-agent"
-```
-
-**3. Connect additional instances** with different `instance_name` values. Each instance advertises its personas, tools, and models to the hub.
+The rest of this section describes that agent-level protocol (concerns,
+routing by expertise, the `botport` tool and swarms). Decks can address such an
+agent by its instance name.
 
 ### Concern Lifecycle
 
@@ -3727,41 +3751,42 @@ Follow-ups maintain conversation context:
 
 ### BotPort Server Configuration
 
-BotPort server configuration (`~/.botport/config.yaml`):
+BotPort server configuration — the annotated reference is
+[botport/config.example.yaml](botport/config.example.yaml). The essentials:
 
 ```yaml
 server:
   host: "0.0.0.0"
   port: 23180
-  dashboard_enabled: true
-
-routing:
-  strategy: "auto"                    # tag_match -> llm -> least-loaded
-  fallback: "reject"                  # reject or queue_until_available
-
-concerns:
-  idle_timeout_seconds: 300           # timeout concerns after 5 min idle
-  max_follow_ups: 10                  # max follow-up exchanges per concern
-  max_concurrent_per_instance: 5
+  admin_token: ""                     # dashboard + REST API token (else: local requests only, when auth is on)
+  behind_proxy: false                 # a TLS reverse proxy / tunnel on this host
+  tls_cert: ""                        # or serve wss:// directly
+  tls_key: ""
 
 auth:
-  enabled: false
-  keys:
-    - key: "instance-key"
-      secret: "instance-secret"
-      instance: "claw-alpha"
+  enabled: true
+  keys:                               # botport gen-key <name> prints an entry
+    - instance: "vps1"                # binds the deck name to this key
+      key: "vps1-1a2b3c4d"
+      secret: "…"
+
+concerns:
+  idle_timeout_seconds: 600           # no progress for this long → the request fails (both sides told)
+  reconnect_grace_seconds: 90         # a deck that drops mid-task may come back
+  result_retention_seconds: 900       # results wait this long for a requester that dropped
 
 logging:
   level: "INFO"
-  concern_history: true               # persist concern exchanges to SQLite
-  retention_days: 30
+  file: ""                            # e.g. ~/.botport/botport.log (rotated)
 
 llm:
-  enabled: false                      # enable LLM-powered routing
+  enabled: false                      # LLM routing of unaddressed requests (pip install 'botport[llm]')
   model: "ollama/llama3.2"            # litellm provider/model format
-  temperature: 0.1
-  timeout: 30
 ```
+
+Every value can be overridden by environment: `BOTPORT_<SECTION>__<KEY>`
+(e.g. `BOTPORT_AUTH__ENABLED=true`). `botport check` prints the effective
+configuration and its warnings; `botport --version` the version.
 
 ### BotPort Dashboard
 
@@ -3770,7 +3795,10 @@ BotPort includes a web dashboard (enabled by default) that shows:
 - Active and historical concerns
 - Routing decisions and concern lifecycle events
 
-Access at `https://botport.kstevica.com` (or `http://localhost:23180` for local).
+Access at `http://<hub>:23180/` — it asks once for `server.admin_token`. It
+lists Flight Decks with the agents they expose, legacy agents with their
+personas, and concerns. `/api/status` gives the same as JSON (decks, load,
+queued results, counters); `/ws/dashboard` streams live events.
 
 ### Capability Advertisement
 
@@ -3780,17 +3808,20 @@ Each connected Captain Claw instance advertises:
 - **Models** — available LLM models
 - **Capacity** — max concurrent concerns
 
-Control what is advertised via `botport_client.advertise_personas`, `advertise_tools`, and `advertise_models`.
+Control what is advertised via `botport.advertise_personas`, `advertise_tools`, and `advertise_models`.
 
 ### Environment Variables
 
 | Variable | Description |
 |---|---|
-| `CLAW_BOTPORT_CLIENT__ENABLED` | Enable BotPort connection |
-| `CLAW_BOTPORT_CLIENT__URL` | BotPort WebSocket URL |
-| `CLAW_BOTPORT_CLIENT__INSTANCE_NAME` | Instance name |
-| `CLAW_BOTPORT_CLIENT__KEY` | Auth key |
-| `CLAW_BOTPORT_CLIENT__SECRET` | Auth secret |
+| `CLAW_BOTPORT__ENABLED` | Enable the agent's direct (legacy) BotPort connection |
+| `CLAW_BOTPORT__URL` | BotPort WebSocket URL |
+| `CLAW_BOTPORT__INSTANCE_NAME` | Instance name |
+| `CLAW_BOTPORT__KEY` | Auth key |
+| `CLAW_BOTPORT__SECRET` | Auth secret |
+
+Flight Deck's link is configured with `FD_BOTPORT_*` — see
+[docs/botport-deployment.md](docs/botport-deployment.md#6-connect-each-flight-deck).
 
 ### BotPort Swarm
 
@@ -5574,7 +5605,7 @@ Flight Deck uses environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `FD_DATA_DIR` | `./fd-data` | Directory for agent data (config, workspace, sessions) |
-| `FD_AUTH_ENABLED` | `false` | Enable JWT-based multi-user authentication |
+| `FD_AUTH_ENABLED` | `true` | JWT-based multi-user sign-in. `false` = one local user, no sign-in (desktop / single-person decks) |
 | `FD_JWT_SECRET` | (auto-generated per boot) | Secret key for JWT token signing. Set a fixed value on any shared deck — otherwise every login dies on restart; the inbound MCP OAuth and Lupa need it stable (Lupa's BFF must share it) |
 | `FD_DOCKER_SPAWN` | `true` | Allow Docker container spawning (can be disabled by admin) |
 | `FD_ALLOWED_HOSTS` | (unset) | **NEW in 0.8.0.** Extra host names this deck answers to, comma-separated (`.example.com` / `*.example.com` allow subdomains, `*` turns the check off). `localhost`, IP literals, this machine's hostnames, `FD_PUBLIC_URL`'s host and `FD_CORS_ORIGINS` hosts are always allowed. **A deck reached through its own domain must set this or `FD_PUBLIC_URL`, or every request is refused** |
@@ -5583,6 +5614,7 @@ Flight Deck uses environment variables:
 | `FD_PUBLIC_FILE_LINK_MAX_MB` | `50` | Largest file a public link may publish |
 | `FD_CORS_ORIGINS` | (deck's own origins) | Extra browser origins allowed to call the deck. Since 0.8.0 the default is no longer `*`; `*` is the explicit legacy opt-out |
 | `FD_LOCKDOWN` | (unset) | `1` = hosted mode: agent shared secret required even from loopback, host-filesystem routes off, `Secure` refresh cookie |
+| `FD_BOTPORT_URL`, `FD_BOTPORT_DECK_NAME`, `FD_BOTPORT_KEY`, `FD_BOTPORT_SECRET`, `FD_BOTPORT_EXPOSE`, `FD_BOTPORT_ACCEPT_FROM`, `FD_BOTPORT_ALLOW_OUTBOUND`, `FD_BOTPORT_MAX_CONCURRENT`, `FD_BOTPORT_DENY_TOOLS`, `FD_BOTPORT_ENABLED`, `FD_BOTPORT_NO_PROXY` | (unset) | The deck's BotPort link to other Flight Decks, pinned by environment (otherwise Admin console → BotPort). See [docs/botport-deployment.md](docs/botport-deployment.md) |
 | `FD_REGISTRATION_OPEN` / `FD_REGISTRATION_DISABLED` | (unset) | Self-registration is closed once the first (admin) account exists; `_OPEN=1` reopens it, `_DISABLED=1` forces it closed. Admins add or invite users on the Users page; while it is closed, "No account?" leads to the waitlist |
 | `FD_COOKIE_SECURE` | (auto) | Force the refresh cookie's `Secure` flag on (`1`) or off (`0`, local http only) |
 | `FD_SIMPLE_CHAT` | (unset) | `1` (or `captain-claw-fd --simple-chat`) = kiosk for every non-admin until an admin picks a mode in Admin → Settings |
@@ -6575,9 +6607,9 @@ workspace/saved/
 | `FD_PAYMENTS`, `FD_SCHEDULER_QUIET_HOURS`, `FD_AGENT_WS_WAIT_S`, `FD_DESKTOP`, `FD_DATA_KEY_FILE`, … | Flight Deck settings — see the Configuration table under [Flight Deck](#flight-deck) |
 | `CLAW_WRITE_GUARD` | `0` turns off the `write` tool's empty/placeholder refusal and read-back check (on by default since 0.8.0) |
 | `FD_JEV_BASE_URL` | Flight Deck: send every user's Jev calls to another Jev-compatible endpoint (a proxy in front of `https://api.typesafe.ai`, or a local stub); default `https://api.typesafe.ai` |
-| `CLAW_BOTPORT_CLIENT__URL` | BotPort WebSocket URL (e.g. `wss://botport.kstevica.com/ws`) |
-| `CLAW_BOTPORT_CLIENT__KEY` | BotPort authentication key |
-| `CLAW_BOTPORT_CLIENT__SECRET` | BotPort authentication secret |
+| `CLAW_BOTPORT__URL` | BotPort WebSocket URL for the agent's direct (legacy) link (e.g. `wss://botport.kstevica.com/ws`) |
+| `CLAW_BOTPORT__KEY` | BotPort authentication key |
+| `CLAW_BOTPORT__SECRET` | BotPort authentication secret |
 | `MAIL_FROM_ADDRESS` | Email sender address |
 | `MAIL_FROM_NAME` | Email sender name |
 | `SMTP_HOST` | SMTP server host |

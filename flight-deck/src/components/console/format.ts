@@ -18,3 +18,16 @@ export function fmtNumber(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
   return String(n)
 }
+
+/** timeAgo for a unix time in seconds. */
+export function unixAgo(sec: number | null | undefined): string {
+  return sec ? timeAgo(new Date(sec * 1000).toISOString()) : ''
+}
+
+/** "45s", "3m 05s", "2h 10m" for a duration in seconds. */
+export function fmtDuration(sec: number): string {
+  const s = Math.max(0, Math.round(sec))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+}

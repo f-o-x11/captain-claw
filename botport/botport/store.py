@@ -17,6 +17,39 @@ except RuntimeError:
     DEFAULT_DB_PATH = Path("/tmp/.botport/botport.db")
 
 
+def _row_col(row: Any, name: str, default: Any = "") -> Any:
+    try:
+        value = row[name]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
+
+def _row_to_concern(row: Any, messages: list[ConcernExchange]) -> Concern:
+    return Concern(
+        id=row["id"],
+        from_instance=row["from_instance"],
+        from_instance_name=row["from_instance_name"] or "",
+        from_session=row["from_session"] or "",
+        assigned_instance=row["assigned_instance"],
+        assigned_instance_name=row["assigned_instance_name"] or "",
+        assigned_session=row["assigned_session"],
+        task=row["task"] or "",
+        context=json.loads(row["context"] or "{}"),
+        expertise_tags=json.loads(row["expertise_tags"] or "[]"),
+        status=row["status"] or "pending",
+        messages=messages,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        timeout_at=row["timeout_at"] or "",
+        metadata=json.loads(row["metadata"] or "{}"),
+        target_deck=_row_col(row, "target_deck"),
+        target_agent=_row_col(row, "target_agent"),
+        from_agent=_row_col(row, "from_agent"),
+        mode=_row_col(row, "mode") or "consult",
+    )
+
+
 class BotPortStore:
     """Async SQLite store for concerns history and stats."""
 
@@ -31,6 +64,9 @@ class BotPortStore:
         self._db = await aiosqlite.connect(str(self._db_path))
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
+        # WAL + NORMAL is crash-safe and far gentler on an SD card than FULL.
+        await self._db.execute("PRAGMA synchronous=NORMAL")
+        await self._db.execute("PRAGMA busy_timeout=5000")
         await self._create_tables()
         return self._db
 
@@ -72,8 +108,9 @@ class BotPortStore:
             CREATE INDEX IF NOT EXISTS idx_concerns_assigned ON concerns(assigned_instance);
             CREATE INDEX IF NOT EXISTS idx_concern_messages_cid ON concern_messages(concern_id);
         """)
-        # Migrate: add name columns if upgrading from older schema.
-        for col in ("from_instance_name", "assigned_instance_name"):
+        # Migrate: add columns if upgrading from an older schema.
+        for col in ("from_instance_name", "assigned_instance_name",
+                    "target_deck", "target_agent", "from_agent", "mode"):
             try:
                 await self._db.execute(
                     f"ALTER TABLE concerns ADD COLUMN {col} TEXT DEFAULT ''"
@@ -100,8 +137,8 @@ class BotPortStore:
                (id, from_instance, from_instance_name, from_session,
                 assigned_instance, assigned_instance_name, assigned_session,
                 task, context, expertise_tags, status, created_at, updated_at,
-                timeout_at, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                timeout_at, metadata, target_deck, target_agent, from_agent, mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  from_instance_name = excluded.from_instance_name,
                  assigned_instance = excluded.assigned_instance,
@@ -110,7 +147,9 @@ class BotPortStore:
                  status = excluded.status,
                  updated_at = excluded.updated_at,
                  timeout_at = excluded.timeout_at,
-                 metadata = excluded.metadata
+                 metadata = excluded.metadata,
+                 target_deck = excluded.target_deck,
+                 target_agent = excluded.target_agent
             """,
             (
                 concern.id,
@@ -127,7 +166,11 @@ class BotPortStore:
                 concern.created_at,
                 concern.updated_at,
                 concern.timeout_at,
-                json.dumps(concern.metadata),
+                json.dumps(concern.metadata, default=str),
+                concern.target_deck,
+                concern.target_agent,
+                concern.from_agent,
+                concern.mode,
             ),
         )
         await db.commit()
@@ -146,7 +189,7 @@ class BotPortStore:
                 exchange.content,
                 exchange.timestamp,
                 exchange.from_instance,
-                json.dumps(exchange.metadata),
+                json.dumps(exchange.metadata, default=str),
             ),
         )
         await db.commit()
@@ -175,24 +218,7 @@ class BotPortStore:
                     metadata=json.loads(msg_row["metadata"] or "{}"),
                 ))
 
-        return Concern(
-            id=row["id"],
-            from_instance=row["from_instance"],
-            from_instance_name=row["from_instance_name"] or "",
-            from_session=row["from_session"] or "",
-            assigned_instance=row["assigned_instance"],
-            assigned_instance_name=row["assigned_instance_name"] or "",
-            assigned_session=row["assigned_session"],
-            task=row["task"] or "",
-            context=json.loads(row["context"] or "{}"),
-            expertise_tags=json.loads(row["expertise_tags"] or "[]"),
-            status=row["status"] or "pending",
-            messages=messages,
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            timeout_at=row["timeout_at"] or "",
-            metadata=json.loads(row["metadata"] or "{}"),
-        )
+        return _row_to_concern(row, messages)
 
     async def list_concerns(
         self,
@@ -219,24 +245,7 @@ class BotPortStore:
         concerns: list[Concern] = []
         async with db.execute(query, params) as cursor:
             async for row in cursor:
-                concerns.append(Concern(
-                    id=row["id"],
-                    from_instance=row["from_instance"],
-                    from_instance_name=row["from_instance_name"] or "",
-                    from_session=row["from_session"] or "",
-                    assigned_instance=row["assigned_instance"],
-                    assigned_instance_name=row["assigned_instance_name"] or "",
-                    assigned_session=row["assigned_session"],
-                    task=row["task"] or "",
-                    context=json.loads(row["context"] or "{}"),
-                    expertise_tags=json.loads(row["expertise_tags"] or "[]"),
-                    status=row["status"] or "pending",
-                    messages=[],
-                    created_at=row["created_at"],
-                    updated_at=row["updated_at"],
-                    timeout_at=row["timeout_at"] or "",
-                    metadata=json.loads(row["metadata"] or "{}"),
-                ))
+                concerns.append(_row_to_concern(row, []))
         return concerns
 
     async def get_stats(self) -> dict[str, Any]:

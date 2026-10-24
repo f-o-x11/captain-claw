@@ -135,18 +135,29 @@ function renderInstances(instances) {
       ? Math.round((inst.active_concerns / inst.max_concurrent) * 100)
       : 0;
     const loadColor = loadPct > 80 ? "var(--red)" : loadPct > 50 ? "var(--yellow)" : "var(--green)";
-    const personaCards = (inst.personas || []).map(renderPersona).join("");
+    const isDeck = inst.kind === "deck";
+    /* A Flight Deck's exposed agents render like an agent's personas. */
+    const personaCards = isDeck
+      ? (inst.agents || []).map((a) => renderPersona({
+          ...a,
+          name: a.status && a.status !== "running" ? `${a.name} (${a.status})` : a.name,
+        })).join("")
+      : (inst.personas || []).map(renderPersona).join("");
     const activityHtml = renderActivity(inst.activity);
+    const meta = isDeck
+      ? `<span>Flight Deck${inst.version ? " " + esc(inst.version) : ""}</span>
+          <span>${(inst.agents || []).length} agents exposed</span>`
+      : `<span>${(inst.tools || []).length} tools</span>
+          <span>${(inst.models || []).length} models</span>`;
     return `
       <div class="instance-card">
         <div class="instance-header">
           <span class="instance-name">${esc(inst.name)}</span>
-          <span class="instance-status status-${inst.status}">${inst.status}</span>
+          <span class="instance-status status-${esc(inst.status)}">${esc(inst.status)}</span>
         </div>
         <div class="instance-meta">
-          <span>${inst.active_concerns}/${inst.max_concurrent} active</span>
-          <span>${(inst.tools || []).length} tools</span>
-          <span>${(inst.models || []).length} models</span>
+          <span>${Number(inst.active_concerns) || 0}/${Number(inst.max_concurrent) || 0} active</span>
+          ${meta}
           <span>${timeAgo(inst.last_heartbeat)}</span>
         </div>
         ${activityHtml}
@@ -312,10 +323,11 @@ function closeModal() {
 /* ---- Utilities ---- */
 
 function esc(s) {
-  if (!s) return "";
+  if (s === null || s === undefined || s === "") return "";
   const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
+  d.textContent = String(s);
+  /* Also safe inside quoted attributes (href="...", download="..."). */
+  return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function truncate(s, max) {

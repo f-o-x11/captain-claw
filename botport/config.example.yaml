@@ -1,54 +1,78 @@
-# BotPort Configuration
-# Copy to ~/.botport/config.yaml or ./config.yaml
+# BotPort configuration — the hub that connects Flight Decks.
+#
+#   Agent → Flight Deck A → BotPort → Flight Deck B → agent
+#
+# Copy to ~/.botport/config.yaml (chmod 600 — it holds secrets) and run
+#   botport check -c ~/.botport/config.yaml
+#   botport -c ~/.botport/config.yaml
+# Lookup without -c: $BOTPORT_CONFIG, ./botport.yaml, ./config.yaml (only if
+# it is a BotPort config), ~/.botport/config.yaml. Every value can also be set
+# by environment, e.g. BOTPORT_SERVER__PORT=23180, BOTPORT_AUTH__ENABLED=true.
+# Full guide: docs/botport-deployment.md
 
 server:
-  host: "0.0.0.0"
-  port: 9800
+  host: "0.0.0.0"            # 127.0.0.1 when only a local reverse proxy reaches it
+  port: 23180
   dashboard_enabled: true
-
-routing:
-  # Routing uses a strategy chain: tag matching -> LLM (if enabled) -> least-loaded fallback.
-  # The "strategy" field is kept for logging but routing always tries all strategies in order.
-  strategy: "auto"
-  fallback: "reject"           # "reject" (fail if no match) or "queue_until_available"
-
-concerns:
-  idle_timeout_seconds: 300    # 5 minutes - timeout concerns with no activity
-  max_follow_ups: 10           # max follow-up exchanges per concern
-  max_concurrent_per_instance: 5
+  # Bearer token for the dashboard + REST API. Without one (and with auth on)
+  # they answer only requests from this machine. Generate: openssl rand -hex 24
+  admin_token: ""
+  # true when a reverse proxy on this host (Caddy, nginx) terminates TLS.
+  behind_proxy: false
+  # Serve wss:// directly instead (leave empty behind a TLS proxy).
+  tls_cert: ""
+  tls_key: ""
+  ws_heartbeat_seconds: 25   # keeps NAT mappings alive, detects dead sockets
+  data_dir: ""               # database + swarm files; empty = ~/.botport
+  cors_origins: []           # browser origins allowed to call the REST API
 
 auth:
-  enabled: false
+  enabled: true
+  # One entry per Flight Deck (and per legacy agent). `instance` binds the
+  # deck name: a deck connecting with this key IS that deck.
+  # Generate an entry with:  botport gen-key <deck-name>
   keys:
-    # Each key entry allows a CC instance to connect.
-    # The "instance" field is an optional human-readable name.
-    #
-    # - key: "my-instance-key"
-    #   secret: "my-instance-secret"
-    #   instance: "claw-alpha"
-    # - key: "another-key"
-    #   secret: "another-secret"
-    #   instance: "claw-beta"
+    # - instance: "vps1"
+    #   key: "vps1-xxxxxxxx"
+    #   secret: "<32+ random characters>"
+    # - instance: "vps2"
+    #   key: "vps2-xxxxxxxx"
+    #   secret: "<32+ random characters>"
+    # - instance: "pi"
+    #   key: "pi-xxxxxxxx"
+    #   secret: "<32+ random characters>"
+  max_failures_per_minute: 10  # per address + key, then blocked for block_seconds
+  block_seconds: 300
+
+concerns:
+  idle_timeout_seconds: 600      # no progress for this long → the request fails
+  default_timeout_seconds: 600   # when a request names no timeout
+  max_timeout_seconds: 3600
+  reconnect_grace_seconds: 90    # a deck that drops mid-task may come back this long
+  result_retention_seconds: 900  # results for an offline requester wait this long
+  max_follow_ups: 20
+  max_concurrent_per_instance: 10
+
+routing:
+  # Requests to Agent@deck go straight there. Unaddressed ones (legacy agents)
+  # try tags → LLM (if enabled) → least loaded.
+  strategy: "auto"
+  fallback: "reject"
 
 logging:
-  level: "INFO"                # DEBUG, INFO, WARNING, ERROR
-  concern_history: true        # log concern exchanges to store
-  retention_days: 30           # auto-cleanup concerns older than this
+  level: "INFO"
+  file: ""                 # e.g. ~/.botport/botport.log (rotated)
+  file_max_mb: 10
+  file_backups: 5
+  color: "auto"            # auto | always | never
+  concern_history: true
+  retention_days: 30
 
-# LLM-powered routing (uses litellm — supports all major providers).
-# When enabled, the LLM picks the best agent + persona for each concern.
-# Falls back to tag matching / least-loaded if LLM is disabled or fails.
+# LLM-assisted routing for unaddressed requests (needs: pip install 'botport[llm]').
 llm:
   enabled: false
-  # Model uses litellm's "provider/model" format. Examples:
-  #   ollama/llama3.2              (local Ollama)
-  #   gemini/gemini-2.0-flash      (Google Gemini)
-  #   openai/gpt-4o-mini           (OpenAI)
-  #   anthropic/claude-3-haiku-20240307  (Anthropic)
-  #   groq/llama-3.1-8b-instant    (Groq)
-  # See https://docs.litellm.ai/docs/providers for full list.
-  model: "ollama/llama3.2"
-  base_url: ""                 # optional — override provider's default URL
-  api_key: ""                  # required for cloud providers (set via env var or here)
+  model: "gemini/gemini-2.0-flash"   # litellm provider/model
+  base_url: ""
+  api_key: ""                        # or the provider's env var
   temperature: 0.1
-  timeout: 30                  # seconds
+  timeout: 30

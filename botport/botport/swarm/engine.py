@@ -534,7 +534,7 @@ class SwarmEngine:
         task.concern_id = concern.id
         task.status = "running"
         task.started_at = _utcnow_iso()
-        task.assigned_instance = target.name
+        task.assigned_instance = getattr(route_result, "label", target.name)
         if persona_hint:
             task.assigned_persona = persona_hint
         task.touch()
@@ -546,12 +546,18 @@ class SwarmEngine:
         self._server.connections.increment_active(target.id)
 
         from botport.protocol import DispatchMessage
+        concern.target_agent = getattr(route_result, "target_agent", "")
+        concern.counted_active = True  # increment_active above; released once
+        if target.is_deck:
+            concern.target_deck = target.name
         await self._server.connections.send_to(target.id, DispatchMessage(
             concern_id=concern.id,
             from_instance_name=concern.from_instance_name,
             task=concern.task,
             context=concern.context,
             persona_hint=persona_hint,
+            target_agent=concern.target_agent,
+            timeout_seconds=float(task.timeout_seconds or 0),
         ))
 
         await store.add_audit_entry(SwarmAuditEntry(

@@ -752,7 +752,9 @@ Full reference: [USAGE.md](USAGE.md#configuration-reference) (23 config sections
 | Nervous system (dreaming) | `captain_claw/nervous_system.py` |
 | Cognitive tempo | `captain_claw/cognitive_tempo.py` |
 | MCP server | `captain_claw/mcp_serve.py` |
-| BotPort client | `captain_claw/botport_client.py` |
+| BotPort client (agent, legacy) | `captain_claw/botport_client.py` |
+| BotPort link (Flight Deck ⇄ other decks) | `captain_claw/flight_deck/botport_link.py`, `botport_routes.py` |
+| BotPort hub | `botport/botport/` |
 | Web UI + REST API | `captain_claw/web/` |
 | Prompt templates (~100 files) | `captain_claw/instructions/` |
 | Config (Pydantic) | `captain_claw/config.py` |
@@ -762,6 +764,7 @@ Full reference: [USAGE.md](USAGE.md#configuration-reference) (23 config sections
 - **[USAGE.md](USAGE.md)** — Complete reference for all commands, tools, config, and features
 - **[README_DETAILED.md](README_DETAILED.md)** — Extended README with feature-by-feature breakdown
 - **[docs/team-deployment.md](docs/team-deployment.md)** — Running Flight Deck for a team: multi-user security, sharing, team keys, inbound MCP for Claude, Gmail sending
+- **[docs/botport-deployment.md](docs/botport-deployment.md)** — Connecting Flight Decks through BotPort: a hub in tmux on a Raspberry Pi, decks on VPSs, TLS / Tailscale / tunnels, exposure and safeguards, troubleshooting
 - **[docs/glasses-hud.md](docs/glasses-hud.md)** — The Flight Deck HUD for Meta Ray-Ban Display smart glasses (`/hud`)
 - **[firmware/device/README.md](firmware/device/README.md)** — The M5Stack StickS3, StopWatch and PaperColor push-to-talk voice clients: setup, buttons, build and flash, over-the-air updates
 - **[release-notes/RELEASE_NOTES_0.8.1.md](release-notes/RELEASE_NOTES_0.8.1.md)** — Everything in 0.8.1 (the kiosk, the admin console, three devices), with the upgrade checklist and the new settings table

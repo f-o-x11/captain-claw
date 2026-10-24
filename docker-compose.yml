@@ -21,4 +21,5 @@ services:
     volumes:
       - ./botport/config.yaml:/app/config.yaml:ro
       - ./.env:/app/.env:ro
+      - ./docker-data/botport:/data
     restart: unless-stopped

@@ -1,4 +1,12 @@
-"""BotPort protocol message types and serialization."""
+"""BotPort protocol message types and serialization.
+
+Protocol 1 is the original agent <-> hub protocol (a connection is one
+Captain Claw agent). Protocol 2 adds Flight Deck connections (``kind="deck"``):
+a deck advertises the agents it exposes, receives the ``network`` roster of
+other decks, and proxies dispatched concerns to its own agents. All protocol 2
+fields are optional with protocol 1 defaults, and unknown fields are ignored,
+so old agents keep working unchanged.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +36,13 @@ class RegisterMessage(BaseMessage):
     key: str = ""
     secret: str = ""
     capabilities: dict[str, Any] = Field(default_factory=dict)
-    # capabilities: { personas: [...], tools: [...], models: [...], max_concurrent: int }
+    # agent:  { personas: [...], tools: [...], models: [...], max_concurrent: int }
+    # deck:   { agents: [AgentAd], max_concurrent: int, version: str, features: [...] }
+    kind: str = "agent"            # agent | deck
+    protocol: int = 1
+    deck_id: str = ""              # stable per-deck id (persisted by the deck)
+    in_flight: list[str] = Field(default_factory=list)   # concerns this deck is still working on
+    awaiting: list[str] = Field(default_factory=list)    # concerns this deck still waits for
 
 
 class RegisteredMessage(BaseMessage):
@@ -39,6 +53,11 @@ class RegisteredMessage(BaseMessage):
     botport_version: str = ""
     ok: bool = True
     error: str = ""
+    protocol: int = 1
+    deck_name: str = ""            # the (key-bound) name the hub knows this deck as
+    resumed: bool = False          # an earlier connection of this deck was taken over
+    heartbeat_seconds: float = 0.0
+    retry: bool = True             # False: do not retry with these settings (bad credentials)
 
 
 class HeartbeatMessage(BaseMessage):
@@ -69,6 +88,12 @@ class ConcernSubmitMessage(BaseMessage):
     context: dict[str, Any] = Field(default_factory=dict)
     expertise_tags: list[str] = Field(default_factory=list)
     from_session: str = ""
+    # Protocol 2 (decks): explicit addressing and requester identity.
+    target_deck: str = ""
+    target_agent: str = ""
+    from_agent: str = ""
+    mode: str = "consult"          # consult | delegate (informational)
+    timeout_seconds: float = 0.0   # 0 = hub default
 
 
 class ConcernAckMessage(BaseMessage):
@@ -79,6 +104,8 @@ class ConcernAckMessage(BaseMessage):
     assigned_to_name: str = ""
     ok: bool = True
     error: str = ""
+    target_deck: str = ""
+    target_agent: str = ""
 
 
 class DispatchMessage(BaseMessage):
@@ -90,6 +117,12 @@ class DispatchMessage(BaseMessage):
     task: str = ""
     context: dict[str, Any] = Field(default_factory=dict)
     persona_hint: str = ""
+    # Protocol 2: set by the hub, so the receiving deck can trust them.
+    from_deck: str = ""
+    from_agent: str = ""
+    target_agent: str = ""
+    mode: str = "consult"
+    timeout_seconds: float = 0.0
 
 
 class ResultMessage(BaseMessage):
@@ -115,6 +148,7 @@ class ConcernResultMessage(BaseMessage):
     metadata: dict[str, Any] = Field(default_factory=dict)
     ok: bool = True
     error: str = ""
+    target_agent: str = ""
 
 
 # ── Follow-up messages ──────────────────────────────────────────
@@ -193,6 +227,47 @@ class TimeoutNoticeMessage(BaseMessage):
     type: str = "timeout_notice"
     concern_id: str = ""
     reason: str = "idle_timeout"
+
+
+# ── Deck federation (protocol 2) ─────────────────────────────────
+
+
+class DeckAgentsMessage(BaseMessage):
+    """Deck -> BotPort: full replacement of the agents this deck exposes.
+
+    Each agent: { name, slug, description, expertise_tags: [...], status }.
+    """
+
+    type: str = "deck_agents"
+    agents: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class NetworkMessage(BaseMessage):
+    """BotPort -> deck: every OTHER deck and the agents it exposes."""
+
+    type: str = "network"
+    decks: list[dict[str, Any]] = Field(default_factory=list)
+    agents: list[dict[str, Any]] = Field(default_factory=list)  # legacy direct agents
+
+
+class ProgressMessage(BaseMessage):
+    """Assignee -> BotPort -> originator: live progress of a concern.
+
+    Ephemeral (not stored). Also keeps the concern's idle timeout fresh.
+    """
+
+    type: str = "progress"
+    concern_id: str = ""
+    event: str = ""   # accepted | status | thinking | tool | heartbeat
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResultAckMessage(BaseMessage):
+    """Confirms a result frame was received (deck -> hub for concern_result,
+    hub -> deck for result), so neither side resends it after a reconnect."""
+
+    type: str = "result_ack"
+    concern_id: str = ""
 
 
 # ── File transfer messages ──────────────────────────────────────
@@ -292,6 +367,10 @@ _MESSAGE_MAP: dict[str, type[BaseMessage]] = {
     "file_list_response": FileListResponseMessage,
     "file_request": FileRequestMessage,
     "file_response": FileResponseMessage,
+    "deck_agents": DeckAgentsMessage,
+    "network": NetworkMessage,
+    "progress": ProgressMessage,
+    "result_ack": ResultAckMessage,
 }
 
 

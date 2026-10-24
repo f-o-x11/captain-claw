@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -15,13 +18,26 @@ from botport.store import BotPortStore
 log = logging.getLogger(__name__)
 
 
+# A client-chosen concern id: uuid-ish, bounded, no path/markup characters.
+_CONCERN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$")
+
+# Called when the manager itself ends a concern (idle timeout, deadline,
+# assignee gone too long): (concern, reason) — the server notifies both sides.
+ExpiryCallback = Callable[[Concern, str], Awaitable[None]]
+
+
+def valid_concern_id(value: str) -> bool:
+    return bool(_CONCERN_ID_RE.match(value or ""))
+
+
 class ConcernManager:
     """Manages concern lifecycle: creation, assignment, results, timeouts."""
 
     def __init__(self, store: BotPortStore) -> None:
-        self._concerns: dict[str, Concern] = {}  # active concerns by ID
+        self._concerns: dict[str, Concern] = {}  # recent concerns by ID (active + briefly terminal)
         self._store = store
         self._timeout_task: asyncio.Task[None] | None = None
+        self.on_expired: ExpiryCallback | None = None
 
     def start_timeout_checker(self) -> None:
         """Start the background timeout checking loop."""
@@ -39,19 +55,34 @@ class ConcernManager:
         context: dict[str, Any] | None = None,
         expertise_tags: list[str] | None = None,
         from_session: str = "",
+        *,
+        concern_id: str = "",
+        from_instance_name: str = "",
+        target_deck: str = "",
+        target_agent: str = "",
+        from_agent: str = "",
+        mode: str = "consult",
+        timeout_seconds: float = 0.0,
     ) -> Concern:
-        """Create a new concern in pending state."""
+        """Create a new concern in pending state.
+
+        ``concern_id`` (client-chosen, for tracking) is used when it is well
+        formed and unused; the caller checks ownership of an existing id first.
+        ``timeout_seconds`` sets a hard deadline (capped by config).
+        """
         cfg = get_config()
-        timeout_seconds = cfg.concerns.idle_timeout_seconds
+        timeout_seconds_idle = cfg.concerns.idle_timeout_seconds
 
         now = _utcnow_iso()
         timeout_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)
+            datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds_idle)
         ).isoformat()
 
+        cid = concern_id if (valid_concern_id(concern_id) and concern_id not in self._concerns) else ""
         concern = Concern(
-            id=str(uuid.uuid4()),
+            id=cid or str(uuid.uuid4()),
             from_instance=from_instance,
+            from_instance_name=from_instance_name,
             from_session=from_session,
             task=task,
             context=context or {},
@@ -60,7 +91,15 @@ class ConcernManager:
             created_at=now,
             updated_at=now,
             timeout_at=timeout_at,
+            target_deck=target_deck,
+            target_agent=target_agent,
+            from_agent=from_agent,
+            mode=mode if mode in ("consult", "delegate") else "consult",
         )
+        if timeout_seconds and timeout_seconds > 0:
+            limit = min(float(timeout_seconds), float(cfg.concerns.max_timeout_seconds))
+            # Slack so the assignee's own timeout reports first.
+            concern.deadline_at = time.monotonic() + limit + 30.0
 
         # Record the initial request in the exchange.
         exchange = ConcernExchange(
@@ -242,6 +281,7 @@ class ConcernManager:
 
         concern.status = "closed"
         concern.touch()
+        concern.finished_at = time.monotonic()
         concern.metadata["close_reason"] = reason
 
         await self._store.save_concern(concern)
@@ -256,13 +296,14 @@ class ConcernManager:
 
         concern.status = "failed"
         concern.touch()
+        concern.finished_at = time.monotonic()
         concern.metadata["fail_reason"] = reason
 
         await self._store.save_concern(concern)
         log.info("Concern %s failed: %s", concern_id[:8], reason)
         return True
 
-    async def timeout_concern(self, concern_id: str) -> bool:
+    async def timeout_concern(self, concern_id: str, reason: str = "idle_timeout") -> bool:
         """Mark a concern as timed out (terminal state)."""
         concern = self._concerns.get(concern_id)
         if not concern or concern.is_terminal:
@@ -270,6 +311,8 @@ class ConcernManager:
 
         concern.status = "timeout"
         concern.touch()
+        concern.finished_at = time.monotonic()
+        concern.metadata["fail_reason"] = reason
 
         await self._store.save_concern(concern)
         log.warning("Concern %s timed out", concern_id[:8])
@@ -327,28 +370,78 @@ class ConcernManager:
                 log.error("Timeout checker error: %s", exc)
 
     async def _check_timeouts(self) -> list[str]:
-        """Check and timeout idle concerns. Returns list of timed-out IDs."""
+        """End idle / overdue / orphaned concerns and evict old finished ones.
+
+        Returns the ids that ended this round. Each ending that leaves a side
+        waiting is reported through ``on_expired`` so the server can notify
+        the originator and the assignee.
+        """
+        cfg = get_config().concerns
         now = datetime.now(timezone.utc)
-        timed_out: list[str] = []
+        mono = time.monotonic()
+        ended: list[str] = []
 
         for concern in list(self._concerns.values()):
-            if concern.is_terminal or not concern.timeout_at:
-                continue
-            try:
-                timeout_dt = datetime.fromisoformat(
-                    concern.timeout_at.replace("Z", "+00:00")
-                )
-                if timeout_dt <= now:
-                    if concern.status == "responded":
-                        # Successfully answered — close gracefully.
-                        await self.close_concern(concern.id, reason="idle_after_response")
-                    else:
-                        await self.timeout_concern(concern.id)
-                    timed_out.append(concern.id)
-            except (ValueError, TypeError):
+            if concern.is_terminal:
+                if concern.finished_at and mono - concern.finished_at > cfg.memory_retention_seconds:
+                    self._concerns.pop(concern.id, None)
+                elif not concern.finished_at:
+                    concern.finished_at = mono  # loaded terminal: start its clock
                 continue
 
-        return timed_out
+            reason = ""
+            if concern.assignee_offline_since and (
+                mono - concern.assignee_offline_since > cfg.reconnect_grace_seconds
+            ):
+                reason = "assignee_disconnected"
+            elif concern.deadline_at and mono > concern.deadline_at:
+                reason = "deadline"
+            elif concern.timeout_at:
+                try:
+                    timeout_dt = datetime.fromisoformat(concern.timeout_at.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    timeout_dt = None
+                if timeout_dt is not None and timeout_dt <= now:
+                    reason = "idle_timeout"
+            if not reason:
+                continue
+
+            try:
+                if concern.status == "responded" and reason == "idle_timeout":
+                    # Successfully answered — close gracefully, nobody is waiting.
+                    await self.close_concern(concern.id, reason="idle_after_response")
+                    ended.append(concern.id)
+                    continue
+                if reason == "assignee_disconnected":
+                    await self.fail_concern(concern.id, reason=reason)
+                else:
+                    await self.timeout_concern(concern.id, reason=reason)
+                ended.append(concern.id)
+                if self.on_expired is not None:
+                    await self.on_expired(concern, reason)
+            except Exception as exc:  # never let one concern stall the loop
+                log.error("Timeout handling failed for %s: %s", concern.id[:8], exc)
+
+        return ended
+
+    async def note_progress(self, concern_id: str) -> bool:
+        """The assignee is alive and working: refresh the idle timeout (in
+        memory) and persist the move to in_progress once."""
+        concern = self._concerns.get(concern_id)
+        if not concern or concern.is_terminal:
+            return False
+        self._refresh_timeout(concern)
+        if concern.status in ("pending", "assigned"):
+            concern.status = "in_progress"
+            concern.touch()
+            await self._store.save_concern(concern)
+        return True
+
+    def evict(self, concern_id: str) -> None:
+        self._concerns.pop(concern_id, None)
+
+    def get_assigned_active(self, instance_id: str) -> list[Concern]:
+        return self.get_concerns_for_instance(instance_id)
 
     async def fail_concerns_for_instance(self, instance_id: str) -> list[str]:
         """Fail all active concerns assigned to a disconnected instance."""

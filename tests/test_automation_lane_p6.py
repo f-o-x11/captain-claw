@@ -100,6 +100,26 @@ async def test_the_automation_lane_agent_leaves_the_global_tools_alone():
     assert built == [("lane-AUTO", {"register_tools": False}), ("lane-B", {})]
 
 
+async def test_a_remote_deck_lane_leaves_the_global_tools_and_owner_briefing_alone():
+    """Flight Deck runs another deck's BotPort requests in a "BP…" lane: it is
+    someone else asking, so like a speaker it neither rebinds the process-global
+    tools nor gets the owner briefing."""
+    s = _server()
+    built = []
+
+    async def fake_build(session, send, **kwargs):
+        built.append((session.name, kwargs))
+        return types.SimpleNamespace(session=session)
+
+    async def fake_session(lane):
+        return types.SimpleNamespace(id=lane, name=f"lane-{lane}")
+
+    s._build_scoped_agent = fake_build
+    s._lane_session = fake_session
+    await s._get_lane_agent("bp3fa2c1")
+    assert built == [("lane-BP3FA2C1", {"register_tools": False, "warm_owner_caches": False})]
+
+
 # ── A rerouted turn ────────────────────────────────────────────────────
 
 

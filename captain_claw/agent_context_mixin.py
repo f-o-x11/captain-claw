@@ -3202,6 +3202,20 @@ class AgentContextMixin:
                 "to consult any peer/fleet agent from memory — none are reachable right now."
             )
 
+        # Agents on other Flight Decks (BotPort) never appear in the roster
+        # above; without this line the roster's "not in this list" rule would
+        # forbid the ones the flight_deck tool can actually reach.
+        try:
+            _has_fd_tool = self.tools.has_tool("flight_deck")
+        except Exception:
+            _has_fd_tool = False
+        if not _fleet_hidden and _has_fd_tool:
+            peer_agents_block += (
+                "\nAgents on other Flight Decks connected through BotPort are named `Agent@deck` "
+                "and are not listed here: `flight_deck` with action='list_agents' shows the ones "
+                "reachable right now, and you may consult or delegate to those."
+            )
+
         # Visualization style: brand-aware chart/dashboard generation.
         visualization_style_block = ""
         try:

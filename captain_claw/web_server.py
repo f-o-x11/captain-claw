@@ -470,6 +470,11 @@ class WebServer:
     # same way public-session agents are, streaming only to their own sockets.
 
     LANE_MAIN = "A"
+    # Lanes Flight Deck opens for requests from OTHER Flight Decks (BotPort):
+    # one per remote deck, "BP" + a short hash. Like a shared-agent speaker,
+    # such a lane never takes over the process-global tools and gets no owner
+    # briefing — it is someone else asking.
+    REMOTE_LANE_PREFIX = "BP"
 
     @staticmethod
     def normalize_lane(raw: Any) -> str:
@@ -515,9 +520,13 @@ class WebServer:
             from captain_claw.config import get_config
 
             automation = lane == self.normalize_lane(get_config().session.automation_lane or "")
-            agent = await self._build_scoped_agent(
-                session, self._lane_send(lane), **({"register_tools": False} if automation else {}),
-            )
+            remote = lane.startswith(self.REMOTE_LANE_PREFIX)
+            scoped: dict[str, Any] = {}
+            if automation or remote:
+                scoped["register_tools"] = False
+            if remote:
+                scoped["warm_owner_caches"] = False
+            agent = await self._build_scoped_agent(session, self._lane_send(lane), **scoped)
             self._lane_agents[lane] = agent
             log.info("Created lane agent", lane=lane, session_id=session.id)
             return agent
