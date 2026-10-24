@@ -34,7 +34,7 @@ static void write(uint32_t a, uint32_t b) {
 
 static State state = State::Off;
 static int level = 0;
-static float recUsed = 0;  // State::Listening: the part of the recording's time gone
+static uint32_t recMs = 0;  // State::Listening: how long the recording has been going
 static uint8_t maxBright = 48;
 static uint32_t flashUntil = 0, alertUntil = 0, actionUntil = 0, lastMs = 0;
 static Step lastStep = Step::Narration;
@@ -59,7 +59,7 @@ void set(State s, int lvl) {
   level = constrain(lvl, 0, 100);
 }
 
-void recordUsed(float used) { recUsed = constrain(used, 0.0f, 1.0f); }
+void recordFor(uint32_t ms) { recMs = ms; }
 
 void setIdle(uint32_t idle, uint32_t sleep) {
   state = State::Idle;
@@ -156,14 +156,13 @@ void tick() {
   const float t = now / 1000.0f;
   switch (state) {
     case State::Listening: {
-      // Left: red, blinking like a REC light, brighter with the voice. Right:
-      // the time left — steady for the first 30 %, a slow blink for the next
-      // 50 %, a fast one for the last 20 %.
+      // Left: red, blinking like a REC light, brighter with the voice. Right,
+      // steady: how long it's been — green for the first 20 s, yellow for the
+      // next 20, red after that.
       const uint32_t rec = fmodf(t, 0.8f) < 0.45f ? scale(255, 0, 0, 0.45f + 0.55f * level / 100.0f) : 0;
-      const uint32_t red = scale(255, 0, 0, 0.8f);
-      const uint32_t left = recUsed < 0.3f ? red : recUsed < 0.8f ? (fmodf(t, 1.0f) < 0.5f ? red : 0)
-                                                                  : (fmodf(t, 0.25f) < 0.125f ? red : 0);
-      show(rec, left);
+      const uint32_t since = recMs < 20000 ? scale(0, 255, 40, 0.8f)
+                            : recMs < 40000 ? scale(255, 170, 0, 0.8f) : scale(255, 0, 0, 0.8f);
+      show(rec, since);
       break;
     }
     case State::Working: {  // a blink per step the deck reports, in its colour; a faint glow between
