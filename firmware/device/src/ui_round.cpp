@@ -447,11 +447,12 @@ static void ringPoint(float deg, int radius, int* x, int* y) {
 
 static void ringTrack(uint16_t color) { ringArc(0, 360, mix(kBlack, color, 0.2f)); }
 
-// Listening: the recording so far against the 110 s limit; the inner edge
-// glows with the mic level.
-static void ringListening(uint32_t elapsedMs, int level) {
+// Listening: the recording so far against the 110 s limit — or, a note
+// (no limit but the room), round once a minute like a seconds hand; the
+// inner edge glows with the mic level.
+static void ringListening(uint32_t elapsedMs, int level, bool note = false) {
   ringTrack(kRed);
-  float used = min(1.0f, elapsedMs / 110000.0f);
+  float used = note ? (elapsedMs % 60000) / 60000.0f : min(1.0f, elapsedMs / 110000.0f);
   ringArc(0, max(4.0f, 360 * used), kRed);
   int x, y;
   ringPoint(max(4.0f, 360 * used), R - kRing / 2, &x, &y);
@@ -973,8 +974,15 @@ void showHome(const Home& home) {
     font(vlw::Title);
     text(fit(name, lineRoom(kTitleY - 20, kTitleY + 20)), CX, kTitleY, kText);
   }
+  if (home.noteMode) ringArc(330, 60, kRed, 6, R - 2);  // note-taking mode: a red arc at the top
   if (tapMode == TapButton::Talk) {
     drawTapButton(clockFace ? 398 : kTapY, clockFace ? kTapLowR : kTapR);  // in place of "hold the yellow button…"
+  } else if (home.noteMode) {
+    font(vlw::Small);
+    int first = 0;
+    const int top = clockFace ? 370 : kNoteY - 16;
+    auto lines = wrapCentred("Note mode · hold yellow to send", top, top + 56, 28, 2, &first);
+    drawLines(lines, first, 28, kRed);
   } else if (home.hint.length()) {
     font(vlw::Small);
     int first = 0;
@@ -1103,13 +1111,16 @@ static int levels[15];
 void showListening(int level, uint32_t elapsedMs) {
   for (int i = 0; i < 14; ++i) levels[i] = levels[i + 1];
   levels[14] = level;
+  // A note (note-taking mode, or offline) is kept, not sent.
+  const bool note = barState == "note";
   beginFrame();
-  ringListening(elapsedMs, level);
+  ringListening(elapsedMs, level, note);
   drawChrome();
+  const char* label = note ? "Note" : "Listening";
   font(vlw::Title);
-  int labelW = tw("Listening");
+  int labelW = tw(label);
   canvas.fillSmoothCircle(CX - labelW / 2 - 18, 132, 8, kRed);
-  text("Listening", CX + 10, 132, kText);
+  text(label, CX + 10, 132, kText);
   font(vlw::Digits);
   char t[12];
   snprintf(t, sizeof(t), "%lu:%02lu", (unsigned long)(elapsedMs / 60000), (unsigned long)(elapsedMs / 1000 % 60));
@@ -1123,7 +1134,8 @@ void showListening(int level, uint32_t elapsedMs) {
     drawTapButton(kTapY, kTapR);
   } else {
     font(vlw::Small);
-    text("release to send", CX, 396, kDim);
+    text(note ? "press again to keep it" : board::kTalkToggles ? "press again to send" : "release to send", CX, 396,
+         kDim);
   }
   push();
 }

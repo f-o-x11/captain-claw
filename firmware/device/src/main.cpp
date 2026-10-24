@@ -51,7 +51,7 @@
 #if defined(PAPER_B)
 #define FW_VERSION "1.0.16"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.17.1"
+#define FW_VERSION "0.18.0"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -391,7 +391,9 @@ static void setBarState() {
   ui::setHealth(wifiHealth(), agentHealth());
   const char* st;
   uint16_t col;
-  if (!wsUp) {
+  if (mode == Mode::Listening && noteRec) {
+    st = "note", col = kRed;
+  } else if (!wsUp) {
     st = "offline", col = kRed;
   } else if (mode == Mode::Listening) {
     st = "listening", col = kRed;
@@ -536,7 +538,7 @@ static ui::Home homeNow() {
                        agentLinked ? kGreen : kYellow});
   home.character = settings.character;
   home.battery = batteryLine();
-  home.noteMode = board::kPaperB && settings.noteMode;
+  home.noteMode = board::kNoteMode && settings.noteMode;
   return home;
 }
 
@@ -1132,7 +1134,7 @@ static void startOfflineNote();
 static void startNote();
 
 static void startTalking() {
-  if (board::kPaperB && (settings.noteMode || !wsUp)) {  // kept as a note, written as it's recorded
+  if (board::kNoteMode && (settings.noteMode || !wsUp)) {  // kept as a note, written as it's recorded
     startNote();
     return;
   }
@@ -1316,6 +1318,12 @@ static void finishNote(bool keep) {
   }
   if (settings.talkSounds) audio::talkEnd();
   notesDeclined = -1;
+  if (!board::kPaperB) {
+    String waiting = notes::count() > 1 ? String(notes::count()) + " notes waiting" : String("1 note waiting");
+    notice("Note kept", waiting + (settings.noteMode ? " · hold the " + String(board::kTalkButton) + " to send them"
+                                                     : " · sent once it's back online"), kGreen);
+    return;
+  }
   mode = ui::hasReply() ? Mode::Reply : Mode::Idle;
   ui::drawNow();  // the dashboard: one more note waiting, less room
   redraw();
@@ -1332,9 +1340,21 @@ static void toggleNoteMode() {
   }
   settings.noteMode = !settings.noteMode;
   settings.save();
-  if (settings.keyClicks) {
+  if (!settings.noteMode) upAllowed = upAsked = true;  // turned off to send them: no asking
+  if (settings.keyClicks || !board::kEpaper) {
     if (settings.noteMode) audio::cue();
     else audio::cueEnd();
+  }
+  if (board::kHasMotor) buzzTicks(settings.noteMode ? 2 : 1, 40, 80);
+  if (!board::kPaperB) {
+    const String button = board::kTalkButton;
+    if (settings.noteMode) {
+      notice("Note mode on", "Every recording is kept as a note. Hold the " + button + " to send them all.", kRed);
+    } else {
+      notice("Note mode off", notes::count() ? String("Sending the notes to the agent…") : String("Recordings go to the agent again."),
+             kGreen);
+    }
+    return;
   }
   ui::drawNow();  // the dashboard, saying so
   backToMain();
@@ -1445,7 +1465,7 @@ static void pumpPreroll() {
     }
     prerollEndSound();  // a real recording: let go is heard at once, whatever the link does
   }
-  const bool asNote = board::kPaperB && settings.noteMode;  // note mode: kept, never sent as it is
+  const bool asNote = board::kNoteMode && settings.noteMode;  // note mode: kept, never sent as it is
   if (!wsUp || asNote) {
     // Let go and still no deck: keep it offline. A wake on Wi-Fi expects the
     // link any moment; without Wi-Fi (or recorded offline) there's no point waiting.
@@ -1565,7 +1585,7 @@ static void finishBatch(uint32_t now) {
 
 static void pumpUpload() {
   if (!board::kOfflineNotes) return;
-  if (board::kPaperB && settings.noteMode && upNotes.empty() && !upAwaitAck) return;  // sent when it's off
+  if (board::kNoteMode && settings.noteMode && upNotes.empty() && !upAwaitAck) return;  // sent when it's off
   const uint32_t now = millis();
   if (mode == Mode::Ask && now - askedMs > 60000) backToMain();  // no answer: asked again on the next link
   if (upAwaitAck) {
@@ -2750,7 +2770,7 @@ void setup() {
     startPreroll();
   }
   sideBtn().setHoldThresh(800);
-  if (board::kPaperB) talkBtn().setHoldThresh(1000);  // hold A: note mode (a press talks)
+  if (board::kNoteMode) talkBtn().setHoldThresh(1000);  // held: note mode (a press talks)
   if (board::kBackPin >= 0) backBtn().setHoldThresh(800);
   esp_timer_create_args_t sampler = {};
   sampler.callback = sampleButtons;
@@ -2896,7 +2916,7 @@ static void stopOnSilence() {
   static size_t scanned = 0;     // background-recording samples looked at so far
   static int loudRun = 0;        // …and its loud blocks in a row (kVoiceRun = a voice)
   if (!tapRec) return;
-  if (board::kPaperB && settings.noteMode) return;  // notes have their pauses: the press ends them
+  if (board::kNoteMode && settings.noteMode) return;  // notes have their pauses: the press ends them
   const bool live = !prerollOn && mode == Mode::Listening && audio::micActive();
   if (!live && !(prerollOn && !prerollEndMs)) return;
   const uint32_t start = prerollOn ? prerollStartMs : recStartMs;
@@ -3275,12 +3295,12 @@ void loop() {
       tapRec = board::kTalkToggles;  // before it starts: the sampler would end an offline one on letting go
       startTalking();
       if (mode != Mode::Listening) tapRec = false;
-      talkHoldArms = board::kPaperB;
+      talkHoldArms = board::kNoteMode;
       if (wasSpeaking) sendType("stop");
     }
   }
   if (endsPreroll && tapRec) endTapRecording();  // (unless the sampler saw the press first)
-  if (board::kPaperB && talkHoldArms && talkBtn().wasHold()) toggleNoteMode();
+  if (board::kNoteMode && talkHoldArms && talkBtn().wasHold()) toggleNoteMode();
   if (talkBtn().wasReleased() && mode == Mode::Listening && !prerollOn && !tapRec) {
     bool tap = millis() - recStartMs < kTapMs;
     stopTalking(!tap);
