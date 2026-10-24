@@ -43,7 +43,9 @@ uint32_t micVoiceMs();
 
 // ── speaker (one stream at a time, PCM s16le mono) ──
 // The streams of one answer (its speech, then any sound the agent made) are
-// kept back to back as the answer's clip, which replay() plays again.
+// kept back to back as the answer's clip, in a ring (~68 s at 24 kHz) with no
+// limit on the length: holdWanted() says when the deck should stop sending
+// for now. replay() plays the clip again while all of it is still there.
 //
 // A new stream; sound starts no earlier than holdMs from now — room for the
 // beep/flash cue before speech. Returns true when it carries straight on from
@@ -52,6 +54,9 @@ bool playBegin(uint32_t rate, uint32_t holdMs = 0);
 void playFeed(const uint8_t* data, size_t len);
 void playEnd();                            // no more data for this stream
 void playStop();                           // stop now (the clip is kept)
+// The deck should hold the sound (true): the ring has as much still to play
+// as it can keep (15 s short of full); false again with 30 s of room.
+bool holdWanted();
 void playPoll();                           // keep the speaker fed; call from loop()
 bool playing();                            // a stream is buffered or sounding (or held by pause())
 bool sounding();                           // the speaker is actually outputting it
@@ -83,8 +88,8 @@ void asideEnd();
 
 // ── the last answer's clip ──
 void newClip();   // a new answer: its first stream replaces the clip
-bool hasClip();   // there is sound to replay
-bool clipCut();   // a stream stopped arriving before its end (stopped, link lost)
+bool hasClip();   // all of the clip is here to replay
+bool clipCut();   // not all of it is here: cut short (stopped, link lost) or longer than the ring
 void replay();    // play the clip again from its start, at once (no cue)
 
 }  // namespace audio

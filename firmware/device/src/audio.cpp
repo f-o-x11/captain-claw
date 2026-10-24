@@ -17,10 +17,19 @@ static uint32_t micStartMs = 0, voiceMs = 0;
 static int floorPeak = 0, maxPeak = 0;  // this recording's quietest and loudest block so far
 static int loudRun = 0;  // loud blocks in a row (kVoiceRun of them = a voice)
 
-// ── speaker: one append-only PSRAM buffer holds the last answer's clip ──
-static constexpr size_t kPlayCap = 1600 * 1024;  // samples (~66 s at 24 kHz)
+// ── speaker: the answer's clip in a PSRAM ring ──
+// Positions count samples from the clip's start and only grow; a sample sits
+// at pos % kPlayCap. No limit on an answer's length: the deck is asked to hold
+// (holdWanted) while the ring has as much still to play as it can keep, and
+// to go on once some has played. While the whole clip still fits (nothing
+// written over), replay() plays it again from here; past that, from the deck.
+static constexpr size_t kPlayCap = 1600 * 1024;  // samples (~68 s at 24 kHz)
 static int16_t* playBuf = nullptr;
 static size_t writePos = 0, playPos = 0;  // in samples; the clip is [0, writePos)
+static size_t pieceStart[2];              // where the speaker's queued pieces begin (they point into the ring)
+static int pieces = 0;
+static bool dropped = false;              // some of the clip didn't fit (a deck that doesn't hold)
+static bool holding = false;              // holdWanted()'s last answer
 static uint32_t playRate = 24000;
 static bool streamOpen = false, streamEnded = false, started = false;
 static bool freshClip = true;             // the next stream starts a new clip
@@ -208,7 +217,7 @@ bool playBegin(uint32_t rate, uint32_t holdMs) {
   speakerOn();
   if (fresh) {
     writePos = 0;
-    cut = false;
+    cut = dropped = false;
     freshClip = false;
     firstEnded = false;
     firstEnd = 0;
@@ -224,23 +233,48 @@ bool playBegin(uint32_t rate, uint32_t holdMs) {
   return false;
 }
 
+static inline size_t ringAt(size_t pos) { return pos % kPlayCap; }
+
+// The oldest sample still needed: the start of the piece the speaker is
+// playing (its pieces point into the ring), else where playing goes on from.
+static size_t keepFrom() {
+  const int queued = M5.Speaker.isEnabled() ? (int)M5.Speaker.isPlaying(0) : 0;
+  while (pieces > queued) {  // played out, oldest first
+    pieceStart[0] = pieceStart[1];
+    --pieces;
+  }
+  return pieces ? pieceStart[0] : playPos;
+}
+
 void playFeed(const uint8_t* data, size_t len) {
   if (!streamOpen || !playBuf) return;
+  const size_t from = keepFrom();
+  auto put = [&](int16_t s) {
+    // Full of what's still to play — a deck that didn't hold: the rest of
+    // this clip is dropped (a clean end, as an old deck's answer had, not
+    // speech that skips ahead as room frees up). Its replay comes from the deck.
+    if (dropped || writePos - from >= kPlayCap) {
+      dropped = true;
+      return;
+    }
+    playBuf[ringAt(writePos++)] = shape(s);
+  };
   size_t i = 0;
   if (carry >= 0 && len) {
-    if (writePos < kPlayCap) playBuf[writePos++] = shape((int16_t)(carry | (data[0] << 8)));
+    put((int16_t)(carry | (data[0] << 8)));
     carry = -1;
     i = 1;
   }
-  size_t pairs = (len - i) / 2;
-  size_t room = kPlayCap - writePos;
-  size_t n = min(pairs, room);
-  memcpy(playBuf + writePos, data + i, n * 2);  // little-endian on the ESP32 too
-  if (boostGain != 1.0f) {
-    for (size_t k = writePos; k < writePos + n; ++k) playBuf[k] = shape(playBuf[k]);
-  }
-  writePos += n;
-  if ((len - i) % 2 && n == pairs) carry = data[len - 1];
+  for (; i + 1 < len; i += 2) put((int16_t)(data[i] | (data[i + 1] << 8)));  // little-endian
+  if (i < len) carry = data[i];
+}
+
+bool holdWanted() {
+  if (!streamOpen || !playBuf) return holding = false;
+  const size_t ahead = writePos - keepFrom();
+  if (ahead + (size_t)playRate * 15 >= kPlayCap) holding = true;        // 15 s short of full
+  else if (ahead + (size_t)playRate * 30 <= kPlayCap) holding = false;  // 30 s of room again
+  return holding;
 }
 
 void playEnd() {
@@ -272,6 +306,7 @@ void playStop() {
     M5.Speaker.stop(0);
     M5.Speaker.stop(kAsideChannel);  // a menu line gives way too
   }
+  pieces = 0;
   if (streamOpen && !streamEnded) cut = true;  // the rest of it won't arrive
   streamOpen = false;
   streamEnded = false;
@@ -297,13 +332,17 @@ void playPoll() {
 #endif
   if (queued < 2 && avail > 0 && (avail >= playRate / 10 || streamEnded)) {
     // Up to 2 s a piece, two pieces queued: a main loop held up by the
-    // network for a second or two still finds the speaker busy.
+    // network for a second or two still finds the speaker busy. A piece
+    // never runs past the ring's end (the next starts at its beginning).
     size_t n = min(avail, (size_t)(playRate * 2));
+    n = min(n, kPlayCap - ringAt(playPos));
     if (queued == 0) {  // from silence: outputLevel() counts from here
       soundStartMs = millis();
       soundStartPos = playPos;
     }
-    M5.Speaker.playRaw(playBuf + playPos, n, playRate, false, 1, 0, false);
+    keepFrom();  // (the pieces it has played go from the list)
+    M5.Speaker.playRaw(playBuf + ringAt(playPos), n, playRate, false, 1, 0, false);
+    if (pieces < 2) pieceStart[pieces++] = playPos;
     playPos += n;
   }
   if (streamEnded && playPos == writePos && M5.Speaker.isPlaying(0) == 0) {
@@ -322,6 +361,7 @@ void pause() {
   // the pieces queued past it are dropped, and resume() goes on from there.
   size_t at = soundStartPos + (size_t)((millis() - soundStartMs) * (uint64_t)playRate / 1000);
   M5.Speaker.stop(0);
+  pieces = 0;
   playPos = min(at, playPos);
   onHold = true;
 }
@@ -350,7 +390,7 @@ int outputLevel() {
   size_t win = playRate / 50;  // 20 ms
   size_t from = at > soundStartPos + win ? at - win : soundStartPos;
   int peak = 0;
-  for (size_t i = from; i < at; i += 2) peak = max(peak, abs((int)playBuf[i]));
+  for (size_t i = from; i < at; i += 2) peak = max(peak, abs((int)playBuf[ringAt(i)]));
   return min(100, peak * 100 / 20000);
 }
 
@@ -390,15 +430,18 @@ void asideEnd() {
 
 void newClip() { freshClip = true; }
 
-bool hasClip() { return playBuf && writePos > 0 && !freshClip; }
+// Here to play again: the whole clip still in the ring.
+bool hasClip() { return playBuf && writePos > 0 && !freshClip && !dropped && writePos <= kPlayCap; }
 
-bool clipCut() { return cut && !freshClip; }
+// Not all of it here: cut short, or longer than the ring (the deck sends it again).
+bool clipCut() { return (cut || dropped || writePos > kPlayCap) && !freshClip; }
 
 void replay() {
   if (!hasClip()) return;
   bool arriving = streamOpen && !streamEnded;  // its last stream is still coming in
   if (M5.Speaker.isEnabled()) M5.Speaker.stop(0);
   speakerOn();
+  pieces = 0;
   playPos = 0;
   replaying = true;
   onHold = false;

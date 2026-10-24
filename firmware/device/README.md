@@ -429,11 +429,20 @@ works like the StickS3's side button.
 
 **Replay.** Double-click the side button on an answer (its text or its picture), or
 choose Menu → *Replay answer* (the first row, while there's an answer with sound), to
-hear the last answer again, without the cue. The device keeps the whole answer in
-memory (its speech, then any sound the agent made, up to ~66 s), so a replay plays
-at once and needs no network. If part of the answer never arrived (you stopped it
-early, or the link dropped), the device asks Flight Deck to send it again instead
-(`{"type":"replay"}`; the speech is synthesized afresh). Powering off forgets it.
+hear the last answer again, without the cue. The answer's sound (its speech, then
+any sound the agent made) plays through a ring in memory (~68 s at 24 kHz) with no
+limit on its length (0.18.2 / paper B 1.0.17; it used to stop at ~66 s): the device
+tells Flight Deck to hold (`audio_hold`) while the ring has as much still to play as
+it can keep — a long answer arrives faster than it's spoken, and a pause holds it —
+and to go on (`audio_go`) once some has played; the deck keeps taking the voice from
+TTS meanwhile. An answer that fits the ring replays at once from it, with no network;
+a longer one — or one that never all arrived (you stopped it early, or the link
+dropped) — is sent again by Flight Deck (`{"type":"replay"}`; the speech is
+synthesized afresh). A deck that doesn't know `audio_hold` sends it all: the device
+plays as much as the ring holds and ends there, as before. Powering off forgets it.
+(Mac check: `test/host/audio_ring.cpp` runs `src/audio.cpp` on a fake speaker.)
+Flight Deck still speaks at most ~1500 characters of an answer (`MAX_SPOKEN_CHARS`);
+the rest is shown, not read.
 A single side click on an answer now waits 0.35 s to make sure it isn't a double-click.
 
 **A link that drops mid-turn** (weak Wi-Fi). The device stays on the working screen

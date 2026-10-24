@@ -42,6 +42,9 @@ Device → Flight Deck
                                                  audio_start with "aside":true; never over an
                                                  answer, never kept for a replay
   text  {"type":"update_check"}                  → update offer or {"type":"update_none"}
+  text  {"type":"audio_hold"} / {"type":"audio_go"}   its answer's sound is in a ring: hold the
+                                                 voice while it's full of what's still to play
+                                                 (a long answer, a pause), go on once it has room
 
   A device that connects with ``cmds=sound`` takes spoken sound commands: a
   recording that is only "volume up / down" or "beep on / off" (English or
@@ -127,6 +130,7 @@ BIN_BG_PART = 0x04     # a part of the background picture, more follow
 BIN_BG = 0x05          # the background picture's last part
 
 PCM_CHUNK = 4096                 # bytes per audio frame sent to the device
+AUDIO_HOLD_MAX_S = 180.0         # a device that asked to hold and never said go: carry on after this
 TTS_RATE = gb._STREAM_SAMPLE_RATE
 MAX_REC_SECONDS = 120            # a held button can't fill memory
 MIN_REC_SECONDS = 0.35
@@ -563,6 +567,10 @@ class _DeviceConn:
         self._audio_task: asyncio.Task | None = None
         self._audio_worker: asyncio.Task | None = None
         self._say_task: asyncio.Task | None = None
+        # The device's answer audio is a ring: it asks to hold ("audio_hold")
+        # while it's full of what's still to play, and says "audio_go" again.
+        self.audio_go = asyncio.Event()
+        self.audio_go.set()
         # Offline voice notes arriving: the one now (note_start … note_end), the batch so far.
         self.note: dict | None = None
         self.notes: list[dict] = []
@@ -1162,6 +1170,7 @@ class _DeviceConn:
                 pass
 
     async def stop_audio(self) -> None:
+        self.audio_go.set()  # a stopped answer holds nothing back
         await self._stop_say()
         while not self._audio_q.empty():
             self._audio_q.get_nowait()
@@ -1184,11 +1193,29 @@ class _DeviceConn:
             if span is not None:  # where this sound's words are in the shown text
                 start["from"], start["to"] = int(span[0]), int(span[1])
         await self.send_json(start)
+        # The voice is taken from TTS as fast as it comes (a long hold mustn't
+        # time that stream out); only the sending waits for the device's room.
+        got: asyncio.Queue = asyncio.Queue()
+
+        async def pull() -> None:
+            try:
+                async for chunk in chunks:
+                    got.put_nowait(chunk)
+            except BaseException as exc:  # (cancelled too) handed to the sender
+                got.put_nowait(exc)
+                return
+            got.put_nowait(None)
+
+        puller = asyncio.create_task(pull())
         try:
             pending = b""
-            async for chunk in chunks:
-                pending += chunk
+            while (item := await got.get()) is not None:
+                if isinstance(item, BaseException):
+                    raise item
+                pending += item
                 while len(pending) >= PCM_CHUNK:
+                    if not aside:
+                        await self._audio_room()
                     await self.send_bin(BIN_AUDIO, pending[:PCM_CHUNK])
                     pending = pending[PCM_CHUNK:]
             if len(pending) % 2:
@@ -1196,10 +1223,26 @@ class _DeviceConn:
             if pending:
                 await self.send_bin(BIN_AUDIO, pending)
         finally:
+            if not puller.done():
+                puller.cancel()
+            try:
+                await puller
+            except BaseException:
+                pass
             try:
                 await self.send_json({"type": "audio_end"})
             except Exception:
                 pass
+
+    async def _audio_room(self) -> None:
+        """Until the device has room for more of the answer's sound (it said
+        "audio_go", or never "audio_hold"); at most AUDIO_HOLD_MAX_S."""
+        if self.audio_go.is_set():
+            return
+        try:
+            await asyncio.wait_for(self.audio_go.wait(), AUDIO_HOLD_MAX_S)
+        except asyncio.TimeoutError:
+            self.audio_go.set()
 
     async def _play_tts(self, text: str, aside: bool = False, language: str | None = None,
                         span: tuple | None = None) -> None:
@@ -1362,6 +1405,10 @@ async def device_ws(ws: WebSocket) -> None:
                 await conn.stop_audio()
             elif mtype == "stop_agent":
                 await conn.stop_agent()
+            elif mtype == "audio_hold":
+                conn.audio_go.clear()
+            elif mtype == "audio_go":
+                conn.audio_go.set()
             elif mtype == "replay":
                 await conn.replay()
             elif mtype == "say":
