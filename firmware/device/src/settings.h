@@ -7,6 +7,11 @@
 static constexpr int kMaxNetworks = 5;
 static constexpr const char* kDefaultTz = "CET-1CEST,M3.5.0,M10.5.0/3";  // Central Europe
 
+// The paper's power-off choices, in idle minutes (0 = never), and how they read.
+static constexpr uint8_t kPowerOffMins[] = {1, 3, 10, 30, 60, 120, 0};
+bool powerOffMinValid(int minutes);
+String powerOffText(uint8_t minutes);  // "3 min", "1 hour", "never"
+
 struct WifiNet {
   String ssid;
   String pass;
@@ -42,7 +47,7 @@ struct Settings {
   uint8_t rotation = 0;     // 0 portrait, 1 landscape, 2 portrait flipped, 3 landscape flipped
   uint8_t ledLevel = 1;     // status lights: 0 off, 1 low, 2 bright
   bool keyClicks = true;    // a click for every button press (the paper changes slowly)
-  uint8_t powerOffMin = 3;  // deep sleep after this many idle minutes: 1, 3 or 10
+  uint8_t powerOffMin = 3;  // deep sleep after this many idle minutes: kPowerOffMins (0 = never)
   uint8_t asleepRefreshMin = 60;  // redraw the sleeping screen every 30 / 60 / 180 min (0 = never)
   bool speakMenu = true;    // read the highlighted menu row aloud (the paper shows it ~20 s later)
 

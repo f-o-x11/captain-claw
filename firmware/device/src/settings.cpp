@@ -50,7 +50,7 @@ void Settings::load() {
   ledLevel = min<uint8_t>(p.getUChar("leds", 1), 2);
   keyClicks = p.getBool("clicks", true);
   powerOffMin = p.getUChar("pwroffm", 3);
-  if (powerOffMin != 1 && powerOffMin != 3 && powerOffMin != 10) powerOffMin = 3;
+  if (!powerOffMinValid(powerOffMin)) powerOffMin = 3;
   asleepRefreshMin = p.getUChar("slpref", 60);
   if (asleepRefreshMin != 0 && asleepRefreshMin != 30 && asleepRefreshMin != 60 && asleepRefreshMin != 180) {
     asleepRefreshMin = 60;
@@ -62,7 +62,20 @@ void Settings::load() {
 }
 
 uint32_t Settings::powerOffMs() const {
-  return board::kEpaper ? powerOffMin * 60000UL : powerOffS * 1000UL;
+  if (board::kEpaper) return powerOffMin ? powerOffMin * 60000UL : UINT32_MAX;  // 0: never
+  return powerOffS * 1000UL;
+}
+
+bool powerOffMinValid(int minutes) {
+  for (uint8_t m : kPowerOffMins)
+    if (m == minutes) return true;
+  return false;
+}
+
+String powerOffText(uint8_t minutes) {
+  if (!minutes) return "never";
+  if (minutes < 60) return String(minutes) + " min";
+  return minutes == 60 ? String("1 hour") : String(minutes / 60) + " hours";
 }
 
 void Settings::save() const {
