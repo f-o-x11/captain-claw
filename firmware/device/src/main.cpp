@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.6"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.7"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -2427,8 +2427,7 @@ static void updateLeds() {
   }
   if (prerollOn || mode == Mode::Listening) {
     leds::set(S::Listening, micLevel);
-    const uint32_t cap = prerollOn ? prerollMaxMs : kTalkMaxMs;
-    leds::recordUsed((millis() - (prerollOn ? prerollStartMs : recStartMs)) / (float)cap);
+    leds::recordFor(millis() - (prerollOn ? prerollStartMs : recStartMs));
   }
   else if (audio::playing()) leds::set(S::Speaking, audio::outputLevel());
   else if (mode == Mode::Waiting) leds::set(S::Working);
