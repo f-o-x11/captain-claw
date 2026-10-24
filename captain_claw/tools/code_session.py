@@ -183,7 +183,7 @@ class CodeSessionTool(Tool):
                 origin_chat_id = int(origin_address) if origin_address.isdigit() else 0
         elif agent and getattr(agent, "_telegram_chat_id", 0):
             origin_platform = "telegram"
-            origin_user_id = str(getattr(agent, "_user_id", ""))
+            origin_user_id = str(getattr(agent, "_telegram_user_id", "") or getattr(agent, "_user_id", ""))
             origin_chat_id = int(getattr(agent, "_telegram_chat_id", 0))
             origin_kind, origin_address = "telegram", str(origin_chat_id)
 

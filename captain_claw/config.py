@@ -888,6 +888,11 @@ class TelegramConfig(BaseModel):
     groups: bool = True
     # Answers per group per hour, at most (anyone in a group can ask; 0 = no cap).
     group_turns_per_hour: int = 30
+    # The owner's own private chat (Flight Deck's shared bot, or the approved
+    # user marked owner on a bot of the agent's own) joins the main
+    # conversation — the one the web chat, WhatsApp, the app and the devices
+    # share. Off: it keeps a session of its own, like everyone else's.
+    owner_in_main: bool = True
 
 
 class WhatsAppConfig(BaseModel):

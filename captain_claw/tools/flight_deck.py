@@ -485,9 +485,13 @@ class FlightDeckTool(Tool):
         origin_platform = "web"
         origin_user_id = ""
         origin_chat_id = 0
-        if agent and hasattr(agent, "_user_id") and hasattr(agent, "_telegram_chat_id"):
+        if agent and getattr(agent, "_telegram_chat_id", 0) and (
+            hasattr(agent, "_user_id") or hasattr(agent, "_telegram_user_id")
+        ):
             origin_platform = "telegram"
-            origin_user_id = str(getattr(agent, "_user_id", ""))
+            # The main agent answering its owner's Telegram carries the chat's
+            # user apart from _user_id (the persona lookup key).
+            origin_user_id = str(getattr(agent, "_telegram_user_id", "") or getattr(agent, "_user_id", ""))
             origin_chat_id = int(getattr(agent, "_telegram_chat_id", 0))
 
         log.info("Delegating task to peer", target=peer_display, source=source_name,
