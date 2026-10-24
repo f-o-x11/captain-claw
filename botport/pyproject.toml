@@ -13,15 +13,17 @@ keywords = ["ai", "agent", "routing", "multi-agent", "a2a"]
 dependencies = [
     "aiohttp>=3.9.0",
     "aiosqlite>=0.19.0",
-    "litellm>=1.40.0",
     "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
+    "pydantic-settings>=2.2.0",
     "pyyaml>=6.0.0",
-    "structlog>=23.0.0",
-    "httpx>=0.25.0",
 ]
 
 [project.optional-dependencies]
+# LLM-assisted routing and swarm decomposition (llm.enabled). Heavy; a hub
+# that only connects Flight Decks (explicit Agent@deck addressing) needs none.
+llm = [
+    "litellm>=1.40.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

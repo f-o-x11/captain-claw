@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from botport import __version__
+
 if TYPE_CHECKING:
     from botport.server import BotPortServer
 
@@ -30,6 +32,12 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
 
     async def dashboard_js(request: web.Request) -> web.Response:
         js_path = STATIC_DIR / "dashboard.js"
+        if js_path.is_file():
+            return web.FileResponse(js_path, headers={"Content-Type": "application/javascript"})
+        return web.Response(text="", content_type="application/javascript")
+
+    async def auth_js(request: web.Request) -> web.Response:
+        js_path = STATIC_DIR / "auth.js"
         if js_path.is_file():
             return web.FileResponse(js_path, headers={"Content-Type": "application/javascript"})
         return web.Response(text="", content_type="application/javascript")
@@ -62,8 +70,37 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
     async def api_stats(request: web.Request) -> web.Response:
         stats = await server.concerns.get_stats()
         stats["connected_instances"] = server.connections.connected_count
-        stats["botport_version"] = server.config.__class__.__module__.split(".")[0]
+        stats["connected_decks"] = len(server.connections.list_decks())
+        stats["botport_version"] = __version__
         return web.json_response(stats)
+
+    async def api_status(request: web.Request) -> web.Response:
+        """Operational snapshot: decks, counters, queued results."""
+        snap = server.status_snapshot()
+        snap["decks"] = [
+            {
+                "name": d.name, "status": d.status, "version": d.version,
+                "connected_at": d.connected_at, "disconnected_at": d.disconnected_at,
+                "last_heartbeat": d.last_heartbeat, "remote_addr": d.remote_addr,
+                "active_concerns": d.active_concerns, "max_concurrent": d.max_concurrent,
+                "agents": [a.to_dict() for a in d.agents],
+            }
+            for d in server.connections.list_decks(connected_only=False)
+        ]
+        return web.json_response(snap)
+
+    async def dashboard_ws(request: web.Request) -> web.StreamResponse:
+        """Live events for dashboards (instance_connected/_disconnected,
+        activity, concern_created, concern_result). Read-only."""
+        ws = web.WebSocketResponse(heartbeat=30.0, max_msg_size=64 * 1024)
+        await ws.prepare(request)
+        server.dashboard_sockets.add(ws)
+        try:
+            async for _ in ws:
+                pass  # clients do not send anything we act on
+        finally:
+            server.dashboard_sockets.discard(ws)
+        return ws
 
     async def api_registry(request: web.Request) -> web.Response:
         summary = server.registry.get_summary()
@@ -80,17 +117,22 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
         except Exception:
             return web.json_response({"error": "Invalid JSON"}, status=400)
 
+        if not isinstance(data, dict):
+            return web.json_response({"error": "Expected a JSON object"}, status=400)
         if "active_persona" in data:
-            instance.active_persona = str(data["active_persona"])
+            instance.active_persona = str(data["active_persona"] or "")[:128]
         if "active_model" in data:
-            instance.active_model = str(data["active_model"])
+            instance.active_model = str(data["active_model"] or "")[:256]
         return web.json_response(instance.to_dict())
 
     # Routes.
     app.router.add_get("/", index)
     app.router.add_get("/dashboard.css", dashboard_css)
     app.router.add_get("/dashboard.js", dashboard_js)
+    app.router.add_get("/auth.js", auth_js)
     app.router.add_get("/swarm.js", swarm_js)
+    app.router.add_get("/ws/dashboard", dashboard_ws)
+    app.router.add_get("/api/status", api_status)
     app.router.add_get("/api/instances", api_instances)
     app.router.add_get("/api/concerns", api_concerns)
     app.router.add_get("/api/concerns/{id}", api_concern_detail)

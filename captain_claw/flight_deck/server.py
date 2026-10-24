@@ -825,6 +825,30 @@ async def _init_fd_db() -> FlightDeckDB:
     return db
 
 
+async def _start_botport_link(db: Any) -> None:
+    """Wire the BotPort link to this deck's fleet and agent proxy, then start it
+    with the stored (and FD_BOTPORT_* environment) settings."""
+    from captain_claw import __version__ as _cc_version
+    from captain_claw.flight_deck import botport_link as _bl
+
+    link = _bl.get_link()
+    deck_id = await db.get_system_setting(_bl.DECK_ID_KEY)
+    if not deck_id:
+        deck_id = secrets.token_hex(16)
+        await db.set_system_setting(_bl.DECK_ID_KEY, deck_id)
+    stored = _bl.unseal_settings(await db.get_system_setting(_bl.SETTING_KEY))
+    link.configure(
+        fleet=_fleet_snapshot,
+        consult_events=_consult_peer_events,
+        resolve_auth=_resolve_agent_auth,
+        version=_cc_version,
+    )
+    await link.start(stored, deck_id)
+    s = link.settings
+    if s.enabled:
+        print(f"Flight Deck: BotPort link enabled — deck '{s.deck_name}' → {s.url}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1130,7 +1154,19 @@ async def lifespan(app: FastAPI):
         print("Flight Deck: dubina engine ready")
     except Exception as _exc:
         print(f"Flight Deck: dubina engine init failed: {_exc}")
+
+    # ── BotPort link: this deck <-> other Flight Decks (off until configured) ──
+    try:
+        await _start_botport_link(_fd_db)
+    except Exception as _exc:
+        print(f"Flight Deck: BotPort link not started: {_exc}")
     yield
+    try:
+        from captain_claw.flight_deck.botport_link import get_link as _get_botport_link
+
+        await _get_botport_link().stop()
+    except Exception:
+        pass
     try:
         from captain_claw.flight_deck import telegram_shared as _tg_shared
 
@@ -1409,6 +1445,7 @@ _optional_agent_manager_dep = Depends(get_optional_managed_user) if AUTH_ENABLED
 
 from captain_claw.flight_deck.auth_routes import router as auth_router
 from captain_claw.flight_deck.settings_routes import router as settings_router
+from captain_claw.flight_deck.botport_routes import router as botport_router
 from captain_claw.flight_deck.chat_routes import router as chat_router
 from captain_claw.flight_deck.admin_routes import router as admin_router
 from captain_claw.flight_deck.profile_routes import router as profile_router
@@ -1488,6 +1525,7 @@ from captain_claw.terminal.relay import router as pty_router
 
 app.include_router(auth_router)
 app.include_router(settings_router)
+app.include_router(botport_router)
 app.include_router(chat_router)
 app.include_router(admin_router)
 app.include_router(profile_router)
@@ -1671,8 +1709,9 @@ class AgentConfig(BaseModel):
     # switch between at runtime, with `model` as the default.
     allowed_models: list[dict] = Field(default_factory=list)
 
-    # BotPort
-    botport_enabled: bool = True
+    # BotPort — the agent's own legacy direct link. Off: agents reach other
+    # Flight Decks through this deck's BotPort link (flight_deck tool).
+    botport_enabled: bool = False
     botport_url: str = ""
     botport_instance_name: str = ""
     botport_key: str = ""
@@ -1682,7 +1721,7 @@ class AgentConfig(BaseModel):
     # Tools
     tools: list[str] = Field(default_factory=lambda: [
         "shell", "read", "write", "glob", "edit",
-        "web_fetch", "web_search", "browser", "botport",
+        "web_fetch", "web_search", "browser",
     ])
 
     # Web
@@ -4721,57 +4760,85 @@ async def probe_agent(host: str = "localhost", port: int = 23080):
 class FleetAgent(BaseModel):
     name: str
     slug: str = ""  # FD_AGENT_SLUG — what the agent identifies itself as in X-Agent-Slug
-    kind: str  # docker | process | local
+    kind: str  # docker | process | local | remote (another deck's, via BotPort)
     host: str = "localhost"
     port: int
     status: str
     description: str = ""
+    deck: str = ""  # remote agents: the Flight Deck that runs it
 
 
-@app.get("/fd/fleet", response_model=list[FleetAgent])
-async def get_fleet(request: Request, user: dict | None = _optional_user_dep):
-    """Return all running/known agents across docker, process, and local stores
-    — this deck's only (another deck's containers on this host are not peers)."""
-    fleet: list[FleetAgent] = []
-    user_id = getattr(request.state, "user_id", "")
+def _fleet_snapshot() -> list[dict[str, Any]]:
+    """Every agent this deck runs (docker + process), with its owner — this
+    deck's only (another deck's containers on this host are not peers).
+    Blocking (Docker API): call from a thread in async code."""
+    fleet: list[dict[str, Any]] = []
 
     # Docker containers
     try:
         client = get_docker()
         for c in _deck_containers(all=True, client=client):
             labels = c.labels or {}
-            if AUTH_ENABLED and user_id and labels.get(OWNER_LABEL, "") != user_id:
-                continue
             wp = labels.get("flight-deck.web-port", "")
             _agent_name = labels.get("flight-deck.agent-name", c.name)
-            fleet.append(FleetAgent(
-                name=_agent_name,
-                slug=_slug(_agent_name),
-                kind="docker",
-                host="localhost",
-                port=int(wp) if wp else 0,
-                status=c.status,
-                description=labels.get("flight-deck.description", ""),
-            ))
+            fleet.append({
+                "name": _agent_name,
+                "slug": _slug(_agent_name),
+                "kind": "docker",
+                "host": "localhost",
+                "port": int(wp) if wp else 0,
+                "status": c.status,
+                "description": labels.get("flight-deck.description", ""),
+                "owner": labels.get(OWNER_LABEL, ""),
+            })
     except Exception:
         pass
 
     # Process agents
     registry = _load_process_registry()
     for slug, entry in registry.items():
-        if AUTH_ENABLED and user_id and entry.get("owner", "") != user_id:
-            continue
         alive = _process_is_alive(slug)
-        fleet.append(FleetAgent(
-            name=entry.get("name", slug),
-            slug=slug,
-            kind="process",
-            host="localhost",
-            port=entry.get("web_port", 0),
-            status="running" if alive else "stopped",
-            description=entry.get("description", ""),
-        ))
+        fleet.append({
+            "name": entry.get("name", slug),
+            "slug": slug,
+            "kind": "process",
+            "host": "localhost",
+            "port": entry.get("web_port", 0),
+            "status": "running" if alive else "stopped",
+            "description": entry.get("description", ""),
+            "owner": entry.get("owner", ""),
+        })
+    return fleet
 
+
+@app.get("/fd/fleet", response_model=list[FleetAgent])
+async def get_fleet(request: Request, include_remote: bool = False, user: dict | None = _optional_user_dep):
+    """Return all running/known agents across docker, process, and local stores
+    — this deck's only (another deck's containers on this host are not peers).
+
+    ``include_remote=1`` adds the agents other Flight Decks expose over the
+    BotPort link (kind ``remote``, named ``Agent@deck``, port 0)."""
+    user_id = getattr(request.state, "user_id", "")
+    fleet: list[FleetAgent] = []
+    for a in _fleet_snapshot():
+        if AUTH_ENABLED and user_id and a.get("owner", "") != user_id:
+            continue
+        fleet.append(FleetAgent(**{k: v for k, v in a.items() if k != "owner"}))
+
+    # The federation roster only for a caller FD can name: a signed-in user,
+    # or one of its own agents (transport guard + the agent's X-Agent-Auth).
+    if include_remote is True and (
+        (isinstance(user, dict) and user.get("id"))
+        or (_agent_caller_ok(request)
+            and _agent_record_by_auth(request.headers.get("X-Agent-Auth", "").strip()) is not None)
+    ):
+        from captain_claw.flight_deck.botport_link import get_link
+
+        for r in get_link().remote_agents():
+            fleet.append(FleetAgent(
+                name=r["name"], slug=r.get("slug", ""), kind="remote", host="", port=0,
+                status="running", description=r.get("description", ""), deck=r["deck"],
+            ))
     return fleet
 
 
@@ -5763,6 +5830,14 @@ async def _notify_fleet_change(new_agent_name: str, new_agent_port: int, event: 
     import websockets as _ws
     import json as _json
 
+    # Other Flight Decks see this deck's exposed agents: re-advertise them.
+    try:
+        from captain_claw.flight_deck.botport_link import get_link as _get_botport_link
+
+        _get_botport_link().notify_fleet_changed()
+    except Exception:
+        pass
+
     # Build list of running agent WebSocket endpoints (excluding the new one),
     # scoped to the same owner when auth is enabled.
     targets: list[tuple[str, int, str]] = []  # (host, port, auth)
@@ -6071,8 +6146,12 @@ class ConsultPeerRequest(BaseModel):
     # ``host`` and ``auth`` are accepted from older callers but IGNORED: FD
     # talks to its own agent on ``port`` at the host and token IT recorded.
     host: str = "localhost"
-    port: int
+    port: int = 0
     auth: str = ""
+    # A remote agent (another Flight Deck's, over the BotPort link): set both
+    # and leave ``port`` 0.
+    target_deck: str = ""
+    target_agent: str = ""
     message: str
     source_name: str = "another agent"
     timeout: float = Field(default=480.0, le=600.0)
@@ -6137,7 +6216,7 @@ async def _consult_peer_events(
     source_name: str = "another agent", timeout: float = 480.0,
     image_paths: list[str] | None = None, file_paths: list[str] | None = None,
     no_flow: bool = False, deny_tools: list[str] | None = None, no_broadcast: bool = False,
-    automation: dict[str, Any] | None = None,
+    automation: dict[str, Any] | None = None, lane: str = "",
 ):
     """Consult the agent at ``host:port`` (authenticated with ``auth``) and yield
     its intermediate events, then a final ``{"ok": True, "done": True, ...}`` or
@@ -6158,7 +6237,10 @@ async def _consult_peer_events(
     # Event types we forward as peer activity so the caller can show progress
     _FORWARD_TYPES = {"status", "thinking", "monitor", "tool_stream"}
 
-    params = f"?token={auth}" if auth else ""
+    from urllib.parse import urlencode
+
+    query = {k: v for k, v in (("token", auth), ("lane", lane)) if v}
+    params = f"?{urlencode(query)}" if query else ""
     agent_url = f"ws://{host}:{port}/ws{params}"
 
     # Queue behind any in-flight consult to this agent (it serves one at a
@@ -6176,7 +6258,11 @@ async def _consult_peer_events(
         return
     _active_consults[port] = source_name
     try:
-        async with websockets.connect(agent_url, max_size=4 * 1024 * 1024) as ws:
+        # Loopback to FD's own agent: never through an HTTP(S)_PROXY, and room
+        # for a long session's welcome replay (it arrives as one frame).
+        from captain_claw.flight_deck.botport_link import ws_proxy_kwargs
+
+        async with websockets.connect(agent_url, max_size=64 * 1024 * 1024, **ws_proxy_kwargs(None)) as ws:
             # Wait for welcome
             welcome = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
             if welcome.get("type") != "welcome":
@@ -6302,6 +6388,10 @@ async def consult_peer(req: ConsultPeerRequest, request: Request, user: dict | N
     import contextlib
 
     owner, is_admin, caller_agent = _resolve_peer_caller(request, user)
+    if req.target_deck or req.target_agent:
+        return _remote_consult_response(req.target_deck, req.target_agent, req.message,
+                                        await _remote_caller_name(req.source_name, caller_agent, user),
+                                        req.timeout, attach_path=req.attach_path)
     auth = _resolve_peer_target(req.port, owner, is_admin)
     attachment = await _read_agent_attachment(caller_agent, req.attach_path) if req.attach_path else None
 
@@ -6335,8 +6425,11 @@ class DelegatePeerRequest(BaseModel):
     # back to the CALLING agent (X-Agent-Auth); ``source_port`` only names the
     # recipient for a bearer caller, which has no agent of its own.
     target_host: str = "localhost"
-    target_port: int
+    target_port: int = 0
     target_name: str = ""
+    # A remote agent (another Flight Deck's, over the BotPort link).
+    target_deck: str = ""
+    target_agent: str = ""
     source_host: str = "localhost"
     source_port: int = 0
     source_name: str = "another agent"
@@ -6361,14 +6454,19 @@ async def delegate_peer(req: DelegatePeerRequest, request: Request, user: dict |
     import websockets
 
     owner, is_admin, caller_agent = _resolve_peer_caller(request, user)
+    remote = bool(req.target_deck or req.target_agent)
     target_port = int(req.target_port)
-    target_auth = _resolve_peer_target(target_port, owner, is_admin)
+    target_auth = "" if remote else _resolve_peer_target(target_port, owner, is_admin)
     # The result goes back to the calling agent, at the port FD recorded for it.
     if caller_agent is not None and caller_agent["port"]:
         source_port, source_auth = caller_agent["port"], caller_agent["auth"]
     else:
         source_port = int(req.source_port or 0)
         source_auth = _resolve_peer_target(source_port, owner, is_admin)
+
+    if remote:
+        return await _remote_delegate(req, source_port, source_auth,
+                                      await _remote_caller_name(req.source_name, caller_agent, user))
 
     peer_display = req.target_name or f"agent@{target_port}"
 
@@ -6485,67 +6583,186 @@ async def delegate_peer(req: DelegatePeerRequest, request: Request, user: dict |
             response_text = "(no response received)"
 
         # Phase 2: deliver the result back to the source agent
-        s_params = f"?token={source_auth}" if source_auth else ""
-        source_url = f"ws://{_PEER_AGENT_HOST}:{source_port}/ws{s_params}"
-        callback_msg = (
-            f"[Delegated result from {peer_display}] This is the ANSWER you were "
-            f"waiting for. Relay it to the user now, concisely, in their language. "
-            f"Do NOT delegate again, do NOT call any tool, and do NOT say you are "
-            f"still waiting — you already have the result below:\n\n{response_text}"
-        )
-        if relay_level:
-            # Header first (within the receiving agent's header scan), so the
-            # source agent flags the delegated result as member-private too.
-            callback_msg = _private_relay_header(relay_level) + "\n" + callback_msg
-        log.info("delegate_background: delivering result to source",
-                 source=req.source_name, source_port=source_port, result_len=len(response_text))
-        try:
-            async with websockets.connect(source_url, open_timeout=10, close_timeout=5) as ws:
-                welcome = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
-                if welcome.get("type") != "welcome":
-                    log.error("delegate_callback: unexpected handshake from source", source=req.source_name)
-                    return
-                # Skip replay
-                while True:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=10)
-                    msg = json.loads(raw)
-                    if msg.get("type") == "replay_done":
-                        break
-                notification_payload = {
-                    "type": "notification",
-                    "content": callback_msg,
-                    "trigger_response": True,
-                }
-                # Include origin platform info so the agent routes the result correctly
-                if req.origin_platform and req.origin_platform != "web":
-                    notification_payload["origin_platform"] = req.origin_platform
-                    notification_payload["origin_user_id"] = req.origin_user_id
-                    notification_payload["origin_chat_id"] = req.origin_chat_id
-                await ws.send(json.dumps(notification_payload))
-                log.info("delegate_callback: result delivered to source", source=req.source_name,
-                         origin_platform=req.origin_platform)
-                # Wait briefly for acknowledgment
-                try:
-                    await asyncio.wait_for(ws.recv(), timeout=30)
-                except asyncio.TimeoutError:
-                    pass
-        except Exception as exc:
-            log.error("delegate_callback: failed to deliver result to source", source=req.source_name, error=str(exc))
+        await _deliver_delegate_result(req, source_port, source_auth, peer_display,
+                                       response_text, relay_level)
 
-    # Keep a strong reference so the task doesn't get garbage-collected
-    _active_delegates.add(_deleg_key)
-    task = asyncio.create_task(_background())
+    _start_delegate_task(_deleg_key, _background())
+    return {"ok": True, "message": f"Task delegated to {peer_display}. Results will be delivered to {req.source_name} when ready."}
+
+
+def _start_delegate_task(deleg_key: tuple, coro: Any) -> None:
+    """Run a delegation in the background, holding a strong reference to it
+    and marking (source, target) in flight until it ends."""
+    _active_delegates.add(deleg_key)
+    task = asyncio.create_task(coro)
     if not hasattr(app.state, "_delegate_tasks"):
         app.state._delegate_tasks = set()
     app.state._delegate_tasks.add(task)
 
     def _on_delegate_done(t: Any) -> None:
         app.state._delegate_tasks.discard(t)
-        _active_delegates.discard(_deleg_key)
+        _active_delegates.discard(deleg_key)
 
     task.add_done_callback(_on_delegate_done)
 
-    return {"ok": True, "message": f"Task delegated to {peer_display}. Results will be delivered to {req.source_name} when ready."}
+
+async def _deliver_delegate_result(req: "DelegatePeerRequest", source_port: int, source_auth: str,
+                                   peer_display: str, response_text: str, relay_level: str = "") -> None:
+    """Hand a delegated task's result back to the agent that delegated it, as
+    a notification that triggers its reply (on its originating channel)."""
+    import websockets
+
+    s_params = f"?token={source_auth}" if source_auth else ""
+    source_url = f"ws://{_PEER_AGENT_HOST}:{source_port}/ws{s_params}"
+    callback_msg = (
+        f"[Delegated result from {peer_display}] This is the ANSWER you were "
+        f"waiting for. Relay it to the user now, concisely, in their language. "
+        f"Do NOT delegate again, do NOT call any tool, and do NOT say you are "
+        f"still waiting — you already have the result below:\n\n{response_text}"
+    )
+    if relay_level:
+        # Header first (within the receiving agent's header scan), so the
+        # source agent flags the delegated result as member-private too.
+        callback_msg = _private_relay_header(relay_level) + "\n" + callback_msg
+    log.info("delegate_background: delivering result to source",
+             source=req.source_name, source_port=source_port, result_len=len(response_text))
+    try:
+        async with websockets.connect(source_url, open_timeout=10, close_timeout=5) as ws:
+            welcome = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+            if welcome.get("type") != "welcome":
+                log.error("delegate_callback: unexpected handshake from source", source=req.source_name)
+                return
+            # Skip replay
+            while True:
+                raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                msg = json.loads(raw)
+                if msg.get("type") == "replay_done":
+                    break
+            notification_payload = {
+                "type": "notification",
+                "content": callback_msg,
+                "trigger_response": True,
+            }
+            # Include origin platform info so the agent routes the result correctly
+            if req.origin_platform and req.origin_platform != "web":
+                notification_payload["origin_platform"] = req.origin_platform
+                notification_payload["origin_user_id"] = req.origin_user_id
+                notification_payload["origin_chat_id"] = req.origin_chat_id
+            await ws.send(json.dumps(notification_payload))
+            log.info("delegate_callback: result delivered to source", source=req.source_name,
+                     origin_platform=req.origin_platform)
+            # Wait briefly for acknowledgment
+            try:
+                await asyncio.wait_for(ws.recv(), timeout=30)
+            except asyncio.TimeoutError:
+                pass
+    except Exception as exc:
+        log.error("delegate_callback: failed to deliver result to source", source=req.source_name, error=str(exc))
+
+
+# ── Remote agents (other Flight Decks, over the BotPort link) ──
+
+
+async def _remote_caller_name(source_name: str, caller_agent: dict | None, user: dict | None) -> str:
+    """How a remote deck sees who is asking: the calling agent's name (from
+    FD's own records when it is an FD agent), else the bearer user's name."""
+    if caller_agent is not None:
+        for a in await asyncio.to_thread(_fleet_snapshot):
+            if a.get("port") == caller_agent.get("port") and a.get("kind") == caller_agent.get("kind"):
+                return str(a.get("name") or source_name or "agent")
+    if user and user.get("display_name"):
+        return str(user["display_name"])
+    return (source_name or "agent").strip()[:128] or "agent"
+
+
+def _remote_split(target_deck: str, target_agent: str) -> tuple[str, str]:
+    deck, agent = (target_deck or "").strip(), (target_agent or "").strip()
+    if not deck and "@" in agent:
+        agent, _, deck = agent.rpartition("@")
+    if not deck or not agent:
+        raise HTTPException(400, "a remote agent needs both target_deck and target_agent "
+                                 "(or target_agent written as Agent@deck)")
+    return deck, agent
+
+
+def _remote_consult_response(target_deck: str, target_agent: str, message: str, from_agent: str,
+                             timeout: float, *, attach_path: str = "") -> StreamingResponse:
+    """/fd/consult-peer for a remote agent: same ndjson contract, carried by the BotPort link."""
+    import contextlib
+
+    from captain_claw.flight_deck.botport_link import get_link
+
+    deck, agent = _remote_split(target_deck, target_agent)
+    if attach_path:
+        raise HTTPException(400, "files cannot be attached to a remote (other Flight Deck) agent yet — "
+                                 "put the relevant content in the message instead")
+
+    async def _event_stream():
+        async with contextlib.aclosing(get_link().consult(
+            target_deck=deck, target_agent=agent, message=message,
+            from_agent=from_agent, timeout=timeout, mode="consult",
+        )) as events:
+            # A member-private reply already carries its header (the remote
+            # deck put it first, as /fd/consult-peer does locally).
+            async for evt in events:
+                yield json.dumps(evt) + "\n"
+
+    return StreamingResponse(_event_stream(), media_type="application/x-ndjson")
+
+
+async def _remote_delegate(req: "DelegatePeerRequest", source_port: int, source_auth: str,
+                           from_agent: str) -> dict[str, Any]:
+    """/fd/delegate-peer for a remote agent: consult it over the link in the
+    background, then deliver the answer to the calling agent like a local delegation."""
+    import contextlib
+
+    from captain_claw.flight_deck.botport_link import get_link
+
+    deck, agent = _remote_split(req.target_deck, req.target_agent)
+    if req.attach_path:
+        raise HTTPException(400, "files cannot be attached to a remote (other Flight Deck) agent yet — "
+                                 "put the relevant content in the message instead")
+    link = get_link()
+    remote = link.find_remote(deck, agent)
+    if remote is None:
+        available = ", ".join(r["name"] for r in link.remote_agents()) or "none"
+        state = "" if link.connected else f" (BotPort link: {link.state}{': ' + link.last_error if link.last_error else ''})"
+        return {"ok": False, "message": f"{agent}@{deck} is not reachable{state}. Available remote agents: {available}"}
+    peer_display = remote["name"]  # the agent's own name, e.g. "Researcher@pi"
+
+    deleg_key = (source_port, peer_display.lower())
+    if deleg_key in _active_delegates:
+        return {
+            "ok": True,
+            "message": (
+                f"A task is already being processed by {peer_display} for you — "
+                f"waiting on that result. Do NOT delegate again; tell the user you're waiting."
+            ),
+        }
+
+    async def _background() -> None:
+        response_text, relay_level = "", ""
+        async with contextlib.aclosing(link.consult(
+            target_deck=deck, target_agent=agent, message=req.message,
+            from_agent=from_agent, timeout=req.timeout, mode="delegate",
+        )) as events:
+            async for evt in events:
+                if evt.get("done") and evt.get("ok"):
+                    response_text = str(evt.get("response") or "(no response)")
+                    relay_level = str(evt.get("member_private") or "")
+                elif evt.get("ok") is False:
+                    response_text = f"[Error from {peer_display}] {evt.get('error', 'failed')}"
+        if not response_text:
+            response_text = "(no response received)"
+        # The remote deck already put the member-private header first.
+        await _deliver_delegate_result(req, source_port, source_auth, peer_display, response_text,
+                                       "")
+        if relay_level:
+            log.info("remote delegate result was member-private", level=relay_level, target=peer_display)
+
+    _start_delegate_task(deleg_key, _background())
+    return {"ok": True, "message": f"Task delegated to {peer_display} (via BotPort). "
+                                   f"Results will be delivered to {req.source_name} when ready."}
 
 
 _WORKSPACE_ALLOWED_EXTS: set[str] = {

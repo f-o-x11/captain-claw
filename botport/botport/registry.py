@@ -66,8 +66,17 @@ class Registry:
         """
         matched = 0
         for qt in query_tags:
+            if not qt:
+                continue
             for it in instance_tags:
-                if qt == it or qt in it or it in qt:
+                if not it:
+                    continue
+                if qt == it:
+                    matched += 1
+                    break
+                # Substring matches only between real words: a one- or
+                # two-letter tag would otherwise match nearly everything.
+                if min(len(qt), len(it)) >= 3 and (qt in it or it in qt):
                     matched += 1
                     break  # one match per query tag is enough
         return matched

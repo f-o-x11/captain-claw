@@ -104,6 +104,8 @@ class FlightDeckTool(Tool):
         "Actions: 'list_agents' to discover peers, 'consult' for quick synchronous Q&A, "
         "'delegate' for tasks the peer should do independently, "
         "'spawn_agent' to create a new agent in the fleet. "
+        "Agents on OTHER Flight Decks (connected through BotPort) appear in list_agents as "
+        "'Agent@deck' — consult/delegate them by that full name, exactly like local peers. "
         "IMPORTANT: When the user says 'delegate', or the task is large/long-running "
         "(scraping, research, analysis, file creation), ALWAYS use action='delegate'. "
         "Only use 'consult' for quick questions where you need the answer immediately to continue."
@@ -136,7 +138,8 @@ class FlightDeckTool(Tool):
                 "description": (
                     "Name of the peer agent to consult or delegate to "
                     "(required for 'consult' and 'delegate' actions). "
-                    "Use list_agents first to see available agents."
+                    "Use list_agents first to see available agents. For an agent on "
+                    "another Flight Deck use its full 'Agent@deck' name."
                 ),
             },
             "archetype": {
@@ -197,7 +200,8 @@ class FlightDeckTool(Tool):
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{fd_url}/fd/fleet", headers=_fd_agent_headers(fd_url))
+                resp = await client.get(f"{fd_url}/fd/fleet", params={"include_remote": "1"},
+                                        headers=_fd_agent_headers(fd_url))
                 if resp.status_code != 200:
                     return ToolResult(
                         success=False,
@@ -216,26 +220,38 @@ class FlightDeckTool(Tool):
         my_name = metadata.get("session_display_name", "")
 
         lines = []
+        remote_lines = []
         for a in agents:
             name = a.get("name", "?")
             kind = a.get("kind", "?")
             status = a.get("status", "?")
             port = a.get("port", 0)
             desc = a.get("description", "")
+            if kind == "remote":
+                line = f"- **{name}** [remote · Flight Deck '{a.get('deck', '?')}' via BotPort]"
+                if desc:
+                    line += f" — {desc}"
+                remote_lines.append(line)
+                continue
             marker = " (you)" if my_name and name.lower() == my_name.lower() else ""
             line = f"- **{name}**{marker} [{kind}] — status: {status}, port: {port}"
             if desc:
                 line += f" — {desc}"
             lines.append(line)
 
-        return ToolResult(
-            success=True,
-            content=f"Fleet agents ({len(agents)}):\n" + "\n".join(lines),
-        )
+        content = f"Fleet agents ({len(lines)}):\n" + "\n".join(lines)
+        if remote_lines:
+            content += (
+                f"\n\nAgents on other Flight Decks ({len(remote_lines)}) — consult/delegate "
+                f"them by their full Agent@deck name:\n" + "\n".join(remote_lines)
+            )
+        return ToolResult(success=True, content=content)
 
     @staticmethod
     def _is_self_target(target: dict, **kwargs: Any) -> bool:
         """True if the resolved target is THIS agent (prevents self-delegation)."""
+        if target.get("kind") == "remote":
+            return False  # another deck's agent is never this one
         session = kwargs.get("_session")
         metadata = getattr(session, "metadata", {}) or {} if session else {}
         fid = metadata.get("fleet_identity") or {}
@@ -302,31 +318,38 @@ class FlightDeckTool(Tool):
         if attach_path:
             _emit("uploading", f"Sending file to {peer_display}...")
 
+        body: dict[str, Any] = {
+            "host": host,
+            "port": port,
+            "auth": "",
+            "message": message,
+            "source_name": source_name,
+            "timeout": 480.0,
+            "attach_path": attach_path,
+            # The peer may write email only when both this question
+            # and the text that started our turn ask for one.
+            "mail_intent_text": mail_authority.narrower_intent(
+                message, mail_authority.intent_source_text(agent),
+            )[:mail_authority.JOB_TEXT_MAX],
+        }
+        if target.get("kind") == "remote":
+            # Another Flight Deck's agent: FD carries it over the BotPort link.
+            body.update({"port": 0, "target_deck": target.get("deck", ""),
+                         "target_agent": target.get("slug") or target.get("name", "").rpartition("@")[0]})
+
         try:
             async with httpx.AsyncClient(timeout=600.0) as client:
                 async with client.stream(
                     "POST",
                     f"{fd_url}/fd/consult-peer",
                     headers=_fd_agent_headers(fd_url),
-                    json={
-                        "host": host,
-                        "port": port,
-                        "auth": "",
-                        "message": message,
-                        "source_name": source_name,
-                        "timeout": 480.0,
-                        "attach_path": attach_path,
-                        # The peer may write email only when both this question
-                        # and the text that started our turn ask for one.
-                        "mail_intent_text": mail_authority.narrower_intent(
-                            message, mail_authority.intent_source_text(agent),
-                        )[:mail_authority.JOB_TEXT_MAX],
-                    },
+                    json=body,
                 ) as resp:
                     if resp.status_code != 200:
                         return ToolResult(success=False, error=await refusal_detail(resp))
 
                     final_response = ""
+                    got_final = False
                     async for line in resp.aiter_lines():
                         line = line.strip()
                         if not line:
@@ -338,6 +361,7 @@ class FlightDeckTool(Tool):
 
                         if "done" in event and event.get("ok"):
                             final_response = event.get("response", "(no response)")
+                            got_final = True
                             _emit("done", "Consultation complete")
                             break
                         if event.get("ok") is False:
@@ -364,6 +388,15 @@ class FlightDeckTool(Tool):
                             tool_name = data.get("tool_name", "")
                             _emit("tool", tool_name)
 
+                    if not got_final:
+                        # The stream ended without an answer (FD restarted, a
+                        # link dropped): that is a failure, not an empty reply.
+                        _emit("error", "Connection closed")
+                        return ToolResult(
+                            success=False,
+                            error=f"The connection to Flight Deck closed before {peer_display} answered. "
+                                  f"Try again.",
+                        )
                     return ToolResult(
                         success=True,
                         content=f"Response from {peer_display}:\n\n{final_response}",
@@ -386,25 +419,20 @@ class FlightDeckTool(Tool):
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{fd_url}/fd/fleet", headers=_fd_agent_headers(fd_url))
+                resp = await client.get(f"{fd_url}/fd/fleet", params={"include_remote": "1"},
+                                        headers=_fd_agent_headers(fd_url))
                 if resp.status_code != 200:
                     return None, None, f"Fleet query failed: HTTP {resp.status_code}"
                 agents = resp.json()
         except Exception as e:
             return None, None, f"Cannot reach Flight Deck: {e}"
 
-        target = None
-        query = agent_name.lower()
-        for a in agents:
-            if a.get("name", "").lower() == query:
-                target = a
-                break
-        if not target:
-            for a in agents:
-                aname = a.get("name", "").lower()
-                if query in aname or aname in query:
-                    target = a
-                    break
+        target, ambiguous = self._match_agent(agents, agent_name)
+        if ambiguous:
+            return None, agents, (
+                f"'{agent_name}' is ambiguous — it runs on several Flight Decks. "
+                f"Use one of: {', '.join(ambiguous)}"
+            )
 
         if not target:
             available = ", ".join(a.get("name", "?") for a in agents)
@@ -413,10 +441,50 @@ class FlightDeckTool(Tool):
         if target.get("status") != "running":
             return None, agents, f"Agent '{agent_name}' is not running (status: {target.get('status')})."
 
-        if not target.get("port"):
+        if target.get("kind") != "remote" and not target.get("port"):
             return None, agents, f"No port info for agent '{agent_name}'."
 
         return target, agents, None
+
+    @staticmethod
+    def _match_agent(agents: list[dict], agent_name: str) -> tuple[dict | None, list[str]]:
+        """``(target, ambiguous_names)`` for ``agent_name``.
+
+        Exact full name first (local names, or a remote ``Agent@deck``). An
+        ``x@deck`` reference only ever matches that deck's agent. Fuzzy
+        substring matching — the long-standing local behaviour — never picks a
+        remote agent; a bare name reaches a remote agent only when exactly one
+        deck has it.
+        """
+        query = agent_name.strip().lower()
+        local = [a for a in agents if a.get("kind") != "remote"]
+        remote = [a for a in agents if a.get("kind") == "remote"]
+
+        for a in agents:
+            if a.get("name", "").lower() == query:
+                return a, []
+
+        def _bare(a: dict) -> str:
+            return a.get("name", "").rpartition("@")[0].lower()
+
+        if "@" in query:
+            wanted, _, deck = query.rpartition("@")
+            for a in remote:
+                if a.get("deck", "").lower() == deck and wanted in (_bare(a), a.get("slug", "").lower()):
+                    return a, []
+            return None, []
+
+        for a in local:
+            aname = a.get("name", "").lower()
+            if query in aname or aname in query:
+                return a, []
+
+        hits = [a for a in remote if query in (_bare(a), a.get("slug", "").lower())]
+        if len(hits) == 1:
+            return hits[0], []
+        if len(hits) > 1:
+            return None, [a.get("name", "?") for a in hits]
+        return None, []
 
     async def _delegate(self, fd_url: str, agent_name: str, message: str, **kwargs: Any) -> ToolResult:
         """Delegate a task to a peer agent (fire-and-forget). Results are delivered back as a message."""
@@ -502,35 +570,43 @@ class FlightDeckTool(Tool):
         attach = kwargs.get("_attach_file")
         attach_path = str(attach) if attach is not None else ""
 
+        body: dict[str, Any] = {
+            "target_host": target.get("host", "localhost"),
+            "target_port": target.get("port"),
+            "target_name": peer_display,
+            "source_host": "localhost",
+            "source_port": source_port,
+            "source_name": source_name,
+            "message": message,
+            "timeout": 600.0,
+            "origin_platform": origin_platform,
+            "origin_user_id": origin_user_id,
+            "origin_chat_id": origin_chat_id,
+            "attach_path": attach_path,
+            # As for consult: the narrower of the task and our turn's text.
+            "mail_intent_text": mail_authority.narrower_intent(
+                message, mail_authority.intent_source_text(agent),
+            )[:mail_authority.JOB_TEXT_MAX],
+        }
+        if target.get("kind") == "remote":
+            body.update({"target_port": 0, "target_deck": target.get("deck", ""),
+                         "target_agent": target.get("slug") or target.get("name", "").rpartition("@")[0]})
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
                     f"{fd_url}/fd/delegate-peer",
                     headers=_fd_agent_headers(fd_url),
-                    json={
-                        "target_host": target.get("host", "localhost"),
-                        "target_port": target.get("port"),
-                        "target_name": peer_display,
-                        "source_host": "localhost",
-                        "source_port": source_port,
-                        "source_name": source_name,
-                        "message": message,
-                        "timeout": 600.0,
-                        "origin_platform": origin_platform,
-                        "origin_user_id": origin_user_id,
-                        "origin_chat_id": origin_chat_id,
-                        "attach_path": attach_path,
-                        # As for consult: the narrower of the task and our turn's text.
-                        "mail_intent_text": mail_authority.narrower_intent(
-                            message, mail_authority.intent_source_text(agent),
-                        )[:mail_authority.JOB_TEXT_MAX],
-                    },
+                    json=body,
                 )
                 if resp.status_code != 200:
                     return ToolResult(success=False, error=await refusal_detail(resp))
                 result = resp.json()
         except Exception as e:
             return ToolResult(success=False, error=f"Failed to delegate: {e}")
+
+        if isinstance(result, dict) and result.get("ok") is False:
+            return ToolResult(success=False, error=str(result.get("message") or "Delegation refused"))
 
         return ToolResult(
             success=True,

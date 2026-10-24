@@ -144,7 +144,13 @@ function inlineMd(s) {
     .replace(/__([^_]+)__/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
     .replace(/_([^_]+)_/g, "<em>$1</em>")
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+      /* Agent-written text: only plain web/mail links, attribute-safe. */
+      const url = href.trim();
+      if (!/^(https?:\/\/|mailto:|\/|#)/i.test(url)) return label;
+      const safe = url.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+      return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
 }
 
 function _parsePipeRow(line) {

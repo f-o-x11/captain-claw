@@ -14,7 +14,9 @@ import hashlib
 import logging
 import mimetypes
 import os
+import re
 import uuid
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -38,16 +40,34 @@ _PRECOMPRESSED_EXTS = frozenset({
 })
 
 
+# A swarm id is one path component of letters, digits, '-' and '_' (swarm ids
+# are uuids). It reaches the filesystem from HTTP routes and from the WS
+# protocol, so anything else ('/', '..', an absolute path) is refused.
+_SWARM_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def safe_swarm_id(swarm_id: str) -> str:
+    """Return ``swarm_id`` if it is a safe single path component, else raise ValueError."""
+    if not isinstance(swarm_id, str) or not _SWARM_ID_RE.match(swarm_id):
+        raise ValueError("invalid swarm id")
+    return swarm_id
+
+
+def _safe_component(name: str) -> str:
+    """A filesystem-safe single path component (never '', '.' or '..')."""
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in (name or ""))
+    safe = safe.lstrip(".")
+    return safe[:128] or "_"
+
+
 def _swarm_dir(swarm_id: str) -> Path:
     """Get the workspace directory for a swarm."""
-    return WORKSPACE_ROOT / "swarm" / swarm_id
+    return WORKSPACE_ROOT / "swarm" / safe_swarm_id(swarm_id)
 
 
 def _agent_dir(swarm_id: str, agent_name: str) -> Path:
     """Get the workspace directory for an agent within a swarm."""
-    # Sanitize agent name for filesystem safety.
-    safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in agent_name)
-    return _swarm_dir(swarm_id) / safe_name
+    return _swarm_dir(swarm_id) / _safe_component(agent_name)
 
 
 def _should_compress(filename: str) -> bool:
@@ -75,11 +95,22 @@ def encode_file(data: bytes, filename: str) -> tuple[str, bool]:
     return base64.b64encode(payload).decode("ascii"), compressed
 
 
-def decode_file(b64_data: str, compressed: bool) -> bytes:
-    """Decode file data from transfer: base64 decode, optionally gunzip."""
+def decode_file(b64_data: str, compressed: bool, max_size: int = 0) -> bytes:
+    """Decode file data from transfer: base64 decode, optionally gunzip.
+
+    Decompression stops at ``max_size`` (default MAX_FILE_SIZE) so a small,
+    highly compressible payload cannot expand into gigabytes in memory.
+    """
+    limit = max_size or MAX_FILE_SIZE
     raw = base64.b64decode(b64_data)
     if compressed:
-        raw = gzip.decompress(raw)
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)  # gzip container
+        out = d.decompress(raw, limit + 1)
+        if len(out) > limit or d.unconsumed_tail:
+            raise ValueError(f"File too large after decompression (max {limit} bytes)")
+        raw = out
+    if len(raw) > limit:
+        raise ValueError(f"File too large: {len(raw)} bytes (max {limit})")
     return raw
 
 
@@ -101,13 +132,21 @@ class FileManager:
         self._root = workspace_root or WORKSPACE_ROOT
 
     def _swarm_dir(self, swarm_id: str) -> Path:
-        return self._root / "swarm" / swarm_id
+        return self._root / "swarm" / safe_swarm_id(swarm_id)
 
     def _agent_dir(self, swarm_id: str, agent_name: str) -> Path:
-        safe_name = "".join(
-            c if c.isalnum() or c in "-_." else "_" for c in agent_name
-        )
-        return self._swarm_dir(swarm_id) / safe_name
+        return self._swarm_dir(swarm_id) / _safe_component(agent_name)
+
+    def _contained(self, swarm_id: str, rel_path: str) -> Path | None:
+        """``rel_path`` under the swarm dir, or None if it escapes (or the id is bad)."""
+        try:
+            base = self._swarm_dir(swarm_id)
+            target = base / rel_path
+            target.resolve().relative_to(base.resolve())
+        except ValueError:
+            log.warning("Path traversal attempt: swarm=%r path=%r", swarm_id, rel_path)
+            return None
+        return target
 
     # ── Store ────────────────────────────────────────────────────
 
@@ -129,8 +168,8 @@ class FileManager:
             )
 
         # Sanitize filename (keep only the basename, no path traversal).
-        safe_filename = Path(filename).name
-        if not safe_filename:
+        safe_filename = Path(filename or "").name
+        if not safe_filename or safe_filename in (".", ".."):
             safe_filename = f"file_{uuid.uuid4().hex[:8]}"
 
         target_dir = self._agent_dir(swarm_id, agent_name)
@@ -139,8 +178,14 @@ class FileManager:
             safe_sub = Path(subfolder)
             # Block absolute paths and parent references.
             if safe_sub.is_absolute() or ".." in safe_sub.parts:
-                safe_sub = Path(safe_sub.name)
+                safe_sub = Path(_safe_component(safe_sub.name))
             target_dir = target_dir / safe_sub
+
+        # Whatever the components said, the file lands inside this swarm's dir.
+        try:
+            (target_dir / safe_filename).resolve().relative_to(self._swarm_dir(swarm_id).resolve())
+        except ValueError:
+            raise ValueError("file path escapes the swarm workspace") from None
 
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / safe_filename
@@ -181,16 +226,8 @@ class FileManager:
 
     def get_file(self, swarm_id: str, rel_path: str) -> bytes | None:
         """Retrieve a file by its relative path within the swarm directory."""
-        target = self._swarm_dir(swarm_id) / rel_path
-
-        # Security: ensure we don't escape the swarm directory.
-        try:
-            target.resolve().relative_to(self._swarm_dir(swarm_id).resolve())
-        except ValueError:
-            log.warning("Path traversal attempt: %s", rel_path)
-            return None
-
-        if not target.is_file():
+        target = self._contained(swarm_id, rel_path)
+        if target is None or not target.is_file():
             return None
 
         return target.read_bytes()
@@ -215,6 +252,10 @@ class FileManager:
 
         If agent_name is provided, only list files from that agent.
         """
+        try:
+            safe_swarm_id(swarm_id)
+        except ValueError:
+            return []
         if agent_name:
             search_dir = self._agent_dir(swarm_id, agent_name)
         else:
@@ -257,10 +298,8 @@ class FileManager:
 
     def delete_file(self, swarm_id: str, rel_path: str) -> bool:
         """Delete a file by relative path."""
-        target = self._swarm_dir(swarm_id) / rel_path
-        try:
-            target.resolve().relative_to(self._swarm_dir(swarm_id).resolve())
-        except ValueError:
+        target = self._contained(swarm_id, rel_path)
+        if target is None:
             return False
 
         if target.is_file():
@@ -271,7 +310,10 @@ class FileManager:
 
     def cleanup_swarm(self, swarm_id: str) -> int:
         """Remove all files for a swarm. Returns count of files deleted."""
-        swarm_dir = self._swarm_dir(swarm_id)
+        try:
+            swarm_dir = self._swarm_dir(swarm_id)
+        except ValueError:
+            return 0
         if not swarm_dir.exists():
             return 0
 
@@ -300,7 +342,10 @@ class FileManager:
 
     def workspace_size(self, swarm_id: str) -> int:
         """Get total size of all files in a swarm workspace."""
-        swarm_dir = self._swarm_dir(swarm_id)
+        try:
+            swarm_dir = self._swarm_dir(swarm_id)
+        except ValueError:
+            return 0
         if not swarm_dir.exists():
             return 0
         return sum(f.stat().st_size for f in swarm_dir.rglob("*") if f.is_file())

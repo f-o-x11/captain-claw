@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
-  LayoutGrid, Gauge, Library, Plug, UserCog, BarChart3, Settings2, LayoutDashboard, MessagesSquare,
+  LayoutGrid, Gauge, Library, Plug, Network, UserCog, BarChart3, Settings2, LayoutDashboard, MessagesSquare,
   Sun, Moon, LogOut, Loader2, Menu, X, type LucideIcon,
 } from 'lucide-react'
 import { useAuthStore, logoutUser, DEFAULT_LOGO } from '../../stores/authStore'
@@ -17,6 +17,7 @@ import { OverviewPage } from './OverviewPage'
 import { ModelsPage } from './ModelsPage'
 import { ArchetypesPage } from './ArchetypesPage'
 import { ConnectionsConsole } from './ConnectionsConsole'
+import { NetworkConsole } from './NetworkConsole'
 import { UsersConsole } from './UsersConsole'
 import { UsageConsole } from './UsageConsole'
 import { SettingsConsole } from './SettingsConsole'
@@ -34,6 +35,7 @@ const NAV: NavItem[] = [
   { id: 'models', icon: Gauge, label: 'Models', hint: 'Tier sets and team keys' },
   { id: 'archetypes', icon: Library, label: 'Archetypes', hint: 'Agents people start from' },
   { id: 'connections', icon: Plug, label: 'Connections', hint: 'Google, Telegram, MCP…' },
+  { id: 'network', icon: Network, label: 'BotPort', hint: 'Connect this deck to other Flight Decks' },
   { id: 'users', icon: UserCog, label: 'Users', hint: 'Accounts, invitations, waitlist', accounts: true },
   { id: 'usage', icon: BarChart3, label: 'Usage & limits', hint: 'Today, spend and plans', accounts: true },
   { id: 'settings', icon: Settings2, label: 'Settings', hint: 'Branding, sign-up, kiosk', soloHint: 'Branding, agents, profile' },
@@ -121,6 +123,7 @@ export function ConsoleLayout() {
           {page === 'models' && <ModelsPage />}
           {page === 'archetypes' && <ArchetypesPage />}
           {page === 'connections' && <ConnectionsConsole />}
+          {page === 'network' && <NetworkConsole />}
           {page === 'users' && <UsersConsole onWaitlistCount={setWaitlist} />}
           {page === 'usage' && <UsageConsole />}
           {page === 'settings' && <SettingsConsole />}

@@ -4,7 +4,6 @@ import { useAuthStore } from '../stores/authStore'
 import { LLM_PROVIDERS, OUTPUT_CTX_OPTIONS } from '../services/tierConfig'
 import { CtxSelect } from '../components/common/CtxSelect'
 import { useIsMobile } from '../hooks/useMediaQuery'
-import { useConnectionStore } from '../stores/connectionStore'
 import { useContainerStore } from '../stores/containerStore'
 import { useProcessStore } from '../stores/processStore'
 import { useUIStore } from '../stores/uiStore'
@@ -97,6 +96,8 @@ const ALL_TOOLS = [
   'typesense', 'datastore', 'personality', 'insights',
   'screen_capture', 'desktop_action', 'direct_api',
   'cron', 'twitter', 'summarize_files', 'termux', 'pinchtab',
+  // The legacy per-agent BotPort link's tool — selectable, never a default
+  // (agents reach other decks through the deck's own link, via flight_deck).
   'botport',
 ]
 
@@ -303,17 +304,15 @@ function generateEnvFile(c: AgentConfig): string {
 // ── Component ──
 
 export function SpawnerPage() {
-  const globalBotportUrl = useConnectionStore((s) => s.botportUrl)
   const { fetchContainers, dockerAvailable, checkHealth } = useContainerStore()
   const { fetchProcesses } = useProcessStore()
   const { isMobile, isTablet } = useIsMobile()
   const compact = isMobile || isTablet
   const [presetsOpen, setPresetsOpen] = useState(false)
   const [spawnMode, setSpawnMode] = useState<'docker' | 'process'>('process')
-  const [config, setConfig] = useState<AgentConfig>(() => ({
-    ...defaultConfig,
-    botportUrl: globalBotportUrl ? globalBotportUrl.replace(/^http/, 'ws') + '/ws' : '',
-  }))
+  // The per-agent BotPort link is legacy (the deck itself links to BotPort):
+  // never pre-filled from the browser's BotPort address.
+  const [config, setConfig] = useState<AgentConfig>(() => ({ ...defaultConfig }))
   const [presets, setPresets] = useState<SavedPreset[]>(loadPresets)
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
   const [saveLabel, setSaveLabel] = useState('')
@@ -439,7 +438,7 @@ export function SpawnerPage() {
   }
 
   const handleNewAgent = () => {
-    setConfig({ ...defaultConfig, botportUrl: globalBotportUrl ? globalBotportUrl.replace(/^http/, 'ws') + '/ws' : '' })
+    setConfig({ ...defaultConfig })
     setActivePresetId(null)
   }
 
@@ -612,7 +611,7 @@ export function SpawnerPage() {
           )}
 
           <HelpHint id="spawner-mode" banner>
-            <strong className="text-zinc-200">Process vs Docker agents</strong> — Local Process agents run directly on your machine via pip — great for development and debugging. Docker agents run in isolated containers with their own environment — better for production and when you need reproducible setups. Both connect to BotPort the same way.
+            <strong className="text-zinc-200">Process vs Docker agents</strong> — Local Process agents run directly on your machine via pip — great for development and debugging. Docker agents run in isolated containers with their own environment — better for production and when you need reproducible setups. Either kind can work with agents on other Flight Decks through this deck's own BotPort link — no per-agent BotPort setup needed.
           </HelpHint>
 
           {/* Save dialog */}
@@ -783,7 +782,10 @@ export function SpawnerPage() {
             </Section>
 
             {/* BotPort */}
-            <Section title="BotPort Connection" expanded={expandedSections.botport} onToggle={() => toggleSection('botport')}>
+            <Section title="Direct BotPort link (legacy)" expanded={expandedSections.botport} onToggle={() => toggleSection('botport')}>
+              <p className="text-xs text-zinc-500">
+                Agents reach other Flight Decks through this deck's BotPort link (Admin console → BotPort). This per-agent link is only for old setups.
+              </p>
               <label className="mb-3 flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={config.botportEnabled} onChange={(e) => update('botportEnabled', e.target.checked)} className="accent-violet-500" />
                 <span className="text-zinc-300">Enable BotPort connection</span>

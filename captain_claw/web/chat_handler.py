@@ -1468,6 +1468,15 @@ async def _maybe_run_flow(
     return None
 
 
+def remote_lane_denies(lane: str | None) -> list[str]:
+    """Tools a remote-deck lane ("BP…") never gets — see WebServer.REMOTE_LANE_DENY."""
+    from captain_claw.web_server import WebServer
+
+    if str(lane or "").upper().startswith(WebServer.REMOTE_LANE_PREFIX):
+        return list(WebServer.REMOTE_LANE_DENY)
+    return []
+
+
 async def _run_agent(
     server: WebServer,
     ws: web.WebSocketResponse,
@@ -1659,6 +1668,9 @@ async def _run_agent(
                 pass
 
         _deny_tools: list[str] = list(deny_tools or [])  # caller-requested (e.g. consult)
+        # Another Flight Deck's request (BotPort): enforced here, whatever the
+        # deck that relayed it asked for.
+        _deny_tools += remote_lane_denies(lane)
         if video_attachments:
             _deny_tools += ["scripts", "shell"]
         # NB: image turns deliberately do NOT deny tools. The description is injected
