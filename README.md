@@ -4,27 +4,35 @@
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENCE)
-[![Version](https://img.shields.io/badge/version-0.8.0-purple)](release-notes/RELEASE_NOTES_0.8.0.md)
+[![Version](https://img.shields.io/badge/version-0.8.1-purple)](release-notes/RELEASE_NOTES_0.8.1.md)
 [![Interface](https://img.shields.io/badge/interface-terminal%20%7C%20web%20UI%20%7C%20desktop-black)](#quick-start)
 [![Models](https://img.shields.io/badge/models-OpenAI%20%7C%20Claude%20%7C%20Gemini%20%7C%20DeepSeek%20%7C%20Ollama%20%7C%20OpenRouter-orange)](#multi-model-support)
 
-> Most AI tools give you one agent in a chat box. Captain Claw **Flight Deck** is a multi-agent command center — spawn specialist teams, run **seven orchestration modes**, ship software with **Code** (a plan → build → independent-review pipeline), and compose deterministic **Flows**. Self-hosted, MIT licensed, and works with every major LLM provider (or 100% local with Ollama). And since **0.8.0**: safe for a **whole team**, with agents in your **inbox**, on your **glasses**, and in your pocket on an **M5Stack** you talk to.
+> Most AI tools give you one agent in a chat box. Captain Claw **Flight Deck** is a multi-agent command center — spawn specialist teams, run **seven orchestration modes**, ship software with **Code** (a plan → build → independent-review pipeline), and compose deterministic **Flows**. Self-hosted, MIT licensed, and works with every major LLM provider (or 100% local with Ollama). Since **0.8.0** it is safe for a **whole team**, with agents in your **inbox** and on your **glasses** — and **0.8.1** gives that team a complete **kiosk** and three **M5Stack** devices you talk to.
 
-**[🌐 Website](https://captain-claw.com)** · **[🚀 Live Demo](https://cohort001.captain-claw.com/)** · **[📖 Docs](https://captain-claw.com/docs)** · **[📦 PyPI](https://pypi.org/project/captain-claw/)** · **[📝 0.8.0 release notes](release-notes/RELEASE_NOTES_0.8.0.md)**
+**[🌐 Website](https://captain-claw.com)** · **[🚀 Live Demo](https://cohort001.captain-claw.com/)** · **[📖 Docs](https://captain-claw.com/docs)** · **[📦 PyPI](https://pypi.org/project/captain-claw/)** · **[📝 0.8.1 release notes](release-notes/RELEASE_NOTES_0.8.1.md)**
 
 ![Flight Deck — spawn a team of specialists, monitor them live, and chat with any one from a single dashboard](docs/screenshots/flight-deck.png)
 
-<p align="center"><strong>7 orchestration modes</strong> &nbsp;·&nbsp; <strong>51 built-in tools</strong> per agent &nbsp;·&nbsp; <strong>6 shared memory layers</strong> &nbsp;·&nbsp; <strong>31 ready-made specialists</strong> &nbsp;·&nbsp; <strong>a full coding pipeline</strong> &nbsp;·&nbsp; <strong>a team-safe deck</strong> &nbsp;·&nbsp; <strong>a voice client in your pocket</strong> &nbsp;·&nbsp; <strong>living beings you raise</strong> &nbsp;·&nbsp; <strong>small models that do real work</strong></p>
+<p align="center"><strong>7 orchestration modes</strong> &nbsp;·&nbsp; <strong>57 built-in tools</strong> per agent &nbsp;·&nbsp; <strong>6 shared memory layers</strong> &nbsp;·&nbsp; <strong>31 ready-made specialists</strong> &nbsp;·&nbsp; <strong>a full coding pipeline</strong> &nbsp;·&nbsp; <strong>a team-safe deck and kiosk</strong> &nbsp;·&nbsp; <strong>three M5Stack voice devices</strong> &nbsp;·&nbsp; <strong>living beings you raise</strong> &nbsp;·&nbsp; <strong>small models that do real work</strong></p>
 
-A **self-hosted framework for orchestrating fleets of specialist AI agents** — from **ensemble reasoning** (seven orchestration modes) to a **full agentic coding pipeline** (plan → independent review → ship). Model-agnostic and local-friendly: connect OpenAI, Anthropic, Google Gemini, DeepSeek, Ollama, or OpenRouter (plus "Sign in with ChatGPT" and Google subscription text through the Antigravity CLI — no API key), or run 100% local with Ollama. Backed by 51 built-in tools per agent, persistent cross-session memory, and autonomous "dream cycle" cognition.
+A **self-hosted framework for orchestrating fleets of specialist AI agents** — from **ensemble reasoning** (seven orchestration modes) to a **full agentic coding pipeline** (plan → independent review → ship). Model-agnostic and local-friendly: connect OpenAI, Anthropic, Google Gemini, DeepSeek, Ollama, or OpenRouter (plus "Sign in with ChatGPT" and Google subscription text through the Antigravity CLI — no API key), or run 100% local with Ollama. Backed by 57 built-in tools per agent, persistent cross-session memory, and autonomous "dream cycle" cognition.
 
-### 🎙️ NEW in 0.8.0: hold the button, talk, your agent answers
+### 🎙️ NEW in 0.8.1: three devices that listen — and keep notes when you're offline
 
-[![M5Stack StopWatch running Captain Claw — home, listening, working with live agent activity, the spoken reply, icon mode, and a picture the agent made](docs/screenshots/stopwatch-screens.png)](firmware/device/README.md)
+[![M5Stack StopWatch running Captain Claw — the clock face with the agent's character, listening, working, an answer whose spoken sentence is lit, a background picture, and the info page](docs/screenshots/stopwatch-screens.png)](firmware/device/README.md)
 
-A push-to-talk Captain Claw client on an **M5Stack StickS3** (240×135 LCD, one button to talk) or **StopWatch** (466×466 round AMOLED with a status ring, a clock and a buzz before it speaks). Hold, talk, release: Flight Deck transcribes it, one of your agents answers, and the device shows the reply, reads it aloud, and shows any picture the agent made — with the agent's **live activity** ("`google_calendar · list events`", "12s · 3 steps") while it works. Pick the agent from the device, replay the last answer from memory, choose one of **18 animated characters** instead of text, and take **signed over-the-air updates** from your own deck. One firmware tree builds both: `cd firmware/device && pio run -e sticks3 -t upload` (or `-e stopwatch`). Setup is a hotspot and a QR code. Details in [firmware/device/README.md](firmware/device/README.md).
+[![M5Stack PaperColor running Captain Claw — the e-paper dashboard with the clock, room climate, battery and voice notes, and an answer](docs/screenshots/papercolor-screens.png)](firmware/device/README.md)
 
-**The rest of 0.8.0** — the biggest release since Flight Deck — is about putting agents in front of other people: a deck that is **safe for a team** (every route knows who is calling, per-user Google and Microsoft, admin-managed users, team keys, shared agents, a chat-first **kiosk mode**), **agents in your inbox** (Microsoft 365, gated Gmail sending, attachments, filing, Sheets and Docs edited in place, topic auto-replies) behind guards that stop them inventing a send, a **Flight Deck HUD for Meta Ray-Ban Display**, **Claude driving your fleet over MCP**, and **Bat**, a mode that keeps going until an independent judge says the work is done. See [What's New in 0.8.0](#whats-new-in-080).
+Push-to-talk Captain Claw clients on three M5Stack devices — the **StickS3** (240×135 LCD), the **StopWatch** (466×466 round AMOLED with a clock face, touch and vibration) and the **PaperColor** (a 4" colour e-paper dashboard with two status lights and a room sensor). Press, talk, press again — or just stop talking: Flight Deck transcribes it, one of your agents answers, and the device **speaks the answer sentence by sentence while the model is still writing it**, the text following the voice. Out of Wi-Fi it keeps **voice notes** and sends them when the deck is back; hold the button for **note-taking mode**. Every question carries the battery, the room's temperature and the local time; the watch wears any picture you send the agent as its background; and all three take **signed over-the-air updates** from your own deck. One firmware tree: `cd firmware/device && pio run -e stopwatch -t upload` (or `-e sticks3`, `-e papercolor_b`). Details in [firmware/device/README.md](firmware/device/README.md).
+
+### 🧭 NEW in 0.8.1: a kiosk for everyone
+
+[![The kiosk — an agent greets you with its skill cards; File library, Data library and Scheduled tasks tiles on the left](docs/screenshots/kiosk-chat.webp)](#whats-new-in-081)
+
+The chat-first view your team's non-admins live in is now a complete place to work: a **getting-started guide**, one-click **"What can I do?" skill cards**, a **File library** and a **Data library** that summarise everything the agents keep, **Scheduled tasks** that deliver to chat, email or Telegram, one **timeline** per agent with named topics, a **reasoning-effort** picker, and a ⋯ menu per agent for its model, instructions and settings. Admins get an **Admin console**, invitations by email, a waitlist that answers applicants, branding and daily plan limits. See [What's New in 0.8.1](#whats-new-in-081).
+
+**0.8.0**, the release before, made Flight Deck safe for a team (every route knows who is calling, per-user Google and Microsoft, shared agents, team keys), put **agents in your inbox** behind guards that stop them inventing a send, added a **HUD for Meta Ray-Ban Display**, **Claude driving your fleet over MCP**, and **Bat**, a mode that keeps going until an independent judge says the work is done. See [What's New in 0.8.0](#whats-new-in-080).
 
 ### 💻 Code — an engineering department, not a coding assistant
 
@@ -74,6 +82,35 @@ Captain Claw is **MIT licensed and free forever** — your data stays on your ma
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=kstevica/captain-claw&type=Date)](https://star-history.com/#kstevica/captain-claw&Date)
+
+## What's New in 0.8.1
+
+**A kiosk for everyone · devices that listen.** 121 merged PRs in the nine days after 0.8.0. **Before you upgrade a team deck:** daily plan limits are on by default (free: 30 messages and 300k tokens a UTC day; admins exempt) and MCP servers become private to whoever added them — see the [upgrade checklist](release-notes/RELEASE_NOTES_0.8.1.md#upgrading).
+
+- **The kiosk, a complete place to work** — a Getting started guide with real screenshots; a bigger chat that greets you with the agent's **skill cards** ("What can I do?", up to 22 per agent, some asking for a file or a picture first); a **reasoning-effort** picker with exactly the levels the agent's model has; one **timeline** per agent with topics the agent names, a Topics menu and a `sessions` tool; a **File library** (every agent file summarised, categorised, searchable and previewed — pictures described, recordings transcribed) and a **Data library** (datastore tables profiled, summarised, browsable, exportable); **Scheduled tasks** delivering to chat, email or Telegram; a ⋯ menu per agent (Info, Instructions, Settings for model, key, vision, thinking and effort, Remove); a new agent picker; a readable message queue; a phone layout.
+- **Running a deck for people** — an **Admin console** at `<deck>/console`; a Users page with **invitations by email** and a **waitlist** that emails approved applicants; admin-set and self-service passwords; branding; **daily plan limits** (prompt-cache reads don't count) with free resets; MCP servers private to their owner and MCP OAuth with Dynamic Client Registration; **public file links**; a desktop app that opens on the console or the kiosk.
+- **Devices** — the **StopWatch** and the **PaperColor** join the StickS3 (below).
+- **One conversation across every channel** — every message records its source and the model reads `[via WhatsApp] …`; the owner's Telegram joins the main conversation; Telegram gains a team bot, live narration, voice and video, a read-only **inbox** and **groups**; Soniox keys live in Flight Deck and the `audio` tool speaks and transcribes.
+- **Agents** — **native vision** (pictures go straight to a model that sees them), an always-on everyday toolset, Jev extending turns that are still making progress, and chats that ride out a deck restart.
+- **Payments**, opt-in and off by default — barcodes for your bank app, Revolut drafts, pay-by-bank links, one-time cards, bank-statement matching, reminders and recurring bills. Captain never moves money.
+
+#### Three devices, one firmware
+
+| | StickS3 | StopWatch | PaperColor |
+|---|---|---|---|
+| screen | 240×135 LCD | 466×466 round AMOLED, touch | 4" E Ink Spectra 6, six inks |
+| talk | front button | yellow button, or the on-screen record button | A (B build) / C (A build) |
+| extras | 18 animated characters | clock face, raise to wake, vibration, background picture, info page | two status lights, room sensor, microSD notes, a dashboard every five minutes |
+| build | `pio run -e sticks3` | `pio run -e stopwatch` | `pio run -e papercolor_b` (or `papercolor`) |
+
+- **Signed over-the-air updates** from your own deck (`tools/publish.py`), rolled back if a build can't reach the deck within 90 s.
+- **Press to talk, press again — or just stop talking** (2.5 s of quiet sends it), with blips and chimes; the PaperColor records straight from sleep.
+- **Answers as they're written** — spoken sentence by sentence while the model is still writing; the lit sentence and the pages follow the voice; pause, replay, stop.
+- **Offline voice notes** (ADPCM in flash, or on the PaperColor's microSD) sent as one turn once the deck is back, and a **note-taking mode** for a run of notes.
+- **Context with every question** — battery and time left, Wi-Fi, motion, room temperature and humidity, local time, as a `[Context: …]` line the model reads.
+- **"Volume up", "beep off"** handled by the deck, never sent to the agent; a turn survives a dropped link.
+
+See [RELEASE_NOTES_0.8.1.md](release-notes/RELEASE_NOTES_0.8.1.md).
 
 ## What's New in 0.8.0
 
@@ -466,10 +503,11 @@ flight-deck        # http://0.0.0.0:25080   (alias: captain-claw-fd; add --simpl
 - **Agent Council** — Structured multi-agent deliberation. Run brainstorms, debates, reviews, or planning sessions with 2-N agents. Each agent self-scores suitability, chooses actions (answer, challenge, refine, broaden), and responds in moderated rounds. A moderator synthesizes conclusions; all agents vote. Export as markdown minutes.
 - **Fleet Communication** — Agents discover peers automatically. Consult (synchronous ask) or delegate (asynchronous queue) tasks to specialist agents. Shared workspace and file transfer across the fleet.
 - **Director Panel** — Unified overview of all agents. Broadcast messages fleet-wide. Per-agent token/cost analytics, trace timelines, datastore browser, file browser, config editor.
-- **Simple layout & kiosk** (0.8.0) — A chat-first view (Cmd/Ctrl+\): agents with a busy pill and power switch on the left, chat with sessions as tabs and a plannable queue in the middle, the agent's files and datastore on the right, the same chat on a phone. `--simple-chat` locks non-admins into it on a shared machine, with an archetype picker, their own Connections in a dialog, and a clean sign-out.
+- **Simple layout & kiosk** (0.8.0, grown up in 0.8.1) — A chat-first view (Cmd/Ctrl+\): agents with a busy pill and power switch on the left, one timeline per agent with named topics in the middle, a phone layout of its own. An admin picks who is locked into it (everyone, selected users, new users). Kiosk users get a getting-started guide, "What can I do?" skill cards, a File library and a Data library, Scheduled tasks, a reasoning-effort picker, a ⋯ menu per agent, an archetype picker for new agents, their own Connections and a clean sign-out.
+- **Admin console** (0.8.1) — `<deck>/console/<page>`: an overview with a setup checklist, model tier sets and team keys, archetypes, deck-wide connections, users with invitations and the waitlist, usage and daily plan limits, branding and sign-up settings. Admins start there.
 - **Connections** — One tab per service: Google, Microsoft, ChatGPT, Antigravity, MCP Servers, WhatsApp, Telegram, Deep memory, Jev — each person connects their own accounts, and an agent only ever gets its owner's token. *Agent access for Claude (MCP)* issues the personal access tokens the HUD and the devices use too.
 - **Bat** (0.8.0) — A durable "stubborn finisher": plans, runs checkpointed steps with retries, survives restarts, and stops only when an independent judge says the task is done — behind a hard safety floor and a start gate for email, spending and accounts.
-- **Multi-user Auth & teams** — JWT authentication, admin dashboard, rate limiting, and quotas; owner-scoped routes, per-user Google/Microsoft, team tier sets, shared agents, and a `--simple-chat` kiosk mode (0.8.0).
+- **Multi-user Auth & teams** — JWT authentication, admin dashboard, rate limiting, and quotas; owner-scoped routes, per-user Google/Microsoft, team tier sets, shared agents, and a kiosk mode (0.8.0); invitations by email, a waitlist, password changes, branding and daily plan limits per user (0.8.1).
 - **MCP Connections** — Add Model Context Protocol servers (HTTP or stdio) once and every entitled agent in the fleet picks up their tools — no per-agent config. Phase 2 adds stdio transport for `npx`/`uvx`-shipped servers, per-agent allowlists, hot tool-list reload over SSE, and streaming tool calls.
 
 ### Cognitive Architecture
@@ -562,10 +600,11 @@ Guards support two modes: `stop_suspicious` (block automatically) or `ask_for_ap
 
 The same agents, the same conversation, from wherever you are:
 
-- **M5Stack StickS3 / StopWatch** (0.8.0) — push-to-talk voice clients; see [above](#in-your-pocket-m5stack-sticks3-and-stopwatch) and [firmware/device/README.md](firmware/device/README.md).
+- **M5Stack StickS3 / StopWatch / PaperColor** — push-to-talk voice clients that speak answers as they're written, keep voice notes offline and update over the air; see [above](#three-devices-one-firmware) and [firmware/device/README.md](firmware/device/README.md).
 - **Meta Ray-Ban Display HUD** (0.8.0) — a lean Flight Deck at `/hud/` built for a 600×600 display: chat with your agents (approvals, Stop, read-aloud), read their Markdown files, browse the datastore; about 150 KB on the wire, paired with a code you approve at `/hud/pair`. [docs/glasses-hud.md](docs/glasses-hud.md)
 - **WhatsApp** — a two-way personal-assistant bridge (Meta Cloud API). Every file you send reaches the agent — documents, albums, stickers, voice notes transcribed; agents send pictures, video, audio and documents back and deliver what a turn made once the reply is out. Messages sent while the agent is busy are retried in order, every message gets a reaction, `/new` answers.
-- **Telegram** — a native bot with photos, documents, contacts and live narration; `/new` starts a fresh session; a team can share one bot, each member relayed to their own agent after admin approval.
+- **Telegram** — a native bot with photos, documents, contacts, voice notes, audio and video, and live narration; `/new` starts a fresh session; a team can share one bot, each member relayed to their own agent after admin approval; the owner's own chat continues the main conversation; agents read a read-only **Telegram inbox** and join **groups** through the bot's add-to-group link (0.8.1).
+- **One conversation** (0.8.1) — every message records where it came from; the model reads `[via WhatsApp] …`, the kiosk shows *via M5Stack StickS3 (desk)*.
 - **Claude** — Flight Deck is an MCP server at `/fd/mcp-server` (OAuth 2.1 for claude.ai and Claude Desktop, a personal access token for Claude Code): `list_agents`, `send_task`, `get_result`, `cancel_task`, `jev_ask`.
 - **Slack, Discord, Twitter/X** — message and thread handling, channels and DMs, and an OAuth 2.0 `twitter` tool.
 
@@ -622,19 +661,19 @@ First run starts onboarding automatically. For Ollama, no key needed — set `pr
 FD_AUTH_ENABLED=true FD_JWT_SECRET=$(openssl rand -hex 32) FD_PUBLIC_URL=https://deck.example.com flight-deck
 ```
 
-**Talk to it from your pocket** — flash an M5Stack StickS3 or StopWatch (the deck needs a Soniox key, in Connections → Soniox or as the admin's team key):
+**Talk to it from your pocket or your desk** — flash an M5Stack StickS3, StopWatch or PaperColor (the deck needs a Soniox key, in Connections → Soniox or as the admin's team key):
 
 ```bash
 uv tool install platformio
 cd firmware/device
-pio run -e sticks3 -t upload       # or: -e stopwatch
+pio run -e stopwatch -t upload     # or: -e sticks3, -e papercolor_b
 ```
 
 Then join the device's hotspot, open `http://192.168.4.1`, enter your Wi-Fi, the deck address and an access token from Connections → *Agent access for Claude (MCP)*. See [firmware/device/README.md](firmware/device/README.md).
 
-## 51 Built-in Tools
+## 57 Built-in Tools
 
-Shell, file I/O, web fetch/search, browser automation, PDF/DOCX/XLSX/PPTX extraction, image generation (DALL-E), OCR, vision, TTS, STT, email (SMTP/Mailgun/SendGrid), Google Workspace (Drive, Docs, Sheets, Slides, Gmail, Calendar), Microsoft 365 (Outlook mail, Calendar, OneDrive), Jev calibrated judgments (TypeSafe AI), WhatsApp file delivery, intentions (proactive future actions), desktop automation, screen capture with voice commands, persistent cross-session memory (todos, contacts, scripts, APIs, playbooks), datastore (SQLite tables with protection rules), deep memory (Typesense), Basna (read and start multi-agent ensemble runs), personality system, cron scheduling, BotPort fleet discovery, and Termux (Android).
+Shell, file I/O, web fetch/search, browser automation, PDF/DOCX/XLSX/PPTX extraction, image generation (DALL-E), OCR, vision, TTS, STT, email (SMTP/Mailgun/SendGrid), Google Workspace (Drive, Docs, Sheets, Slides, Gmail, Calendar), Microsoft 365 (Outlook mail, Calendar, OneDrive), Jev calibrated judgments (TypeSafe AI), Soniox speech in and out (`audio`), public file links, topic switching by asking (`sessions`), a read-only Telegram inbox, the StopWatch's background picture, bill payments (opt-in), WhatsApp file delivery, intentions (proactive future actions), desktop automation, screen capture with voice commands, persistent cross-session memory (todos, contacts, scripts, APIs, playbooks), datastore (SQLite tables with protection rules), deep memory (Typesense), Basna (read and start multi-agent ensemble runs), personality system, cron scheduling, BotPort fleet discovery, and Termux (Android).
 
 See [USAGE.md](USAGE.md#tools-reference) for the full reference.
 
@@ -693,10 +732,15 @@ Full reference: [USAGE.md](USAGE.md#configuration-reference) (23 config sections
 |---|---|
 | Agent (14-mixin composition) | `captain_claw/agent.py` |
 | LLM providers | `captain_claw/llm/` |
-| 51 tools + registry | `captain_claw/tools/` |
+| 57 tools + registry | `captain_claw/tools/` |
 | Flight Deck (FastAPI + React) | `captain_claw/flight_deck/` |
-| Device bridge (StickS3 / StopWatch, `/device/ws`) + OTA store | `captain_claw/flight_deck/device_bridge.py`, `device_firmware.py` |
-| Device firmware (PlatformIO, both devices) | `firmware/device/` |
+| Device bridge (StickS3 / StopWatch / PaperColor, `/device/ws`) + OTA store + backgrounds | `captain_claw/flight_deck/device_bridge.py`, `device_firmware.py`, `device_backgrounds.py` |
+| Device firmware (PlatformIO, all three devices) | `firmware/device/` |
+| Kiosk File and Data libraries | `captain_claw/flight_deck/file_library.py`, `data_library.py` |
+| Scheduled tasks | `captain_claw/flight_deck/fd_scheduler.py` |
+| Admin console | `flight-deck/src/components/console/` |
+| Reasoning effort per vendor | `captain_claw/llm/reasoning.py` |
+| Payments (opt-in) | `captain_claw/payments/` |
 | HUD for smart glasses (`/hud/`) | `flight-deck/src/hud/` |
 | Bat (plan, loop, judge, store) | `captain_claw/flight_deck/bat_*.py` |
 | Fabrication guard | `captain_claw/fabrication_guard.py` |
@@ -719,9 +763,10 @@ Full reference: [USAGE.md](USAGE.md#configuration-reference) (23 config sections
 - **[README_DETAILED.md](README_DETAILED.md)** — Extended README with feature-by-feature breakdown
 - **[docs/team-deployment.md](docs/team-deployment.md)** — Running Flight Deck for a team: multi-user security, sharing, team keys, inbound MCP for Claude, Gmail sending
 - **[docs/glasses-hud.md](docs/glasses-hud.md)** — The Flight Deck HUD for Meta Ray-Ban Display smart glasses (`/hud`)
-- **[firmware/device/README.md](firmware/device/README.md)** — The M5Stack StickS3 and StopWatch push-to-talk voice clients: setup, buttons, build and flash, over-the-air updates
-- **[release-notes/RELEASE_NOTES_0.8.0.md](release-notes/RELEASE_NOTES_0.8.0.md)** — Everything in 0.8.0, with the upgrade checklist and the new settings table
-- **[captain-claw.com/docs](https://captain-claw.com/docs)** — The same documentation as a website, with a devices section and the 0.8.0 settings
+- **[firmware/device/README.md](firmware/device/README.md)** — The M5Stack StickS3, StopWatch and PaperColor push-to-talk voice clients: setup, buttons, build and flash, over-the-air updates
+- **[release-notes/RELEASE_NOTES_0.8.1.md](release-notes/RELEASE_NOTES_0.8.1.md)** — Everything in 0.8.1 (the kiosk, the admin console, three devices), with the upgrade checklist and the new settings table
+- **[release-notes/RELEASE_NOTES_0.8.0.md](release-notes/RELEASE_NOTES_0.8.0.md)** — Everything in 0.8.0, with its upgrade checklist
+- **[captain-claw.com/docs](https://captain-claw.com/docs)** — The same documentation as a website, with a devices section and the 0.8.1 settings
 - **[FLOWS.md](FLOWS.md)** — The Flow language reference (triggers, every step type, templating, the value language, scheduling, a cookbook, and worked examples)
 - **[.claude/skills/flow-builder/SKILL.md](.claude/skills/flow-builder/SKILL.md)** — A portable **flow-builder skill** for AI coding assistants (Claude Code, Codex, …): point your agent at it to author/edit/debug flows in the DSL correctly
 

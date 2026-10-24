@@ -96,13 +96,32 @@ For a quick overview and installation guide, see [README.md](README.md).
   - [Suggested Next Steps](#suggested-next-steps)
   - [Public Mode](#public-mode)
 - [Web UI](#web-ui)
+- [Flight Deck](#flight-deck)
+  - [Public file links](#public-file-links--new-in-081)
+- [Kiosk (Simple Layout)](#kiosk-simple-layout)
+  - [The agent menu](#the-agent-menu--new-in-081)
+  - [The chat timeline](#the-chat-timeline-topics-and-other-channels--new-in-081)
+  - [File library](#file-library--new-in-081)
+  - [Data library](#data-library--new-in-081)
+  - [Scheduled tasks](#scheduled-tasks--new-in-081)
+  - [Desktop app mode](#desktop-app-mode--new-in-081)
+- [Deck Administration — NEW in 0.8.1](#deck-administration--new-in-081)
+  - [Admin console](#admin-console)
+  - [Daily plan limits and free resets](#daily-plan-limits-and-free-resets)
 - [Remote Integrations](#remote-integrations)
   - [Telegram: Per-User Sessions](#telegram-per-user-sessions)
+  - [Telegram: the Team Bot](#telegram-the-team-bot--new-in-081)
 - [Glasses Bridge (Meta Ray-Ban Display)](#glasses-bridge-meta-ray-ban-display)
+- [M5Stack Voice Devices (StickS3, StopWatch, PaperColor)](#m5stack-voice-devices-sticks3-stopwatch-papercolor)
+- [WhatsApp Bridge](#whatsapp-bridge)
 - [OpenAI-Compatible API Proxy](#openai-compatible-api-proxy)
 - [MCP Server](#mcp-server)
 - [Google OAuth, Drive, Calendar, and Gmail](#google-oauth-drive-calendar-and-gmail)
+- [Microsoft 365 (Outlook, Calendar, OneDrive)](#microsoft-365-outlook-calendar-onedrive--new-in-080)
 - [Send Mail](#send-mail)
+- [Payments (bill pay and purchases) — NEW in 0.8.1](#payments-bill-pay-and-purchases--new-in-081)
+- [Native Vision — NEW in 0.8.1](#native-vision--new-in-081)
+- [Reasoning Effort — NEW in 0.8.1](#reasoning-effort--new-in-081)
 - [Termux](#termux)
 - [Prompt Caching](#prompt-caching)
 - [LLM Usage Dashboard](#llm-usage-dashboard)
@@ -784,7 +803,7 @@ Speech-to-text and text-to-speech with Soniox. The tool appears on its own as so
 | `language` | string | no | speak: ISO code of the text's language (default `en`) |
 | `output_path` | string | no | speak: file name, kept under `saved/media/<session-id>/` as `.mp3` |
 
-`speak` saves an MP3 and reports it on a `Path:` line, so it is delivered like `pocket_tts` audio: WhatsApp and Telegram send it, the StickS3 / StopWatch play it, and the web chat shows a player. `transcribe` reports its input as `Source:`, so the user's own recording is never sent back. A transcript over 30,000 characters is also saved as a `.txt` next to the session's media.
+`speak` saves an MP3 and reports it on a `Path:` line, so it is delivered like `pocket_tts` audio: WhatsApp and Telegram send it, the [M5Stack voice devices](#m5stack-voice-devices-sticks3-stopwatch-papercolor) play it, and the web chat shows a player. `transcribe` reports its input as `Source:`, so the user's own recording is never sent back. A transcript over 30,000 characters is also saved as a `.txt` next to the session's media.
 
 When a chat user asks for a spoken reply and the agent made none, the chat bridge speaks the reply itself: with `audio` when Soniox is connected, else with `pocket_tts`.
 
@@ -933,7 +952,7 @@ Question types:
 
 Good uses: triage and routing, classification, relevance filtering, checking a claim against a source, rating against a rubric. Write literal, specific questions (Jev reads them literally; English works best) and give options and levels real descriptions. Jev is not for math, counting, date arithmetic or writing text.
 
-**Where the key lives.** Under Flight Deck each user adds their own key in **Connections → Jev** (from [console.typesafe.ai/keys](https://console.typesafe.ai/keys)); the key stays in Flight Deck. The agent asks Flight Deck (`/fd/jev/agent/*`), which calls Jev with the agent **owner's** key. Standalone, the agent calls Jev itself with `tools.jev.api_key`, or the `JEV_API_KEY` / `TYPESAFE_API_KEY` environment variable. The tool is hidden from the agent until a key is usable. It is owner-only: a shared agent's members never get it.
+**Where the key lives.** Under Flight Deck each user adds their own key in **Connections → Jev** (from [console.typesafe.ai/keys](https://console.typesafe.ai/keys)); the key stays in Flight Deck. Since 0.8.1 an admin can also share one **team key** in **Admin → Integrations** for everyone without their own (a user's own key wins; the status says `own` or `shared`). The agent asks Flight Deck (`/fd/jev/agent/*`), which calls Jev with the agent **owner's** key, else the team key. Standalone, the agent calls Jev itself with `tools.jev.api_key`, or the `JEV_API_KEY` / `TYPESAFE_API_KEY` environment variable. The tool is hidden from the agent until a key is usable. It is owner-only: a shared agent's members never get it.
 
 ```yaml
 tools:
@@ -1402,6 +1421,46 @@ Record and manage **intentions** — future actions under consideration. `origin
 
 Decisions can also be resolved from the **Intentions** panel on each agent card in Flight Deck (Approve / Decline / Later / Stop).
 
+### public_link — NEW in 0.8.1
+
+Publish one of the agent's files as a public link, the way a file's Share button does (see [Public file links](#public-file-links--new-in-081)): Flight Deck takes the file from the calling agent, keeps a snapshot, and returns `<deck>/s/<token>`, which anyone holding it can open without signing in. The link belongs to the agent's owner and shows in their Share dialog. Needs Flight Deck.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `share` (publish the file, or refresh its copy under the same URL), `unshare`, `list` (this agent's links with their view counts) |
+| `path` | string | share / unshare | The file — a path as the agent knows it, or just its file name |
+| `expires_days` | integer | no | share: `0` (never), `1`, `7` or `30`. Left out, an existing link keeps its expiry and a new one never expires |
+| `token` | string | no | unshare: the link's token from `list`, instead of `path` |
+
+A person's turn may share. An automated turn (cron, scheduled task, flow, autonomy, workers, beings) may share only when its own job text asks for a link. Secret-looking files, databases and data folders are refused before anything is sent. Shared-agent members can't reach the tool. The result tells the model to give the user the URL exactly as returned, and flags a link that only works locally (the deck knows no public address). For a whole folder or website, use **Hosting** instead.
+
+### sessions — NEW in 0.8.1
+
+The user's conversation topics (sessions), and the way to move between them by asking — "go back to the Rome trip", "what were we talking about before?", "start a new topic" — on a surface with no Topics menu (WhatsApp, a voice device, the glasses). Always on.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `list` (recent topics: number, title, turns, when, which is current), `switch`, `new` |
+| `topic` | string | switch | The topic's number from the list (`#2`), words from its title, or its id |
+| `name` | string | no | new: an optional name for the topic |
+
+A switch or a new topic takes effect after the reply and is announced like `/session switch` and `/new`, so the web timeline draws its divider, the HUD reopens, and chat bridges re-send their rules. The agent never switches on its own initiative. Refused for a shared agent's members, and for Telegram users other than the owner (each has one session there; `/new` starts a fresh one). The tool is named `sessions` because `topics` is the conversation-topic memory.
+
+### watch_background — NEW in 0.8.1
+
+Set the picture behind every screen of the owner's M5Stack StopWatch, or clear it back to black. Flight Deck crops the picture to the round screen, keeps it per owner and device kind, and sends it to the watch now or on its next connect (`POST /fd/device/agent/background`). See [M5Stack Voice Devices](#m5stack-voice-devices-sticks3-stopwatch-papercolor).
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `set` or `clear` |
+| `path` | string | set | The picture: one the user sent, or one the agent saved or made (JPEG, PNG, WebP, GIF, BMP, HEIC or TIFF, up to 20 MB) |
+
+Needs Flight Deck. Not available to shared-agent members.
+
+### payments — NEW in 0.8.1
+
+Prepare a bill for the user to pay in their own bank app, and (later phases) buy from a shop with a one-time card the user approves. Captain never moves money and never takes card numbers. The tool is hidden unless the deck runs with `FD_PAYMENTS=1`. Actions: `prepare`, `handoff`, `mark`, `list`, `get`, `remind`, `recurring`, `purchase`, `checkout_pay`, `checkout_check`. See [Payments](#payments-bill-pay-and-purchases--new-in-081).
+
 ---
 
 ## Presentation Control (Decks)
@@ -1538,6 +1597,8 @@ model:
   max_tokens: 32000               # max generation tokens
   api_key: ""                     # API key (or use env vars)
   base_url: ""                    # custom endpoint URL
+  vision: "auto"                  # NEW in 0.8.1: auto | on | off — does this model see images inline?
+                                  # (each allowed model takes its own `vision` too; see Native Vision)
   allowed:                        # models available for /session model
     - id: "chatgpt-fast"
       provider: "openai"
@@ -1560,6 +1621,10 @@ model:
 **Provider aliases:** `chatgpt` = `openai`, `claude` = `anthropic`, `google` = `gemini`.
 
 **Model types:** `llm` (default), `image` (for `image_gen`), `vision` (for `image_vision` and `image_ocr`), `ocr` (for `image_ocr` only).
+
+**Vision (NEW in 0.8.1):** with `vision` on (or `auto` for a known multimodal family), the turn's pictures go to the model itself as image parts; a `model_type: vision` model is then only the fallback. See [Native Vision](#native-vision--new-in-081).
+
+**Reasoning effort (NEW in 0.8.1):** set per message from the chat box and per source in `~/.captain-claw/reasoning_effort.json`, not in this block. See [Reasoning Effort](#reasoning-effort--new-in-081).
 
 **Modes:** an agent can run in `standard` (default), `eco`, or `nano` mode.
 
@@ -1594,6 +1659,13 @@ context:
   tool_result_max_chars: 0        # NEW in 0.8.0: cap on one tool result in the session (0 = off)
   turn_governor: false            # NEW in 0.8.0: in-turn context governor for long single-turn
                                   # workers (env CLAW_CTX_GOVERNOR); Vatra turns it on for workers
+  inline_images:                  # NEW in 0.8.1: pictures sent inline to a model that sees images
+    max_images_per_call: 4        # the user's attachments first, then the newest tool pictures
+    max_tool_images: 2            # a browser loop keeps only its newest screenshots
+    max_pixels: 1280              # longest edge after downscaling
+    jpeg_quality: 85
+    max_share: 0.3                # images take at most this share of the window; a turn whose
+                                  # picture doesn't fit is described by the vision fallback instead
   chunked_processing:
     enabled: false                # master switch (or use auto_threshold)
     auto_threshold: 0             # auto-enable when max_tokens <= this value (0 = off)
@@ -1676,7 +1748,7 @@ tools:
     - image_ocr
     - image_vision
     - pocket_tts
-    - stt
+    - audio
     - send_mail
     - google_drive
     - google_calendar
@@ -1770,6 +1842,8 @@ tools:
     stt_provider: ""                # "soniox", "openai", "gemini", or "" for auto-detect
     stt_model: ""                   # explicit STT model ID; empty = auto-detect
 ```
+
+**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
 
 ### skills
 
@@ -1906,7 +1980,16 @@ telegram:
   api_base_url: "https://api.telegram.org"
   poll_timeout_seconds: 25
   pairing_ttl_minutes: 30
+  shared_bot: true                # NEW in 0.8.1: under Flight Deck, an agent with no bot of its own
+                                  # answers its owner on the deck's team bot once an admin approved it
+  groups: true                    # NEW in 0.8.1: may be added to Telegram groups (web-only group turns);
+                                  # false: it leaves groups it's added to
+  group_turns_per_hour: 30        # NEW in 0.8.1: answers per group per hour (0 = no cap)
+  owner_in_main: true             # NEW in 0.8.1: the owner's private chat joins the main conversation
+                                  # (lane A); false: it keeps a session of its own
 ```
+
+See [Telegram: the Team Bot](#telegram-the-team-bot--new-in-081) for the team bot, groups and the owner's chat.
 
 ### slack
 
@@ -4206,8 +4289,8 @@ Flight Deck serves both the React frontend and the FastAPI backend from a single
 | Fleet discovery | `GET /fd/fleet` returns all running agents (Docker, process, local). The `flight_deck` tool gives every agent live fleet awareness |
 | Agent-to-agent communication | `consult_peer` and `flight_deck` tools let agents discover, consult, and delegate tasks to each other. Synchronous (consult) and fire-and-forget (delegate) modes |
 | Multi-user authentication | JWT-based auth with registration, login, refresh tokens, and role-based access (admin/user). First user becomes admin |
-| Admin dashboard | User management, plan tier assignment (free/pro/enterprise), per-user quota overrides, usage analytics, and system configuration |
-| Rate limiting & quotas | Tiered plan system with per-user limits on agents, requests/minute, spawns/hour, and storage |
+| Admin dashboard | Admin page (Usage, Plans, Settings, Integrations), a separate Users page (users, invitations, waitlist), plan tier assignment (free/premium/enterprise; "pro" was renamed premium in 0.8.1), per-user quota overrides, usage analytics, and system configuration. Since 0.8.1 admins start in the [Admin console](#admin-console) |
+| Rate limiting & quotas | Tiered plan system with per-user limits on agents, requests/minute, spawns/hour, storage, and (0.8.1) [messages and AI tokens per day](#daily-plan-limits-and-free-resets) |
 | Chat persistence | Server-side chat session and message storage with per-user isolation |
 | Settings sync | Per-user settings persisted server-side with automatic localStorage migration |
 | Agent config editor | Edit agent config.yaml and .env files in-flight from the UI |
@@ -4238,18 +4321,21 @@ Flight Deck serves both the React frontend and the FastAPI backend from a single
 | Datastore browser | View agent datastore tables and rows directly from agent cards |
 | Agent groups & tags | Organize agents into teams and roles with color-coded group badges |
 | Trace timeline | Real-time orchestrator observability — Gantt-style span visualization in the chat panel with duration, token usage, phase breakdown (decompose/execute/task/synthesize), and status tracking |
-| Connections page | Unified external-service authentication: Google OAuth (with per-scope picker and sensitivity tiers), ChatGPT (Codex OAuth), centrally-managed MCP servers (HTTP + stdio transport, per-agent allowlists, hot-reload over SSE), Microsoft 365 (Entra app + per-user connect), Antigravity, WhatsApp, Typesense deep memory, and each user's Jev (TypeSafe AI) API key with a "Try it" playground — **one tab per connection** since 0.8.0, with status dots, remembered last tab, and state kept while you switch tabs |
+| Connections page | Unified external-service authentication: Google OAuth (with per-scope picker and sensitivity tiers), ChatGPT (Codex OAuth), centrally-managed MCP servers (HTTP + stdio transport, per-agent allowlists, hot-reload over SSE), Microsoft 365 (Entra app + per-user connect), Antigravity, WhatsApp, Typesense deep memory, each user's Jev (TypeSafe AI) API key with a "Try it" playground, and (0.8.1) the user's Telegram link to the team bot and their Soniox key — **one tab per connection** since 0.8.0, with status dots, remembered last tab, and state kept while you switch tabs |
 | Agent Folders | Admin-gated `fd-data` cleanup (NEW in 0.6.5) — lists each agent subfolder with on-disk size, file counts, last-modified, and desktop presence (**running / on-desktop / orphaned**); view/download workspace files (HTML in a sandboxed iframe, Markdown with GFM tables) and delete a folder (refused while the agent is still running). Path-sandboxed to direct children of `fd-data`; backend `/fd/agentfs` |
 
 ### Connections
 
 The Connections page lives in the Flight Deck sidebar and manages external-service authentication for the entire fleet. A single Flight Deck instance can serve OAuth tokens to every captain-claw sub-agent it spawns (on the same host or a remote one) via a shared-secret or loopback trust boundary — no need to re-authenticate per agent.
 
-Since 0.8.0 the page has **one tab per connection** — Google, Microsoft, ChatGPT, Antigravity, MCP Servers (the server list plus *Agent access for Claude*), WhatsApp, Deep memory and Jev — with status dots (green connected, amber configured). Inactive tabs stay mounted, so a sign-in popup's result and a half-typed form survive a tab switch, and the last tab is remembered per browser. Kiosk users get a Connections dialog with Google, Microsoft, MCP Servers and Jev.
+Since 0.8.0 the page has **one tab per connection** — Google, Microsoft, Telegram (0.8.1), ChatGPT, Antigravity, MCP Servers (the server list plus *Agent access for Claude*), Jev, Soniox (0.8.1), WhatsApp and Deep memory — with status dots (green connected, amber configured). Inactive tabs stay mounted, so a sign-in popup's result and a half-typed form survive a tab switch, and the last tab is remembered per browser. Kiosk users get a Connections dialog with the tabs that are a person's own: Google, Microsoft, Telegram, MCP Servers, Jev and Soniox.
+
+- **Telegram** — ask for the deck's team bot, picking one of your agents; after an admin approves, a one-time link binds your Telegram account. Then the **Inbox** switch, "Add <agent> to a group" and the agent's groups. See [Telegram: the Team Bot](#telegram-the-team-bot--new-in-081).
+- **Soniox** — your own Soniox key for speech-to-text and voices (checked with Soniox before it is saved; only a hint ever comes back). Without one you use the admin's team key, else the deck's `SONIOX_API_KEY`. Agents, devices and the WhatsApp bridge use their owner's key; the agent itself never holds it. See [`audio`](#audio).
 
 #### Google
 
-Captain Claw does not ship with bundled Google OAuth credentials. Every deployment must create its own OAuth 2.0 Client ID in [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (type: **Web application**), add the redirect URI shown in the Connections page (e.g. `http://localhost:25080/fd/google/callback`) to the Authorized redirect URIs list, and paste the Client ID + Client Secret into the form.
+Captain Claw does not ship with bundled Google OAuth credentials. Every deployment must create its own OAuth 2.0 Client ID in [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (type: **Web application**), add the redirect URI shown in the Connections page (e.g. `http://localhost:25080/fd/google/callback`) to the Authorized redirect URIs list, and paste the Client ID + Client Secret into the form. The desktop app's deck can use a **Desktop app** client instead (since 0.8.1; see [Desktop app mode](#desktop-app-mode--new-in-081)).
 
 **Scope picker**
 
@@ -4348,16 +4434,20 @@ The `CodexAuthManager` decodes the JWT `exp` claim with a 60-second safety margi
 
 Captain Claw 0.4.23 moved Model Context Protocol (MCP) management out of every individual agent and into Flight Deck as a fleet-wide service; 0.4.24 (Phase 2) added stdio transport, per-agent allowlists, hot tool-list reload, and streaming tool calls.
 
-Add an MCP server once in **Connections → MCP servers** and every agent in the fleet that the server's allowlist permits picks up the tools — no per-agent `config.yaml` MCP block, no N×M connections to upstream servers, and a single chokepoint for tokens, sessions and observability.
+Add an MCP server once in **Connections → MCP servers** and every one of your agents that the server's allowlist permits picks up the tools — no per-agent `config.yaml` MCP block, no N×M connections to upstream servers, and a single chokepoint for tokens, sessions and observability. Since 0.8.1 a server is **private to whoever added it** unless an admin shares it with everyone (see **Ownership** below).
 
 **Supported transports:**
 
-- **`http`** — Streamable HTTP binding. Required field: `url`. Optional OAuth2 `client_credentials` flow (`client_id`, `client_secret`, `token_endpoint`) and arbitrary extra `headers`. `Mcp-Session-Id` is captured and replayed transparently.
+- **`http`** — Streamable HTTP binding. Required field: `url`. **Auth:** none, the OAuth2 `client_credentials` flow (`client_id`, `client_secret`, `token_endpoint`), or (0.8.1) **OAuth sign-in** (see below); plus arbitrary extra `headers`. `Mcp-Session-Id` is captured and replayed transparently.
 - **`stdio`** — child process speaking JSON-RPC over stdin/stdout (NDJSON). **Admin-only since 0.8.0** (creating, editing, testing, probing or deleting one runs a command on the deck's host). Required field: `command`. Optional `args` (argv tail) and `env` (extra env vars merged on top of the FD process environment). The de-facto standard for local servers shipped via `npx` / `uvx` (filesystem, sqlite, github, postgres, etc.). The child is spawned lazily on the first request, auto-respawned if it dies, and terminated with SIGTERM (2 s grace) then SIGKILL on close.
 
 **Parallel Search example.** For an optional, keyless HTTP search/fetch connection and a runnable smoke test, see [examples/mcp/](examples/mcp/README.md).
 
-**Per-agent allowlists.** Each server carries an optional `allowed_agents: list[str]`. Empty list = every agent in the fleet (the default and the Phase 1 behaviour). Once any slug is listed, only those agents can see, list, or call the server. Restricted servers return HTTP 404 to disallowed agents — same shape as "doesn't exist," so a restricted server's existence is opaque.
+**Per-agent allowlists.** Each server carries an optional `allowed_agents: list[str]`. Empty list = every agent the server reaches (its owner's agents; every agent on the deck for a deck-wide server). Once any slug is listed, only those agents can see, list, or call the server. Restricted servers return HTTP 404 to disallowed agents — same shape as "doesn't exist," so a restricted server's existence is opaque.
+
+**Ownership — NEW in 0.8.1.** A server belongs to the user who added it (`owner_id`). Only that owner's agents reach its tools (the agent's owner comes from Flight Deck's spawn records, then the allowlist applies), and only the owner sees, calls, edits, tests, signs in to or removes it — admins don't see users' private servers either. A name you can't see answers 404 (409 when you try to reuse it), so a private server's existence never leaks. An admin can share one of their own servers with everyone (**Share with everyone on this deck**, `deck_wide`): every user's agents then get its tools, and admins manage it. Sharing an OAuth server shares the account it signed in as, and the confirmation says so. Rows show a **Private** or **Deck-wide** badge, and servers you can't manage are read-only. On the first start after the upgrade, older OAuth servers go to whoever signed them in (else they stay private and ownerless, removable by admins); other older servers stay deck-wide, as they behaved. A deck without sign-in is one user and skips ownership. Shared-agent members never get MCP tools. **Admin → Integrations** lists the deck-wide servers and shares or unshares them (see [Integrations](#integrations-shared-keys-telegram-and-mcp)).
+
+**OAuth sign-in with Dynamic Client Registration — NEW in 0.8.1.** An `http` server with **Auth: OAuth sign-in** follows the MCP authorization spec: Flight Deck discovers the server's authorization server (the `401 WWW-Authenticate` challenge, RFC 9728 protected-resource metadata, RFC 8414 / OIDC metadata), registers itself as a client (RFC 7591; a client ID on the record skips registration for servers without it), and signs you in through a popup with PKCE (S256) and a resource indicator bound to the server URL. Tokens refresh by themselves (one refresh per server at a time; rotating refresh tokens) and are kept in `<servers file>.oauth.json` (mode 0600) beside the servers file, never in the record. **Sign out** revokes them where the server supports it. On a 401 the transport refreshes and retries once; a plain server that answers with a Bearer challenge gets a hint to switch to OAuth sign-in. **Test** on a server nobody signed in to yet reports whether sign-in is ready (issuer, registration support) instead of failing. The form's Auth selector offers **None**, **Client credentials** and **OAuth sign-in**, with **Save & sign in**, **Sign in** / **Reconnect** / **Sign out**, and who signed in.
 
 Agents identify themselves with the `X-Agent-Auth` token Flight Deck minted when it spawned them, and the allowlist is checked against the slug in Flight Deck's own records (since 0.8.0 — the `X-Agent-Slug` header alone no longer counts). Agents Flight Deck didn't spawn are refused; Docker agents need an image rebuilt on 0.8.0.
 
@@ -4374,15 +4464,17 @@ Cancels the upstream call cleanly when the client disconnects mid-stream. The ag
 
 **Storage.** A flat JSON file, per Flight Deck instance (since 0.8.0): `CAPTAIN_CLAW_FD_MCP_PATH` if set, else `$CAPTAIN_CLAW_FD_HOME/mcp_servers.json`, else `$FD_DATA_DIR/mcp_servers.json`, else the legacy `~/.captain-claw-fd/mcp_servers.json`. A deck that moves to `FD_DATA_DIR` and wants to keep its servers copies the legacy file there once. Writes are atomic (write-tmp + rename) so a crashed Flight Deck never leaves a half-written file. Secrets are masked (`••••••••`) in every UI response — re-submitting a form with a masked secret preserves the stored value.
 
-**Endpoints (admin — gated by Flight Deck user auth):**
+**Endpoints (signed-in user — each user sees and manages only their own servers, admins also the deck-wide ones):**
 
-- `GET /fd/mcp/servers` — list configured servers with secrets masked + runtime status (initialised? tool count? last error?)
-- `POST /fd/mcp/servers` — insert or update a server by name. Accepts `transport`, `url`, `command`, `args`, `env`, `client_id`, `client_secret`, `token_endpoint`, `headers`, `enabled`, `allowed_agents`.
+- `GET /fd/mcp/servers` — list the servers you can see, with secrets masked + runtime status (initialised? tool count? last error?)
+- `POST /fd/mcp/servers` — insert or update a server by name. Accepts `transport`, `url`, `command`, `args`, `env`, `auth` (`""` or `"oauth"`), `client_id`, `client_secret`, `token_endpoint`, `headers`, `enabled`, `allowed_agents`.
+- `POST /fd/mcp/servers/{name}/sharing` — (0.8.1, admin) change only `deck_wide`, for a server the admin can see.
 - `DELETE /fd/mcp/servers/{name}` — remove a server, drop its cached state, terminate any running stdio child.
 - `POST /fd/mcp/servers/{name}/test` — end-to-end probe (re-init + tools/list).
-- `POST /fd/mcp/probe` — probe a transient (non-persisted) record; powers the "Test connection" button on the Add-server form. For stdio records the spawned child is closed before returning so probing never leaks processes.
+- `POST /fd/mcp/probe` — probe a transient (non-persisted) record; powers the "Test connection" button on the Add-server form. For stdio records the spawned child is closed before returning so probing never leaks processes. Since 0.8.1 it never reuses another server's stored secret or sign-in.
+- `POST /fd/mcp/oauth/connect-ticket`, `GET /fd/mcp/oauth/login`, `GET /fd/mcp/oauth/callback`, `POST /fd/mcp/oauth/disconnect` — (0.8.1) the OAuth sign-in popup, with the same browser-bound ticket and state cookie as the Google and Microsoft sign-ins.
 
-**Endpoints (agent-facing — gated by loopback or `X-Agent-Secret` header, filtered by allowlist):**
+**Endpoints (agent-facing — gated by loopback or `X-Agent-Secret` header, filtered by ownership and allowlist):**
 
 - `GET /fd/mcp/agent/servers` — enabled server names visible to this agent.
 - `GET /fd/mcp/{name}/tools?refresh={bool}` — proxy `tools/list` (30-second TTL cache, `refresh=true` bypasses).
@@ -4432,6 +4524,16 @@ So a client call should be `fetch(\`${FD_BASE_PATH}api/x\`)` (or a bundler base 
 
 Endpoints: management under `/fd/hosting/*` (list / publish `POST` / edit `PUT` / `start` / `stop` / unpublish `DELETE`); public serving at `/vfs/<name>/…` and `/vfs-apps/<name>/…` (registered before the SPA catch-all).
 
+### Public file links — NEW in 0.8.1
+
+Hosting publishes a folder; a **public file link** publishes one file. A **Share** (globe) button on an agent's files — the full file browser, the side files panel, the phone's file sheet and the [File library](#file-library--new-in-081) — publishes a copy of that file at `<deck>/s/<token>` for anyone holding the link, no sign-in. The dialog explains what publishing means before anything happens, then shows the link with **Copy** / **Open**, its views and expiry, **Update copy** and **Stop sharing**, and a list of all your public links (so one whose file is gone can still be turned off).
+
+- **A snapshot, not live.** The file is copied into `<FD_DATA_DIR>/public_shares` when it is shared; the public page never contacts an agent and takes nothing but the token. **Update copy** refreshes it under the same URL.
+- **Safe to open.** The page is served with no script. Markdown is rendered with raw HTML escaped; HTML, SVG and XML-like files run in a sandbox with no access to Flight Deck's cookies, storage or API; text kinds are served as plain text; images, PDF, audio and video display; other types download. Unknown, stopped and expired links all answer the same 404.
+- **Agents make links too**, when a person asks ("share that file"), with the [`public_link`](#public_link--new-in-081) tool. Those links belong to the agent's owner and show in the owner's Share dialog.
+- **The address.** Links use `FD_PUBLIC_URL`; else the address the owner's browser reaches the deck at (learned after sign-in; never a localhost or private address); else the most recently seen address of any user; else the first domain in `FD_ALLOWED_HOSTS`.
+- `FD_PUBLIC_FILE_LINKS=off` hides the button, refuses the tool and stops every existing link; `FD_PUBLIC_FILE_LINK_MAX_MB` (default 50) caps the file size. Shared-agent members can't publish an agent's files.
+
 ### Quality, cost & collaboration (NEW in 0.7.3)
 
 Three cross-mode capabilities landed in 0.7.3 for Basna, Vatra, and Code. **All are opt-in and default-off** — with Quality on **Basic**, no wage entered, and grouped mode off, runs behave exactly like 0.7.2.
@@ -4462,24 +4564,24 @@ Three cross-mode capabilities landed in 0.7.3 for Basna, Vatra, and Code. **All 
 - **Host and origin guard.** Every HTTP and WebSocket request must name a host this deck answers to — `localhost`, any IP, this machine's hostnames, `FD_PUBLIC_URL`'s host, `FD_CORS_ORIGINS` hosts, or `FD_ALLOWED_HOSTS` — and a browser request carrying a foreign `Origin` (or a cross-site fetch) is refused. That closes DNS rebinding and "any web page can drive your local deck" on auth-off desktop decks. CORS defaults to the deck's own origins (`FD_CORS_ORIGINS=*` is the explicit legacy opt-out). **A deck reached through its own domain must set `FD_ALLOWED_HOSTS` or `FD_PUBLIC_URL`**, or every request — the SPA, webhooks, OAuth callbacks, inbound MCP — is refused (the log names the setting).
 - **Agents prove who they are.** Code, Hosting, Basna, Vatra and Bat agent routes need a verified bearer, loopback or the agent secret, and take the owner from Flight Deck's own spawn records, never from a body `owner_id`. `/fd/consult-peer` and `/fd/delegate-peer` need the calling agent's own `X-Agent-Auth`, take host/port/token only from Flight Deck's records, and read attachments only from the caller's own workspace. Google, Codex and MCP tokens go only to the agent's owner. Docker agents need `FD_URL` and `FD_AGENT_SHARED_SECRET` in their env, and an image rebuilt on 0.8.0.
 - **Owner-scoped everything.** Port-addressed agent proxies refuse anyone but the agent's owner (admins excepted); scheduler jobs and flows have owners (existing ones become admin-owned and keep firing); stdio MCP servers are admin-only; provider keys never reach the browser (`@system` sentinels resolved at spawn).
-- **Registration is closed** after the first (admin) account — admins add people in **Admin → Users → Add user** (`FD_REGISTRATION_OPEN=1` reopens self-signup).
+- **Registration is closed** after the first (admin) account — admins add people with **Add user** or invite them by email on the **Users** page (Admin → Users before 0.8.1); since 0.8.1 people can join a [waitlist](#users-invitations-and-the-waitlist) instead (`FD_REGISTRATION_OPEN=1` reopens self-signup).
 - **One deck, one state.** Several decks on one host no longer share MCP servers, code apps or the agent secret — each resolves them from `CAPTAIN_CLAW_FD_HOME`, else `FD_DATA_DIR`, else the legacy `~/.captain-claw-fd`. A deck moving to `FD_DATA_DIR` copies its `mcp_servers.json` there once to keep its servers.
 - **Chat bridges send only deliverables.** Telegram, Slack, Discord and WhatsApp auto-send a file only if this turn wrote it inside the agent's `saved/` area (never a `Path:` line from an email or web page). See [Telegram: Per-User Sessions](#telegram-per-user-sessions).
 
 ### Running Flight Deck for a team — NEW in 0.8.0
 
-- **Admin → Users.** Add users (email, password, role), reset a password, and open a user's **Agents** to create (archetype picker), start, stop, restart, configure or remove their agents — every action logged as `admin_act_as`. It is not a login-as: an admin acts on agent-management routes only.
+- **Users** (Admin → Users in 0.8.0; its own **Users** page since 0.8.1). Add users (email, password, role) or invite them by email, set a password, and open a user's **Agents** to create (archetype picker), start, stop, restart, configure or remove their agents — every action logged as `admin_act_as`. It is not a login-as: an admin acts on agent-management routes only. The rest of an admin's work — the Admin console, invitations, the waitlist, passwords, branding, daily limits — is in [Deck Administration](#deck-administration--new-in-081).
 - **Team tier sets and team keys.** An admin publishes a tier set (**Library → Publish to team**); teammates with no models of their own run on it. Publishing shares the keys as **team keys** — a key on a provider's own endpoint becomes that provider's org key, a gateway key goes into a per-endpoint store — and process agents missing a key get it and restart automatically. A spawn nothing can supply a key for is refused instead of creating a dead agent. Decks that published before 0.8.0 should publish again.
-- **Per-user connections.** Each user connects their own Google and Microsoft accounts, Jev key and WhatsApp nudge number (**Connections**); agents use their owner's. Each user also fills in a **Profile** (see [Owner Profile](#owner-profile)).
+- **Per-user connections.** Each user connects their own Google and Microsoft accounts, Jev key, WhatsApp nudge number and (0.8.1) Soniox key and Telegram link (**Connections**); agents use their owner's. Each user also fills in a **Profile** (see [Owner Profile](#owner-profile)).
 - **Collaboration.** A persistent notification bell (shares, finished runs, sends), team spend by user and run kind in **Admin → Usage**, **Copy to my workspace** for a folder shared with you, and **Duplicate** on shared or built-in archetypes to fork an editable copy.
 - **Shared agents** (`FD_AGENT_SHARING=1`): one agent, several users — see [Shared agents](#shared-agents-a2-members-own-google-deep-memory-files) below.
 - **Agent options.** A gear on each agent opens a tabbed options dialog (General, Instructions, `config.yaml`, `.env`); name and description are stored by Flight Deck, so they survive a browser wipe. Instructions are stored per agent by Flight Deck, so two tabs can't erase each other's.
 
 ### The simple layout and kiosk mode — NEW in 0.8.0
 
-**Simple layout.** A chat-first desktop layout: agents on the left (with a **Busy** pill and an on/off **power switch** per agent), the chat in the middle (queue toggleable), the active agent's files and datastore on the right. Switch in from the top bar's columns icon and out from the left header, or with **Cmd/Ctrl+\\**. Both rails collapse and remember it.
+**Simple layout.** A chat-first desktop layout: agents on the left (with a **Busy** pill and an on/off **power switch** per agent, and since 0.8.1 the **Scheduled · Library · Data** tiles), the chat in the middle (queue toggleable), the active agent's files and datastore on the right. Switch in from the top bar's columns icon and out from the left header, or with **Cmd/Ctrl+\\**. Both rails collapse and remember it.
 
-**Kiosk.** Locks users into the simple layout — for shared-account machines or people who only chat. An admin picks who in **Admin → Settings → Kiosk mode**: **Off**, **Everyone** (every non-admin), or **Selected users** (tick **Kiosk mode** on a user in **Admin → Users**, or in the Add user form); **New users start in kiosk mode** pre-ticks it for accounts created from then on. `captain-claw-fd --simple-chat` (or `FD_SIMPLE_CHAT=1`) is the default (Everyone) until an admin picks a mode. A signed-in user picks up a change within ~15 minutes or on reload. Locked users get no full view, no agent options or start/stop beyond the power switch. They can still start a **New agent** from an archetype picker (models and keys come from their tier set or the team default), manage their own **Connections** (Google, Microsoft, MCP, Jev) in a dialog, edit their **Profile**, and **sign out** cleanly (per-browser queues and plans are purged). Admins get the normal layout. It is a UI lock, not an API boundary. A kiosk deck needs a published team tier set and enough agent slots.
+**Kiosk.** Locks users into the simple layout, without the right-hand column — for shared-account machines or people who only chat. Since 0.8.1 an admin chooses who is locked (**Off** / **Everyone** / **Selected users**, with a per-user mark and a default for new users); `--simple-chat` only seeds that choice. The kiosk also gained a Getting started guide, an Info dialog, a phone layout, per-agent menus, skill cards, a reasoning-effort picker, a File and a Data library and scheduled tasks. All of it is in [Kiosk (Simple Layout)](#kiosk-simple-layout).
 
 **Removed:** the Cmd/Ctrl+1–5 page-jump shortcuts, for everyone.
 
@@ -4545,7 +4647,7 @@ An agent used to hold **one** conversation at a time: one busy flag, one active 
 
 The fullscreen chat's left sidebar holds a **queue**: messages dispatched one at a time, each waiting for the previous to finish. 0.7.8 makes it finish.
 
-- **AUTO / MANUAL** — in auto, an item is ticked done when the agent's reply reads as complete; in manual you tick it. A new lane inherits the setting from the agent's existing lane.
+- **AUTO / MANUAL** (shown as **Auto | Step by step** since the 0.8.1 [queue redesign](#the-message-queue--new-in-081)) — in auto, an item is ticked done when the agent's reply reads as complete; in manual you tick it. A new lane inherits the setting from the agent's existing lane.
 - **A question no longer strands it.** A trailing `?` on a long, substantive reply counts as complete (the courtesy question after a finished job). A genuine short question holds the queue for **three minutes**, shows an amber `?` on the row saying why, and then moves on. Answering in chat cancels the hold.
 - **A give-up reply re-runs the task.** `I got stuck…`, retries or budget exhausted — the item is **not** ticked off. It's re-sent verbatim, and if that fails too, with a nudge shaped to the failure: budget-exhausted agents are told to keep what they produced and work in smaller steps; stuck ones to work through the obstacle. After three attempts the queue **stops rather than skipping**, marks the row, and says so.
 - **Slash commands** (`/new`, `/clear`, …) complete properly instead of spinning forever.
@@ -5336,8 +5438,12 @@ Click **Chat** on any online agent card to open a WebSocket chat session. The ch
 - **Copy to clipboard** — share snippets to the shared clipboard
 - **File attachments** — attach files and clipboard content to messages
 - **Resizable width** — drag the left edge to resize (320–900px, persisted)
+- **Topics and other channels** (0.8.1) — one continuous transcript per lane with topic dividers, a Topics menu, and turns from WhatsApp, Telegram, devices and the glasses shown "via …"; see [The chat timeline](#the-chat-timeline-topics-and-other-channels--new-in-081)
+- **Pictures go as images** (0.8.1) — a picture attached in the chat reaches the agent as an image, inline when its model sees images; see [Native Vision](#native-vision--new-in-081)
 
 Chat connections are proxied through the Flight Deck backend to avoid browser CORS restrictions.
+
+**Agent restarts are ridden out quietly (0.8.1).** When Flight Deck restarts, its process agents restart with it, and one whose port is taken comes back on another. The chat proxy now goes to the agent's current port (the browser names the agent as `proc-<slug>`), holds the socket while the agent comes up (up to `FD_AGENT_WS_WAIT_S`, default 30 s), and tells the browser where the agent is now. The chat shows "Agent unreachable — reconnecting…" instead of an error per retry, reconnects after 0.5 s, 1 s, then every 2 s for about a minute, then every 10 s, and refreshes its sign-in token once when a deck restart made it stale. The deck log gets one line when an agent goes down and one when it is back.
 
 ### Director Panel
 
@@ -5477,7 +5583,7 @@ Flight Deck uses environment variables:
 | `FD_PUBLIC_FILE_LINK_MAX_MB` | `50` | Largest file a public link may publish |
 | `FD_CORS_ORIGINS` | (deck's own origins) | Extra browser origins allowed to call the deck. Since 0.8.0 the default is no longer `*`; `*` is the explicit legacy opt-out |
 | `FD_LOCKDOWN` | (unset) | `1` = hosted mode: agent shared secret required even from loopback, host-filesystem routes off, `Secure` refresh cookie |
-| `FD_REGISTRATION_OPEN` / `FD_REGISTRATION_DISABLED` | (unset) | Self-registration is closed once the first (admin) account exists; `_OPEN=1` reopens it, `_DISABLED=1` forces it closed. Admins add users in Admin → Users |
+| `FD_REGISTRATION_OPEN` / `FD_REGISTRATION_DISABLED` | (unset) | Self-registration is closed once the first (admin) account exists; `_OPEN=1` reopens it, `_DISABLED=1` forces it closed. Admins add or invite users on the Users page; while it is closed, "No account?" leads to the waitlist |
 | `FD_COOKIE_SECURE` | (auto) | Force the refresh cookie's `Secure` flag on (`1`) or off (`0`, local http only) |
 | `FD_SIMPLE_CHAT` | (unset) | `1` (or `captain-claw-fd --simple-chat`) = kiosk for every non-admin until an admin picks a mode in Admin → Settings |
 | `CAPTAIN_CLAW_FD_HOME` | (unset) | Per-instance home for MCP servers, code apps and the agent secret (falls back to `FD_DATA_DIR`, then `~/.captain-claw-fd`) |
@@ -5485,6 +5591,15 @@ Flight Deck uses environment variables:
 | `FD_ARCHETYPE_GRID` | (unset) | `1` = function × domain archetype grid (`reviewer.legal`) |
 | `FD_BAT_DISABLED` / `FD_BAT_SPEND` | (unset) | Bat is on by default — `FD_BAT_DISABLED=1` turns it off; real-money spend stays off unless `FD_BAT_SPEND=1` |
 | `FD_GMAIL_SEND` / `FD_GMAIL_AUTOREPLY` | (unset) | Deck kill switches: `off` stops all agent Gmail sends / topic auto-replies |
+| `FD_SCHEDULER_QUIET_HOURS` | (unset) | e.g. `22-08`: scheduled-task deliveries and payment reminders wait out that window (it may wrap midnight) and go when it ends |
+| `FD_AGENT_WS_WAIT_S` | `30` | **NEW in 0.8.1.** How long the chat proxy holds a socket while an agent that isn't answering yet (restarting) comes up |
+| `FD_DATA_KEY_FILE` | `<FD home>/data_key` | **NEW in 0.8.1.** Key file (mode 0600) that encrypts the Telegram inbox at rest; keep it apart from the database |
+| `FD_DESKTOP` | (unset) | **NEW in 0.8.1.** Set to `1` by the desktop app. With sign-in off and a loopback bind, it lets the deck connect Google and Microsoft for its local user (system-browser sign-in) |
+| `FD_PAYMENTS` | (unset) | **NEW in 0.8.1.** `1` turns on the [payments](#payments-bill-pay-and-purchases--new-in-081) tool, the Payments page and the `/p/<token>` phone pages |
+| `FD_PAYMENTS_STATEMENTS` / `FD_PAYMENTS_SYNC_TIMES` | (unset) / `07:30,16:30` | **NEW in 0.8.1.** `1` turns on read-only bank statements; the daily times they are read |
+| `FD_ENABLEBANKING_APP_ID` / `FD_ENABLEBANKING_KEY` | (unset) | **NEW in 0.8.1.** The deck's Enable Banking application (pay-by-bank links and bank statements) |
+| `FD_LINK_CLIENT_ID` / `FD_LINK_CLIENT_SECRET` / `FD_LINK_PUBLISHABLE_KEY` / `FD_LINK_TEST` | (unset) | **NEW in 0.8.1.** Stripe Link agent wallet for purchases; `FD_LINK_TEST=1` makes test requests |
+| `FD_AP2` | (unset) | **NEW in 0.8.1.** `1` turns on AP2 checkout with merchant agents |
 
 A deck on more than one person's network: see [docs/team-deployment.md](docs/team-deployment.md) for the full checklist (`FD_AUTH_ENABLED`, `FD_JWT_SECRET`, `FD_LOCKDOWN`, `FD_AGENT_SHARED_SECRET`, `FD_GLASSES_BRIDGE_TOKEN`, …).
 
@@ -5503,6 +5618,206 @@ On macOS, Docker's `--network host` mode is silently ignored. Flight Deck automa
 - Switches to bridge networking with explicit port mapping
 - Uses `host.docker.internal` for Ollama and other host-side services
 - Sets `OLLAMA_BASE_URL` environment variable in containers
+
+---
+
+## Kiosk (Simple Layout)
+
+The **simple layout** is Flight Deck's chat-first layout: agents on the left, the chat in the middle. **Kiosk mode** locks a user into it — for people who only chat with their agents, and for shared-account machines. This section describes the kiosk as a locked user sees it. Admins and unlocked users get the same simple layout plus the active agent's files and datastore in a right-hand column, and switch to the full layout with **Cmd/Ctrl+\\** (see [The simple layout and kiosk mode](#the-simple-layout-and-kiosk-mode--new-in-080)).
+
+### Who gets kiosk mode
+
+An admin decides in **Admin → Settings → Kiosk mode** (or the [Admin console](#admin-console)'s Settings page):
+
+- **Off** — nobody is locked.
+- **Everyone** — every non-admin.
+- **Selected users** — tick **Kiosk mode** on a user (Users page, or the Add user and Invite forms); a **kiosk** badge shows who is locked.
+
+**New users start in kiosk mode** pre-ticks the mark for accounts created from then on (Add user or self sign-up). `captain-claw-fd --simple-chat` (or `FD_SIMPLE_CHAT=1`) only sets the starting value (Everyone) until an admin picks a mode. The server resolves the lock per user and returns it with the user on sign-in, token refresh, `/me`, registration and device pairing; a signed-in user picks up a change on the next token refresh (within about 15 minutes) or a reload. Admins are never locked. A deck without sign-in goes by the deck-wide flag.
+
+Locked users have no full layout and no agent options beyond what this section describes. They create agents from archetypes (models and keys come from their own tier set or the team default), manage their own connections, edit their profile, and sign out cleanly (per-browser queues and plans are purged). It is a UI lock, not an API boundary. A kiosk deck needs a published team tier set (or users with tier sets of their own) and enough agent slots.
+
+### Getting started guide — NEW in 0.8.1
+
+A kiosk user's first visit opens a step-by-step guide: what the deck is, creating an agent from an archetype, giving it work (files, the queue, new topics), connecting Google or Microsoft, the team Telegram bot, the profile, and where everything else lives. Each step shows a real screenshot of that screen in the viewer's theme — on a phone, the phone's own screens — that enlarges on a click, and where it fits a button straight to it (**Create an agent**, **Connect Google**, **Set up Telegram**, **Edit my profile**). Steps for a connection the deck doesn't offer are left out, and chips show what the user has connected already. On a phone a sideways swipe turns the page.
+
+**Do not show again** is a per-user setting stored on the server, so it holds on a shared kiosk and across devices. **Info**, **Settings → Getting started** and the empty chat open the guide again.
+
+### The kiosk screen — NEW in 0.8.1
+
+- **Left column:** the agents, each with a **Busy** pill, an on/off power switch and a **⋯** menu (see [The agent menu](#the-agent-menu--new-in-081)); **New agent**; three tiles — **Scheduled · Library · Data**; then **Info** and **Settings**. The column collapses to a rail with the same buttons.
+- **The chat** in the middle. There is no right-hand column: files and tables live in the [File library](#file-library--new-in-081) and the [Data library](#data-library--new-in-081).
+- **Info** (`GET /fd/info`) shows the user's corner of the deck in one read: the tier set their agents are created on (their own Library set, else the admin's team default) with each tier's provider, model, endpoint host, context sizes, image support and how many archetypes use it — never a key; their agents and each one's model; archetype counts by source; the deck-wide profile defaults, their own profile, and the exact text their agents receive (full, and the compact one eco agents get); their plan with today's usage meters and free resets; and their Google, Microsoft, Telegram and Jev status.
+- **Settings** is one button opening a dialog: light / dark theme, **Connections** (Google, Microsoft, Telegram, MCP Servers, Jev and Soniox), **Scheduled tasks**, **File library**, **Data library**, **Profile** (with its Password card), **Refresh agents**, **Getting started** and **Sign out**.
+- **New agent** opens a two-pane archetype picker: search by role, task or skill, family filter chips with counts, and cards with each archetype's model class and thinking style; the detail pane explains the pick ("Runs on", "Thinks", "What it can do") above the name field and the **Create** button. Enter on a narrowed search picks the first card.
+- The deck's default name is **Captain**, with the Captain icon, until an admin sets an instance name.
+
+**On a phone** (narrower than 768 px, or a short touch screen in landscape) the kiosk shows one screen at a time: the agent list (big rows, power switch, a New agent bar) or one chat full screen with a back arrow, and the phone's own Back returns to the list instead of leaving the deck. Dialogs open full screen and Settings as a bottom sheet; the screen resizes with the on-screen keyboard. The chat drops its tab bar (lanes read A / B / C / Auto; the queue opens as its own view), Enter on a touch keyboard is a new line, and form fields are 16 px so iOS doesn't zoom into them. Tapping a file opens a sheet with View, Download and Share (the phone's own share sheet).
+
+### The agent menu — NEW in 0.8.1
+
+Each of the user's own agents has a **⋯** menu (on its row, and on the phone list and the phone chat header):
+
+- **Info** — a dialog with two tabs, the agent's **Intentions** and its **Topics** (while it runs).
+- **Instructions** — the owner's standing instructions for this agent. Saving sends open chats the agent's identity again, so they apply from its next reply without a reconnect.
+- **Settings** — a wide dialog (a sheet on a phone), in two columns on a large screen:
+  - **Model:** provider (only providers an agent can run on — `PUT /fd/agent-model` refuses others), model, API key and an optional endpoint. Switching provider drops the old provider's key and resets the endpoint to the new provider's default unless you give one.
+  - **Vision:** auto / on / off (see [Native Vision](#native-vision--new-in-081)).
+  - **How it thinks:** the cognitive mode — Neutra, Ionian, Dorian, Phrygian, Lydian, Mixolydian, Aeolian or Locrian.
+  - **Reasoning effort:** a default and a level per source, grouped — Messaging (WhatsApp, Telegram, Messenger, Discord), Apps and devices (the app, glasses, each M5Stack device), Automated (scheduled tasks, flows, other agents, autonomous work, API and MCP) and Other people (shared-agent members, public links). The web chat's level is the chat box's picker. See [Reasoning Effort](#reasoning-effort--new-in-081).
+
+  Model and vision are read when the agent starts, so the dialog offers **Restart now**.
+- **Remove agent** — stops the agent and deletes it for good: its folder under `FD_DATA_DIR`, Flight Deck's chat log for every lane, and the scheduled tasks that run it (`DELETE /fd/processes/{slug}?purge=true`). The browser forgets its labels, queue and plans, so a later agent of the same name starts clean.
+
+**Files and Data are no longer in the menu**: they repeated the **Library** and **Data** tiles, and the File library's "Everything it keeps" opens an agent's live files-and-data view. Agents the libraries don't index — one shared with you, a Docker agent — keep a **Files & data** entry, their only way to their files. Agents shared with you, and agents Flight Deck runs itself, have no Instructions, Settings or Remove.
+
+### The chat — NEW in 0.8.1
+
+- **A conversation app.** Larger, centred messages, and a roomier composer with attach, paste, **What can I do?**, the reasoning-effort button, "Enter to send" and a round send button. An empty chat or a fresh topic opens with a greeting ("Good afternoon, <name>.") and the agent's top three skill cards.
+- **Skill cards ("What can I do?").** One-click tasks: a title, a short line, and the prompt a click sends. Flight Deck writes them per agent with the owner's fast tier, from the agent's archetype, instructions, tools and connected accounts, its scheduled tasks and cron jobs, and its topics, intentions, insights, latest reflection and playbooks (`GET /fd/agent-skills/{slug}`, owner only). Six are written up front, cached in the agent's folder, and rewritten when the agent's make-up changes or they are 12 hours old; a failed rewrite keeps the last good set. Without a model, cards come straight from the agent's schedules, intentions and topics.
+- **More.** The composer's list has **More · N** (and the greeting has "More things I can do…"), opening a dialog with the six **Suggested** cards and a **More** list of up to 16 more. The More list is written only when asked for (8 at a time, `POST /fd/agent-skills/{slug}/more`); the dialog says when it was suggested and offers **Suggest again**, and for a list from an earlier day a banner offers new ones — it is never rewritten by itself.
+- **Cards that ask for input.** A card that works on the person's own material (an email to answer, claims to check) says what it needs. Picking it opens a dialog with its question, a text box, and **Attach a file** / **Add a picture** as the card accepts (paste and drop work too). **Start** sends the prompt, the text and the attachments; a required answer must be there first. These cards are marked in the greeting, the list and the More dialog.
+- **Reasoning effort.** The button beside "What can I do?" offers **Auto** (the model's own default) plus exactly the levels the agent's model offers. The pick is kept per agent and sent with every message. See [Reasoning Effort](#reasoning-effort--new-in-081).
+- **New topic** and **Topics** are buttons beside the lane tabs (see the next section); the lane tabs scroll sideways without a bar.
+- **Daily allowance.** Under the lane tabs a line shows today's messages and AI tokens against the user's plan (always in the kiosk; in the full layout only near the limit). When the allowance is spent the composer closes until the UTC day resets or the user spends a free reset. See [Daily plan limits and free resets](#daily-plan-limits-and-free-resets).
+
+### The chat timeline: topics and other channels — NEW in 0.8.1
+
+The chat is one continuous transcript per agent lane, in both layouts, the way the WhatsApp and Telegram bridges already behave.
+
+- **+ New topic** (on a phone **+ New**) starts a new topic: the agent's `/new` still resets its context, but the screen keeps everything said so far above a divider. Going back to an earlier session shows "Back on …", and `/clear` shows "Context cleared". A typed "New topic: <question>" starts a new topic with that question as its first turn.
+- **Topic titles.** When `/new` leaves a topic behind, the agent names it in the background (one small model call over its opening turns). Dividers read "New topic · <title>", a resumed topic keeps its name, and the Topics menu shows it with a pencil to rename it.
+- **The Topics menu** (the history icon beside the button; a bottom sheet on phones) lists one row per divider, to jump back to it or resume it (the agent's `/session switch`).
+- **Paging.** "Earlier messages" pages back through the log, and "Later messages" pages forward again. The chat keeps at most 2,000 rows loaded, so a tab left open for weeks stays quick; a jump to an old topic loads 500.
+- **Other channels' turns.** When the same agent is used from WhatsApp, Telegram, a voice device, the glasses or the app, those turns appear in the web timeline as they happen — the question too, labelled with where it came from ("via WhatsApp", "via Telegram", "via M5Stack StickS3 (stick-a1b2c3)") — and are saved with the label.
+- **The model knows the source.** Every user message the agent stores carries its `source` — `web`, `app[:android|browser]`, `glasses[:meta-display|rokid-lumen]`, `whatsapp`, `telegram`, `messenger`, `discord`, `device:<kind>`, `scheduled`, `flow`, `agent`, `autonomy`, `api`, `public` or `member` — and a label a person reads. In the history the model sees, a message from anywhere but the web chat reads "[via WhatsApp] …" (the stored text is unchanged), and the turn's note names where the current message came from. The source also picks the agent's [reasoning effort](#reasoning-effort--new-in-081) for that turn.
+- **Switching by asking.** Where there is no Topics menu (WhatsApp, a device, the glasses), "go back to the Rome trip" works through the [`sessions`](#sessions--new-in-081) tool.
+
+Flight Deck's chat log is the transcript: `GET /fd/chat/sessions/{id}/topics`, `GET /fd/chat/sessions/{id}/messages?since_id=`, and `PATCH /fd/chat/sessions/{id}/topics/{row_id}` to rename a topic. Agents must run 0.8.1: an older agent's `/new` still clears the screen. Design notes: [docs/chat-timeline-plan.md](docs/chat-timeline-plan.md).
+
+### The message queue — NEW in 0.8.1
+
+The queue is redesigned. One card on top says what is happening and offers the next step; below it are **Up next** (numbered, reorderable, editable) and a folded **Done** list with times and tokens. **Undo** covers remove, skip and clear, and the mode switch reads **Auto | Step by step**. The same queue runs in the simple layout's column (hidden by default in the kiosk), as its own view on a phone, and in the fullscreen sidebar, where collapsing folds just the queue into a bar.
+
+After **Stop** the lane stays busy until the stopped turn has ended, and the stop's reply is never counted as the task's result. A busy refusal sends the task back to waiting; a reload doesn't re-send held tasks; a task held because the daily allowance is spent retries once it resets; the next task starts when the agent says it is ready. The earlier queue behaviour is described in [The task queue](#the-task-queue--long-work-that-runs-unattended-new-in-078).
+
+### File library — NEW in 0.8.1
+
+**Library** (the left column's tile, the rail, the phone header and Settings) is every file the user's own agents made, summarised, sorted and searchable. Flight Deck walks the workspaces of the caller's own process agents on disk — stopped agents too; Flight Deck's own workers are left out — and for each new or changed file reads its text (PDF, DOCX, XLSX and PPTX through the agent's extractors) and has the owner's fast tier write a title, a short summary, one of 12 categories (Report, Research, Notes, Plan, Data & lists, Finance, Legal, Correspondence, Presentation, Code, Images & media, Other) and a few tags. Results are kept in `file_library.db`; a file is summarised again only when its size or modification time changes. `.env` files are listed but never read; archives and unreadable formats are listed without a summary.
+
+- **Pictures, recordings and videos.** Pictures are described by a model that can see — the owner's library tier if it sees pictures, else the agent's own model when the agent's vision is on — and any text in them is read word for word for search. Recordings and videos are transcribed with Soniox (the sound taken out with ffmpeg) and summarised from the transcript. A file set aside for want of vision, a Soniox key or ffmpeg is taken up by the first scan that has it.
+- **Search** goes through names, titles, summaries, tags, the text, picture descriptions and full transcripts, and category and kind names. Filter by agent, category and kind (with counts) and sort; result cards highlight the matches and show text snippets.
+- **Details and preview.** The detail pane has **Open**, **Download**, **Summarise again** and a jump to the agent's chat, over a preview of the selected file: a picture, a video or audio player, a PDF's first page, rendered Markdown (tables too), a web page as a small picture of itself, or the start of a text, code or data file (CSV and TSV as a table, JSON laid out). Office files and archives say there's no preview. The PDF preview (`GET /fd/file-library/files/{id}/thumb`) needs `pypdfium2`, which comes with the `payments` extra; without it the preview offers **Open**. A file someone else wrote, or one whose agent is off, previews without scripts or images.
+- **Actions:** **Edit** (in the [file editor](#file-editor-flight-deck)), **Present as deck**, **Public link** (see [Public file links](#public-file-links--new-in-081)), the phone's share sheet, and **Everything it keeps** for the agent's live files-and-data view.
+- **Costs.** The model calls count toward the owner's daily token allowance; a scan stops when it's spent, or after repeated model failures, and says why. **Rescan** also retries failed files.
+
+Routes (owner-checked): `/fd/file-library/status`, `/fd/file-library/scan`, `/fd/file-library/files`, and `/fd/file-library/files/{id}/summarize|view|download|thumb`.
+
+### Data library — NEW in 0.8.1
+
+**Data** is the File library's sibling for datastores. Flight Deck opens each of the caller's own agents' `datastore.db` read-only from disk (stopped agents too; Flight Deck's own workers left out) and, for every new or changed table, profiles each column — how full it is (placeholders like "unknown" or "TBD" don't count), distinct values, number ranges and sums, date ranges, yes/no splits, link and email hints, the most common values. The owner's fast tier then writes a title, a summary, a category, tags, key facts and a line per column from that profile plus sample rows. Summaries are kept in `data_library.db`; rows are always read live.
+
+- **A table** opens on its summary (stat tiles, key facts, tags) over a live data grid: readable headers, column-type icons, clickable links and emails, formatted numbers and dates, paging, search across every column, sort by any column, and a record panel per row with copy-as-JSON. A **Columns** tab shows the per-column profiles. On a phone: Summary / Data / Columns tabs.
+- **Search** goes through table names, summaries, columns and the data itself; filter by category or agent.
+- **Export** as CSV (opens straight in Excel), JSON (one object per row) or XLSX: `GET /fd/data-library/tables/{id}/export?format=csv|json|xlsx`. A CSV neutralises spreadsheet formulas in rows a shared-agent member added. **Refresh** reads the table again.
+- The model calls count toward the owner's daily token allowance, as for the File library.
+
+### Scheduled tasks — NEW in 0.8.1
+
+**Scheduled** runs the user's agents on a timer. A task runs a prompt on one of their agents and delivers the result to any of:
+
+- **Chat** — the agent's main chat (the kiosk timeline, and the chat bridges bound to the agent, such as WhatsApp);
+- **Email** — from the user's own connected Gmail or Outlook, to themselves or another address;
+- **Telegram** — the user's chat with the deck's team bot.
+
+**Schedules:** `every <N>m|h|d`, `daily HH:MM`, `weekdays HH:MM` (Monday to Friday), `weekly mon,wed HH:MM`, and the one-shots `in <N>m|h|d` and `once <ISO time>`. Wall-clock times are in the task's own time zone (the browser's, saved with the task). The editor previews the next runs.
+
+**One session per task.** Every task runs in its own agent session, kept across runs, so its runs read as one conversation and the agent sees what it said last time. A **Scheduled** chip on a task's result in the chat opens the task, and **Continue in chat** switches the agent's chat onto the task's session.
+
+**Run history.** Every run is logged with its result and how each delivery went: an **All activity** feed with search, and a history per task. **Run now** runs a task in the background.
+
+Due tasks run concurrently, one at a time per agent, and wait up to 20 minutes for a reply. When the owner's daily token allowance is spent, tasks are skipped (a one-shot retries after the reset). `FD_SCHEDULER_QUIET_HOURS` (e.g. `22-08`) holds deliveries until the window ends. A non-admin's task can't drive another owner's agent, and an agent can't choose whom a task emails. Routes: `/scheduler/jobs`, `GET /scheduler/runs?q=`, `POST /scheduler/preview`, `GET /scheduler/delivery-options`, and `POST /scheduler/jobs/{id}/run?background=1`.
+
+### Desktop app mode — NEW in 0.8.1
+
+The desktop app (`desktop/`, Electron; `build-desktop.sh` builds it) runs its own Flight Deck on a free port from 25090–25099 (remembered), with sign-in off and one local user. There is no full Flight Deck in desktop mode: an admin gets the [Admin console](#admin-console) or the real, locked kiosk, switched with **Admin view** / **User view** under the deck name ("Switch to user view" in the console, a shield button back in the kiosk); members always get the kiosk. On launch, a deck with agents opens the kiosk; a deck with no tier set opens the console on **Models**, where an empty state leads you to create one. The console leaves out what needs accounts: Users, Usage & limits, sign-up, kiosk mode, publishing to the team and sharing. In any browser tab, `?app=desktop` simulates the mode and `?app=web` turns it off.
+
+**Google and Microsoft sign-in in the app.** The desktop deck connects Google and Microsoft for its local user the native-app way (RFC 8252): sign-in runs in the system browser and comes back to the deck's own loopback callback (`http://localhost:<port>/fd/google/callback`, `/fd/microsoft/callback`), with PKCE. The app shows "Finish signing in in your browser" with **Cancel** while it waits (up to 10 minutes).
+
+- **Google:** an OAuth client of type **Desktop app** takes the callback on any port, with nothing to add. An existing **Web application** client works once the exact redirect URI, port included, is on its list.
+- **Microsoft:** register `http://localhost/fd/microsoft/callback` under **Mobile and desktop applications** (Microsoft ignores the port for localhost). The client secret is optional for such a public client.
+
+Only a deck with sign-in off, `FD_DESKTOP=1` (the app sets it) and a loopback bind opens these routes; every other deck without sign-in still refuses Google and Microsoft. Tokens are kept for the local user, not in the deployment-wide keys.
+
+---
+
+## Deck Administration — NEW in 0.8.1
+
+What an admin does to set up and look after a team deck. Deploying one (auth, secrets, domains, the checklist) is in [docs/team-deployment.md](docs/team-deployment.md); managing users' agents is in [Running Flight Deck for a team](#running-flight-deck-for-a-team--new-in-080).
+
+### Admin console
+
+A layout of its own for admins, with no chat and no agent desktop — just setting the deck up and looking after it. Every page has an address, `<deck>/console/<page>`, so a link opens it directly and Back / Forward move between pages:
+
+- **Overview** — people, agents running, messages today, 30-day spend, waitlist and Telegram requests to review, a setup checklist, and the machine's load, memory and disk.
+- **Models** — tier sets as cards, each tier opening an editor (context sizes, abilities, key and endpoint); one model for every tier; publish to the team, with "changed since published"; team API keys; and **Extra keys for agents** (environment variables passed to spawned agents) on a full-width row as a Name / Value table, each value behind a show / hide toggle (on a phone the value stacks under the name).
+- **Archetypes** — search and filters, a sectioned editor with "draft from a description", read-only built-ins with **Make a copy**, forge and share.
+- **Connections** — each service with its status. The deck-wide part (the Google and Microsoft OAuth clients, the team Telegram bot, the Jev and Soniox team keys, MCP servers shared with everyone) sits above the admin's own connection.
+- **Users** — Users · Invitations · Waitlist, as on the Users page.
+- **Usage & limits** — today per person against the plan, spend by person and run kind, the plan limits in one table, recent activity.
+- **Settings** — branding, sign-up and the waitlist, kiosk mode, Docker, and the profile defaults.
+
+**Admins start there.** Signing in from a form (sign in, sign up, an accepted invitation) takes an admin to the console's Overview; an admin who never picked a layout starts there, and a reload keeps the layout they chose last. Other ways in: `/console`, a button in the top bar and one in the simple layout. The full layout's Admin, Users, Library and Connections pages are still there. Non-admins never see the console.
+
+### Users, invitations and the waitlist
+
+User management is its own **Users** page (admin only, in the sidebar and the phone navigation) with three tabs, which stay loaded so their counts are right and a half-written search or invitation survives a tab switch. The Admin page keeps Usage, Plans, Settings and Integrations.
+
+- **Users** — search by name or email; filter by role, plan and status (kiosk, temporary password, active today, daily limit reached); sort by newest, oldest, name or today's use. **Add user** sits by the search box. Each user has **Set password**, the **Kiosk mode** mark, today's usage with **Reset today**, their free resets and their **Agents**.
+- **Invitations** — **Invite by email**: email, name, role, kiosk and an optional note, sent from the admin's own connected Gmail or Outlook (or no email: copy the link). The invitation carries a one-time link to `<deck>/invite#<token>` (only the token's hash is stored; it expires after 7 days). The invitee chooses their own password there and is signed in — no password travels by email. A failed email keeps the invitation and hands the admin the link; accepting rings the inviter's bell and settles a pending waitlist application. The tab lists Pending / Expired / Accepted / All with counts, searchable by email, name, inviter and note; **Resend** makes a new link. Gmail needs a send-capable scope (and honours `FD_GMAIL_SEND`); Outlook needs `Mail.Send`.
+- **Waitlist** — while self-registration is closed, "No account?" on the sign-in page leads to a waitlist form: name, email, password, and the name and email of whoever recommended them. Applicants join under the deck's instance name (**Admin → Settings → Waitlist** can set a separate **Waitlist name**). An applicant who signs in before approval is told it's pending. **Approve** creates the account with the password the applicant chose; with the "when I approve someone, email them" picker set, **Approve & email** also tells them their account is ready, with the deck's sign-in link (from `FD_PUBLIC_URL`, else the admin's browser address), sent from the admin's own Gmail or Outlook. A warning shows when that link would point at localhost, and a failed email never undoes the approval (a banner gives a copyable sign-in address instead). The tab lists Waiting / Approved / Rejected / All with counts. Settings can turn the waitlist off. The form is rate-limited per network and capped at 1,000 pending applications.
+
+### Passwords
+
+- **Set by an admin.** **Set password** on a user (new + confirm, **Sign them out everywhere** ticked by default). Add user and Set password mark the account **must change password** — a checkbox, on by default; untick it for a shared kiosk account. That user's first screen after signing in is "Choose your own password", and the Users page shows a "temporary password" badge until they do.
+- **Changed by the user.** **Profile → Password** (also in the kiosk's Profile dialog): current password, new + confirm, and optionally **Sign out my other devices and browsers**. Attempts are rate-limited (10 per 15 minutes per user). Access tokens already issued stay valid until they expire (at most 15 minutes).
+
+### Branding and the sign-in page
+
+**Admin → Settings → Branding:**
+
+- **Instance name** — replaces "Flight Deck" in the panel titles, the browser tab and the sign-in page; waitlist applicants join under it.
+- **Description** — a short line for the sign-in page.
+- **Logo** — uploaded to `/fd/admin/branding/logo` and served publicly at `/fd/branding/logo` (up to 512 KB; the type is checked from the bytes; SVG is served under a sandbox).
+- **Powered by Captain** — on by default (`show_powered_by`): the sign-in footer reads "Powered by Captain · GitHub", linking to captain-claw.com and the GitHub repository. Off, the footer shows only the version and build date.
+
+The sign-in, sign-up and waitlist pages share one design: a brand panel beside a card, tabs for sign-in and sign-up, and a clear "Sign-up is closed" panel when the waitlist is off and admins create the accounts.
+
+### Daily plan limits and free resets
+
+Plans are **free**, **premium** (formerly "pro"; users and stored limits move over on start) and **enterprise**. Besides the older limits (agents, storage, requests per minute, spawns per hour), each plan has **messages per day** and **AI tokens per day**, counted per UTC day. 0 means unlimited, and per-user overrides work as for the other limits.
+
+| Plan | Messages / day | AI tokens / day |
+|---|---|---|
+| free | 30 | 300,000 |
+| premium | 300 | 3,000,000 |
+| enterprise | unlimited | unlimited |
+
+- **Messages** are counted where Flight Deck relays a person's turn: the agent chat, a shared agent's member chat (billed to the member), the voice devices, WhatsApp, Messenger, the glasses (`/glasses/send`) and the deck's Telegram bot. Over the limit the turn is refused with a message saying when it resets. Commands that never reach a model (`/new`, `/help`, …) are free.
+- **Tokens:** agents report every LLM call made on the deck's keys (calls on a person's own key cost the deck nothing and aren't counted): the input that missed the prompt cache, plus the output. **Cache reads are not counted** (cache writes are), so a long cached conversation doesn't swallow the allowance. A member's turn is billed to the member. A spent token allowance refuses new messages and skips scheduled tasks (one-shots retry after the reset).
+- **Exempt** (still counted): admins, the standalone app, and decks without sign-in.
+- **Where people see it:** the allowance line under the chat's lane tabs, the kiosk Info dialog's meters, and a tip in the guide. **Admin → Plans** edits the limits; the Users page shows today's use with **Reset today**.
+
+**Free resets.** An admin gives users free resets from the Users page (one user, the selected users or everyone), up to a deck-wide cap (default 3; system setting `fd:usage-reset-cap`) so repeated grants don't pile up; a grant never takes resets away. A user spends one from the usage line (when the allowance is spent or running low) or the Info dialog to start the day's messages and tokens over. Grants, take-backs and spent resets go to the usage log. Routes: `POST /fd/quota/reset`, `POST /fd/admin/usage/resets`, `PUT /fd/admin/users/{id}/usage/resets`.
+
+### Integrations: shared keys, Telegram and MCP
+
+**Admin → Integrations** (the console's Connections page) holds what the deck shares:
+
+- **Jev and Soniox team keys** — one key for everyone without their own; a user's own key in **Connections** wins. **Move server key here** imports `SONIOX_API_KEY`, which stays as the last fallback until then.
+- **The team Telegram bot** — one bot token for the deck (see [Telegram: the Team Bot](#telegram-the-team-bot--new-in-081)). **Auto-approve** approves new requests at once (someone an admin turned down still waits; switching it on approves the requests waiting now). The Telegram inbox switch for the deck, and whether @BotFather allows Secretary Mode and group reading, are shown here too.
+- **MCP servers** — which servers are shared with everyone on the deck; share one of your own (the confirmation names the account an OAuth server acts as) or stop sharing one; servers nobody owns are flagged. Adding and editing stays in **Connections → MCP Servers** (see [MCP servers](#mcp-servers-centrally-managed)).
+- **Google and Microsoft** — one admin-managed OAuth client per deck; each user still connects their own account.
 
 ---
 
@@ -5531,9 +5846,11 @@ Captain Claw can run alongside Telegram, Slack, and Discord bots.
    ```
 4. After approval, the remote user can send prompts and slash commands
 
+On Telegram, `/approve user telegram <token|@user|id> owner` (NEW in 0.8.1) marks the approved user as the agent's owner: their private chat joins the agent's main conversation (see [Telegram: the Team Bot](#telegram-the-team-bot--new-in-081)).
+
 ### Telegram: Per-User Sessions
 
-Each Telegram user automatically gets a dedicated session and agent instance:
+Each Telegram user automatically gets a dedicated session and agent instance — except the owner's own private chat, which since 0.8.1 joins the agent's main conversation (`telegram.owner_in_main`; see [Telegram: the Team Bot](#telegram-the-team-bot--new-in-081)):
 
 - **Isolated sessions** — users cannot see or switch to other users' sessions
 - **Concurrent execution** — different Telegram users can interact simultaneously (no "Agent is busy" blocking between users)
@@ -5541,7 +5858,7 @@ Each Telegram user automatically gets a dedicated session and agent instance:
 - **`/new` starts a fresh session** (NEW in 0.8.0) — `/new [name]` (or `/session new`) moves the user to a new session and archives the old one to history; the new one stays theirs after a restart. It is refused while a reply is still running ("send /new once the reply is in").
 - **Disabled commands** — listing and switching sessions (`/sessions`, `/session list`, `/session switch`, `/session load`) are not available on Telegram: each user has one session at a time
 - **Available session commands** — `/clear`, `/history`, `/compact`, `/session info`, `/session rename` operate on the user's own session
-- **Photo attachments** — images sent to the bot are processed through the `image_vision` tool
+- **Photo attachments** — images sent to the bot reach the agent as pictures; since 0.8.1 a model that doesn't see images gets the photo described first (by a vision model or a multimodal peer), as in the web chat (see [Native Vision](#native-vision--new-in-081))
 - **Voice notes** — the user's own voice note is transcribed (Soniox, the owner's key through Flight Deck) and the transcript becomes the message; the bot shows it back ("🎙 Transcription: …"). Without a Soniox key, or when nothing was recognised, the bot says so and no turn runs. A *forwarded* voice note is someone else's words: it reaches the agent as an audio file instead.
 - **Audio files** — reach the agent as attached files; when Soniox is connected the attachment hint names the `audio` tool to transcribe them.
 - **Videos, round video messages and GIFs** — reach the agent as attached files and are analyzed before the turn (`video_vision`: frames + audio transcript), like a video uploaded in the web chat.
@@ -5549,6 +5866,25 @@ Each Telegram user automatically gets a dedicated session and agent instance:
 - **Generated images**: images that `image_gen`, `termux` or a browser screenshot made this turn are sent back to the user automatically.
 - **Files the reply names**: a document or picture the agent wrote this turn is sent back when the reply names it by file name ("here's report.docx"). Only files in the user's session folders under `saved/` count, never `scripts/`, `tools/`, `skills/` or `downloads/`. A file the agent only read (a Drive download, an email attachment) is never sent.
 - **Only deliverables**: a file is sent only if the turn made it, inside the agent's own `saved/` area. A `Path:` line in tool output, an email body or a web page can't send a file. The CLI chat bridges (Telegram, Slack, Discord) and WhatsApp follow the same rule.
+- **Live narration** (NEW in 0.8.1): each short note the agent writes beside its tool calls ("Checking your calendar…") goes to the chat the moment it is written, one message each, with the answer last — as on WhatsApp. `STREAM_NARRATION=off` folds them into the final answer instead. Narration goes only to the Telegram chat, never over the agent's web socket.
+- **Card numbers scrubbed** (NEW in 0.8.1): card numbers and CVVs are removed from typed text and from a voice note's transcript before they go further, and the echoed transcript shows the scrubbed text.
+
+### Telegram: the Team Bot — NEW in 0.8.1
+
+A Flight Deck can run **one Telegram bot for the whole team**, so nobody needs a bot of their own.
+
+- **Setup.** An admin sets the bot token in **Admin → Integrations** (checked with Telegram). Flight Deck is the only process polling it.
+- **Joining.** A user asks for it in **Connections → Telegram**, picking one of their own agents. An admin approves (or **Auto-approve** does). A one-time `t.me/<bot>?start=<code>` link then binds the user's Telegram account to that agent.
+- **How it runs.** Agents reach Telegram through Flight Deck's relay (`/fd/telegram-relay`, which speaks the Bot API), identified by their `X-Agent-Auth`, and each is held to its own approved chats, files and button presses. The token never leaves Flight Deck; chats and sessions stay in the agent. An agent with no bot of its own runs its usual Telegram code against the relay (`telegram.shared_bot`, on by default); an agent with its own bot keeps it. Messages count against the user's [daily allowance](#daily-plan-limits-and-free-resets).
+- **The owner's chat is the main conversation.** The owner's private chat joins the agent's main conversation (lane A) — the one the web chat, WhatsApp, the glasses, the voice devices and the app already share. A turn from it waits while another lane-A turn runs, takes in waiting automation results first, shows on every client "via Telegram", and frees the lane after. `/new` from it starts a new main conversation, and delegated results come back through it. The owner is whoever reaches the agent through the team bot, or, on an agent's own bot, the approved user marked owner (`/approve user telegram <token|@user|id> owner`). Other Telegram users and groups keep sessions of their own. `telegram.owner_in_main: false` gives the owner's chat its own session again.
+- **What's new on Telegram.** With an [inbox](#telegram_inbox), the team bot also keeps a read-only copy of the user's own Telegram chats for their agents.
+
+**Groups.** A bot can't follow a group invite link (`t.me/+…`): the Bot API has no way to join a chat, only a member can add a bot. So the way in is the bot's own add-to-group link, `t.me/<bot>?startgroup=agent`. Send `/group` (or paste an invite link) in a private chat and the bot answers with an **Add me to a group** button; **Connections → Telegram** also has "Add <agent> to a group" and lists the agent's groups with **Remove**.
+
+- In a group the agent answers @mentions, replies to its messages and `/ask` from anyone. Each group has one session, and what was said since its last answer goes along as context.
+- **Group turns use the web only.** They run like a shared-agent member's turn: `web_search` and `web_fetch`, and none of the owner's profile, packs, insights, intuitions or memory in the prompt.
+- `/new` and `/leave` work for whoever added the bot, or the owner. Answers are capped per group per hour (`telegram.group_turns_per_hour`, default 30); `telegram.groups: false` turns groups off. Only messages addressed to the bot count against the plan of whoever added it.
+- On an agent's own bot, only someone it already answers may bring it into a group; anyone else adding it gets one line and the bot leaves. On the team bot, a stranger adding it makes the bot leave. Disconnecting Telegram, or an admin rejecting or removing the link, takes the agent out of that person's groups.
 
 ### Supported Remote Commands
 
@@ -5584,7 +5920,7 @@ The mobile bridge is installable as a PWA on iOS and Android.
 - Optional (for TTS): a Soniox API key. Without it the glasses still render replies visually but won't speak.
 
 ```bash
-export SONIOX_API_KEY=sk_…                # required for voice
+export SONIOX_API_KEY=sk_…                # for voice, unless an admin set a Soniox team key
 export SONIOX_TTS_VOICE=Adrian            # optional, default
 export SONIOX_TTS_LANGUAGE=en             # optional, default
 captain-claw-fd
@@ -5654,22 +5990,124 @@ captain-claw-fd
 
 Besides the bridge pages above, Flight Deck now ships a full frontend for the Meta Ray-Ban Display at **`/hud/`**: chat with your running agents (the same conversation as the dashboard, dictation or handwriting through Meta's composer, replies read aloud), read the Markdown files your agents wrote, and browse datastore tables read-only — all driven by swipes and pinches on a 600 × 600 display. It is a separate, lean page (about 150 KB on the wire for the first load, cached by a service worker afterwards). Pair it by opening `/hud/pair` on your phone or computer and typing the code the glasses show. Requirements, pairing, screens and limits: [docs/glasses-hud.md](docs/glasses-hud.md).
 
+### Android HUD app — NEW in 0.8.1
+
+`android/hud` is a small Android app — one WebView in a Kotlin shell — that shows a deck's HUD (`<deck>/hud/`) full screen on a phone: chat with your running agents, read the Markdown files they wrote, and browse datastore tables. The HUD's code isn't in the APK: the app loads it fresh from the deck on every start (and again when the deck serves a newer build), so every Flight Deck deploy updates the app and the deck needs no change. On first run the app asks for the deck address and checks it; the deck can be changed later from the HUD, a launcher shortcut or the can't-reach screen. The phone's Back key, the on-screen keyboard and spoken replies (Android's text-to-speech) behave as in a native app, and off the glasses the HUD switches to touch: "Tap" instead of "Pinch", one-tap Send, sign-in starting with email, and sideways swipes for records and file pages. Plain http is allowed only for decks on a local network; a deck with `FD_LOCKDOWN` needs https for its sign-in cookie. Turns from the app are recorded with source `app:android`. Build, install, first run and sign-in: [docs/android-app.md](docs/android-app.md).
+
 ---
 
-## StickS3 voice device — NEW in 0.8.0
+## M5Stack Voice Devices (StickS3, StopWatch, PaperColor)
 
-A pocket push-to-talk client for your agents on an **M5Stack StickS3**: hold the front button, talk, release. Flight Deck transcribes it (Soniox), sends it to one of your running agents, and the stick shows the reply as paged text (č ć š ž đ included), reads it aloud, and shows any picture the agent made. While the agent works, the screen shows what it heard, the agent's live activity lines ("Searching: …", "Reading: …") and a "12s · 3 steps" timer.
+Push-to-talk clients for your agents on three M5Stack devices, built from one firmware tree in `firmware/device/` (one PlatformIO env per device). Press the talk button and talk; press it again, or just stop talking for 2.5 s, to send. Flight Deck transcribes it (Soniox), sends it to one of your running agents, and the device shows the reply, reads it aloud, and shows any picture the agent made. While the agent works, it shows what it heard, the agent's live activity lines ("Searching: …", "Reading: …") and a "12s · 3 steps" timer. Results the agent produces later (a cron job, a scheduled task, a nudge) reach the device too.
 
-- **Server:** `WS /device/ws` on Flight Deck. The stick streams 16 kHz PCM while the button is held; replies come back as text, Soniox TTS audio (24 kHz PCM) and pictures fitted to the screen. Results the agent produces later (a cron job, a nudge) are shown too.
+This section is a summary. Every screen, setting and button, the build and flash steps, and the protocol are in [firmware/device/README.md](firmware/device/README.md).
+
+| | StickS3 | StopWatch | PaperColor |
+|---|---|---|---|
+| Screen | 240×135 LCD | 466×466 round AMOLED, touch | 4" Spectra 6 colour e-paper, 400×600, 15–30 s per redraw |
+| Talk button | front (A) | yellow (A) | top (C) on the A build, A on the B build |
+| Extras | motion sensor | vibration, clock face, raise to wake | two RGB status lights, temperature and humidity sensor, clock, microSD slot |
+| PlatformIO env | `sticks3` | `stopwatch` | `papercolor` (A build) / `papercolor_b` (B build) |
+| Firmware (0.8.1) | 0.18.1 | 0.18.1 | A: 0.18.1 · B: 1.0.16 |
+
+### Deck side and setup
+
+- **Server:** `WS /device/ws` on Flight Deck (`captain_claw/flight_deck/device_bridge.py`). The device streams 16 kHz PCM while it records; replies come back as text, Soniox TTS audio (24 kHz PCM) and pictures fitted to the screen (the StopWatch's fill the circle, sent in parts; the PaperColor's keep their own shape).
 - **Auth:** a personal access token (Flight Deck → Connections → *Agent access for Claude (MCP)* → Generate token) names the owner; a deck with auth off needs none.
-- **Deck requirements:** a Soniox key (speech in, voice out) — the device owner's own in Connections → Soniox, else the admin's team key, else `SONIOX_API_KEY`. A deck reached through a domain needs that domain in `FD_ALLOWED_HOSTS` or `FD_PUBLIC_URL` (the [origin guard](#flight-deck-security-hardening--new-in-080) refuses unknown hosts).
-- **Setup:** on first boot (or holding the front button while switching on) the stick opens a `Captain-StickS3-xxxx` hotspot; at `http://192.168.4.1` enter up to five Wi-Fi networks, the deck address (`ws://<host>:25080` or `wss://<deck domain>`), the token, and optionally an agent slug, reply language, volume and sleep minutes.
-- **Buttons:** front = hold to talk, tap to stop speaking or flip picture ↔ text; side = agents list, volume (25–100 %), speech **Boost** (+6 / +10 dB with a soft limiter), settings.
-- **Firmware:** PlatformIO in `firmware/sticks3/` — `uv tool install platformio`, then `cd firmware/sticks3 && pio run -t upload`. Details, serial logging and going back to stock firmware: [firmware/sticks3/README.md](firmware/sticks3/README.md).
+- **Deck requirements:** a Soniox key (speech in, voice out) — the device owner's own in **Connections → Soniox**, else the admin's team key, else `SONIOX_API_KEY`. A deck reached through a domain needs that domain in `FD_ALLOWED_HOSTS` or `FD_PUBLIC_URL` (the [origin guard](#flight-deck-security-hardening--new-in-080) refuses unknown hosts). The male and female voices are Soniox `Adrian` and `Emma`; `DEVICE_VOICE_MALE` / `DEVICE_VOICE_FEMALE` pick others. Device messages count against the owner's [daily allowance](#daily-plan-limits-and-free-resets).
+- **Setup:** on first boot (or switching on with the talk button held) the device opens a `Captain-StickS3-xxxx` / `Captain-StopWatch-xxxx` / `Captain-PaperColor-xxxx` hotspot and shows its QR code. At `http://192.168.4.1` enter up to five Wi-Fi networks, the deck address (`ws://<host>:25080` or `wss://<deck domain>`), the token, and optionally an agent slug, reply language, volume, and screen-off and power-off timeouts. Later, Menu → *Wi-Fi & settings* reopens it (PaperColor: hold B on the A build, hold C on the B build), and holding the side button on the setup screen leaves it without saving. Once the device is online, Menu → *Settings on phone* (the PaperColor's Options) shows the same page on the device's own address behind a one-time QR code, so changing a setting doesn't need the hotspot.
+
+### Buttons
+
+**StickS3**
+
+| | Front (A) | Side (B) |
+|---|---|---|
+| click | talk, click again to send (or 2.5 s of quiet) · while it speaks: stop | next page · back (a picture: its text) |
+| hold | | menu (hold again closes) |
+| double-click | hear the last answer again | (on an answer) hear it again |
+
+A press that wakes the stick only wakes it; the next press talks.
+
+**StopWatch**
+
+- **Yellow button:** press, talk, press again — or 2.5 s of quiet sends it. A press while it speaks stops the speech, a double press plays the last answer again, and a press that wakes the watch (from sleep or a dark screen) only wakes it. **Hold it (1 s) for note-taking mode** (see below).
+- **The other button** works like the StickS3's side button: next page or back, hold for the menu, double-click on an answer to hear it again.
+- **Touch.** Idle, the screen is a clock face (the date, the time, the agent's character, the battery as an arc and its time left), the middle of three pages: swipe right for the background picture alone, left for the info page (voice notes waiting and room for more, the Wi-Fi network and its signal, the Flight Deck address, the agent), up or down for the last answer. Swipes page an answer, a double tap goes home, and the menu, the agent and character pickers and the status pages take swipes and taps. *Tap to talk* (Menu, off by default) adds an on-screen record button. While the agent works, the button under the timer is a **stop** (the agent stops after its current step); while an answer is spoken it is **pause / play**; afterwards a **replay** button sits under the text. A tap on a picture shows all of it, another fills the circle again.
+- **Raise to wake.** A wrist raise lights a dark or dimmed screen; lowering the wrist on an idle screen puts it out. The watch still sleeps on its *Power off* timer (up to 3 minutes); only the buttons wake it from sleep.
+
+**PaperColor, A build** (`papercolor`): voice-first; the paper redraws about 30 s after you put it down.
+
+| | C (top) | A | B |
+|---|---|---|---|
+| click | talk, click again to send · while it speaks: stop · on Options: update | home: status · answer: next page · Options: done | answer: home · home: the answer · back |
+| hold | | Options (a QR code for the phone settings page) | Wi-Fi & settings (the setup hotspot; hold again to leave) |
+| double-click | hear the last answer again | (on an answer) hear it again | |
+
+**PaperColor, B build** (`papercolor_b`, versions 1.x, published as the same `papercolor` kind): the screen treated as a dashboard; the lights and the voice carry the turn. The dashboard — clock, date, room temperature and humidity, battery with its time left, voice notes waiting and room left, the Wi-Fi / deck / agent links — is redrawn on every five-minute mark, awake or asleep (a timer wake draws it without Wi-Fi). A new answer goes on the paper only while the answer page is showing, at the largest of four text sizes that fits; from the dashboard, B shows it. Once Wi-Fi, the deck or the agent has been down for 30 s the links show in red.
+
+| | A | C (top) | B |
+|---|---|---|---|
+| click | talk, click again to send · while it speaks: stop · on Options: back · in the hotspot: leave | Options (QR code) · on Options: update · no Wi-Fi: the setup hotspot | the last answer · next page · after the last: the dashboard |
+| hold | note-taking mode on / off | Wi-Fi & settings (the setup hotspot) | the dashboard now |
+| double-click | hear the last answer again | | |
+
+On the B build, voice notes kept offline go to the agent by themselves (no question), *Auto update* defaults to on, and moving the paper never counts as use or redraws it. Either build powers off after 1, 3, 10 or 30 idle minutes, 1 or 2 hours, or never (the phone settings page), keeping what the paper shows.
+
+**PaperColor status lights:** yellow at start-up, then the left one shows Wi-Fi and the right one the agent (green up, red down); while it records, the left blinks red (brighter with your voice) and the right one shows how long — green for the first 20 s, yellow for the next 20 s, red after; a blink per agent step (light blue a tool, dark blue narration, purple the model); green with the voice. Idle, both blink every 10 s, coloured by how near power-off is. Offline, the left one blinks blue without Wi-Fi, the right one when Wi-Fi is up but the deck or the agent isn't. While an update downloads, purple left, then right.
+
+### Screens and settings
+
+- **The menu** (hold the side button; on the StopWatch it has two levels, with the rest under *Settings*): *Replay answer*, *Status*, *Send voice notes*, *Agent »* (which of your agents the device talks to), *Volume* (25–100 %) and speech *Boost* (+6 / +10 dB with a soft limiter), *Voice* (male / female), *Display* (text, or icons: an animated character), *Character »*, *Text size* (small / medium / large), screen-off and power-off timeouts, *Talk sounds*, *Beeps around speech*, *Tap to talk* (StopWatch), *Software update*, *Auto update*, *Settings on phone* and *Wi-Fi & settings*. The PaperColor has no menu: its Options code opens every setting on the phone.
+- **Characters.** In icon mode the screen shows one of 18 animated characters — Captain, Bot, Bird, Car, Matrix, Orc, Elf, Dwarf, C64, Amiga, Cat, Dog, Dinosaur, Alien, Caveman, HAL 9000, KITT or Pac-Man — with idle, listening, thinking, speaking (driven by the voice) and agent-down poses. *Character »* previews each one.
+- **Status.** Wi-Fi network and signal, IP, the deck and its round trip, the agent link, battery (level, volts, charging, time left), uptime, answers, the room's climate (PaperColor), firmware and any update on offer, voice and text size, free memory and voice notes waiting. The StickS3 shows it in pages at the chosen text size; the StopWatch as three pages of gauges round its ring. The StickS3's top bar always shows Wi-Fi and agent colour blocks and the battery percentage.
+- **The StopWatch's look.** A ring round the edge shows state — red while it listens, amber while the agent works (a tick per tool step), a short cyan line under the text following the voice. Screens slide or fade between each other, the watch answers touch with short vibrations, and pictures fill the circle.
+
+### Talking
+
+- **Press to talk.** Every device toggles: press, talk, press again. A recording with no button held ends by itself after **2.5 s of quiet**, measured against the recording's own quietest and loudest moments so the mic's floor doesn't matter; a click, a tap on the case or room hum doesn't count as a voice. With nothing said, the recording is dropped.
+- **Talk sounds and chimes.** A short high blip when you press (recording starts a quarter second later, so the blip isn't recorded) and a lower one when it is sent or kept offline (*Talk sounds*, on by default). A rising two-tone chime before the answer is spoken and the same tones falling once it has played to its end (*Beeps around speech*); a stopped answer or a replay gets neither. The PaperColor also beeps on its key presses.
+- **Sound by voice.** A recording that is only "volume up" / "volume down" (or "louder", "quieter", "pojačaj", "tiše" …) or "beep on" / "beep off", in English or Croatian, with a "please" either side, never reaches the agent. Flight Deck spots it, the device moves the volume a quarter at a time (25–100 %) or turns every beep on or off, keeps the setting, and says the result back at the new volume. Anything longer ("turn up the volume on the kitchen speaker") goes to the agent.
+- **"New topic."** A recording that opens with a new-topic cue ("New topic, how warm is it?") starts a new conversation and goes straight to the answer. Said alone, the device answers "New topic — go ahead."
+- **Readings with every turn.** Each recording carries the device's readings: battery (%, volts, charging or on USB), the Wi-Fi network and signal, how it's held and whether it's moving (StickS3, StopWatch), the room's temperature and humidity (PaperColor), and the local time. Flight Deck turns them into one `[Context: …]` line at the top of the turn — context for the model, never stored as the user's words — so "how's my battery?" or "is it warm in here?" just work. The agent doesn't recite them unless asked, or unless the battery is nearly empty.
+- **Source labels.** Device turns are recorded with source `device:sticks3`, `device:stopwatch` or `device:papercolor` and a label like "M5Stack StickS3 (stick-a1b2c3)": the kiosk shows them "via M5Stack …", the model sees "[via …]", and the agent's [reasoning effort](#reasoning-effort--new-in-081) can be set per device.
+
+### Answers
+
+- **Streamed and spoken by the sentence.** Flight Deck follows the model's text as it is written and, each time a sentence completes, shows the answer so far and speaks that sentence, so the first words are heard while the rest is still being written. The full answer then replaces the text in place and only what wasn't spoken yet is read. Only the answer streams to the device — the agent's own calls (titles, rephrasing) never do — and text the model writes before a tool call isn't treated as the answer.
+- **The text follows the voice.** On the StopWatch the sentence being spoken is lit and the rest dimmed (in character mode it shows as a subtitle under the face); on the StopWatch and the StickS3 the page turns by itself when the voice reaches it, until you page by hand. Each sound tells the device which characters it covers, so the place stays exact through a long answer.
+- **Replay and pause.** The device keeps the whole answer in memory (its speech, then any sound the agent made, up to about 66 s) and replays it at once, offline. If part of it never arrived, the device asks Flight Deck to send the answer again. On the StopWatch, pause and play sit under a spoken answer.
+- **A dropped link.** On weak Wi-Fi the device keeps the working screen ("Connection lost — reconnecting…") and retries for up to 2 minutes. Flight Deck keeps each device's open turn and its last answer for 10 minutes, so after a reconnect the answer arrives (or "Thinking…" shows again while the agent is still at it). If the link stays away, or the deck restarted meanwhile, the device says "Answer lost — ask again".
+- **Battery time.** The StopWatch (on the clock face and its Power page), the StickS3 (its Battery status row) and the PaperColor B dashboard say "≈ 2 h 10 min left" or "full in ≈ 45 min", learned from the battery level over time (through sleeps too) once there are five minutes and two per cent to go on.
+
+### Offline voice notes and note-taking mode
+
+- **Offline notes.** Out of Wi-Fi, or with Flight Deck down, talking records a voice note into the device's flash: 8 kHz 4-bit ADPCM, 4 KB a second, about 13–14 minutes on the StopWatch and PaperColor and about 5½ on the StickS3. With a microSD card in, the PaperColor keeps notes on the card instead (FAT32 or FAT16, in `captain-notes/`; only files named the way the device names notes are ever read, sent or removed). When none of its saved networks is in reach at switch-on, a device becomes a note taker within a couple of seconds instead of opening the setup hotspot (with no network saved at all, setup still opens), and keeps looking for Wi-Fi every 15 s.
+- **Asked before sending.** Once the deck is back, the device asks first ("There are saved voice notes. Would you like to send them to the agent?"): the talk button sends them, the side button keeps them for later, and Menu → *Send voice notes* sends them any time (the PaperColor B sends them without asking). Flight Deck transcribes them and gives the agent all of them as **one turn**, oldest first, each with when it was recorded. A note is deleted from the device only after the deck has it; one Soniox couldn't transcribe stays for a later try.
+- **Note-taking mode** (StopWatch: hold the yellow button 1 s; PaperColor B: hold A 1 s). Every recording is kept as a voice note, online too, with no quiet stop and no length limit beyond the room left: notes are written to flash, or the card, as they are recorded. Rising tones and a notice turn it on (the watch's clock face shows a red arc and "Note mode · hold yellow to send"); holding again turns it off with falling tones and sends all the notes to the agent as one turn, without asking. The mode is kept across sleep.
+
+### Pictures and the StopWatch background
+
+Pictures the agent makes are shown on the device; the PaperColor dithers them into its six inks. On the StopWatch, send the agent a picture and ask for it as the watch background: its [`watch_background`](#watch_background--new-in-081) tool hands it to Flight Deck, which crops it to the round screen and keeps it per owner. Every screen is then drawn on it, frosted and darkened behind text, and the clock face's swipe-right page shows it sharp. Ask the agent to clear it to go back to black.
+
+### Updates over the air
+
+Devices update over Wi-Fi from your own Flight Deck. An admin builds, signs and publishes a release with `tools/publish.py`, from `firmware/device/`:
+
+```bash
+uv run --no-project --with cryptography python tools/publish.py stopwatch \
+    --deck https://<deck> --notes "what changed"
+```
+
+It builds the env, signs the image (ECDSA P-256; the private key stays in `~/.captain-claw/firmware-signing/` — back it up: without it no device accepts a new build) and uploads it with an admin token (`--token`, `FD_TOKEN`, or the `deck-token` file in that folder). It refuses a build whose `FW_VERSION` isn't the version it would publish; `papercolor_b` publishes as the `papercolor` kind. Flight Deck checks the image and keeps the newest three builds per kind under `<fd_home>/device_firmware/<hw>/` (`POST` / `GET /fd/device/firmware`, admin), and offers the newest to devices of that kind on connect, to connected ones at once. On the device: Menu → *Software update*, or *Auto update* when idle on USB power. An update refuses mid-conversation and under 30 % battery off USB, checks the signature before switching, and a new version that can't reach Flight Deck within 90 s rolls back to the previous one.
 
 The StickS3 has no Bluetooth Classic, so audio plays on its own speaker, not on Bluetooth headphones.
 
 ---
+
+## WhatsApp Bridge
+
+Flight Deck's WhatsApp bridge connects a WhatsApp Business number (Meta Cloud API) to your agents. Setup: [docs/whatsapp-bridge-setup.md](docs/whatsapp-bridge-setup.md). A WhatsApp turn is part of the agent's main conversation, so it also shows in the web timeline "via WhatsApp" (see [The chat timeline](#the-chat-timeline-topics-and-other-channels--new-in-081)). Agents send files into a chat with [`whatsapp_send_file`](#whatsapp_send_file).
 
 ### WhatsApp: automated messages arrive once
 
@@ -5990,6 +6428,47 @@ Attachments are limited to 25 MB per file.
 
 ---
 
+## Payments (bill pay and purchases) — NEW in 0.8.1
+
+Off unless Flight Deck runs with `FD_PAYMENTS=1`; install the extra for barcode and invoice reading (`pip install "captain-claw[payments]"`). Then an agent's [`payments`](#payments--new-in-081) tool helps its owner pay bills and buy things **without Captain ever moving money or seeing a card**: the user approves every payment in their own bank, Revolut or Link app. The owner works on the **Payments** page (sidebar). It was built in phases; each plan document has the design and the decisions.
+
+- **Phase 0 — bill pay by barcode** ([docs/payments-phase0-plan.md](docs/payments-phase0-plan.md)). The agent prepares a payment from an invoice (PDF or photo; the invoice's own barcode is read when it has one, and every field is checked: the IBAN, the HR model and *poziv na broj*, an RF reference) and hands over a HUB3 PDF417 or EPC QR barcode the user scans in their bank app, plus a `/p/<token>` phone page with **I paid** and **Skip**. Blocking warnings (a changed IBAN, a duplicate, a misread amount, over the per-user cap) clear only by the owner's acknowledgement, never by the agent. The agent says "paid" only from the user's own words, never on an automated turn. Card numbers, CVVs and expiry dates are scrubbed at every entry point, typed or spoken, and the fabrication guard catches a reply that claims a payment that didn't happen.
+- **Phase 1 — Revolut Business drafts** ([docs/payments-phase1-plan.md](docs/payments-phase1-plan.md)). The payment goes into the user's Revolut Business as a draft they send in the Revolut app (Captain's token can't pay), after Verification of Payee; it is marked settled when Revolut says it completed.
+- **Phase 2 — pay-by-bank links** ([docs/payments-phase2-plan.md](docs/payments-phase2-plan.md)). Through the deck's Enable Banking application (`FD_ENABLEBANKING_APP_ID`, `FD_ENABLEBANKING_KEY`; PSD2), one link to the user's own bank, where they approve with the bank's own strong authentication. Live payments need a payment-initiation licence or a contract with the provider.
+- **Phase 3 — purchases** ([docs/payments-phase3-plan.md](docs/payments-phase3-plan.md)). Buying from an online shop with a one-time card that exists only after the user approves this seller and amount — the Stripe Link agent wallet (`FD_LINK_*`, US and Canada accounts) or a Revolut card made for the one purchase — typed into the checkout form without the model ever seeing it. Shops that speak ACP, and AP2 merchant agents (`FD_AP2=1`), need no browser.
+- **Phase 4 — the bank statement** ([docs/payments-phase4-plan.md](docs/payments-phase4-plan.md)). Read-only statements (`FD_PAYMENTS_STATEMENTS=1`; Enable Banking or the Revolut Business statement, read at `FD_PAYMENTS_SYNC_TIMES`, default `07:30,16:30`) confirm bills as paid and flag double payments and reversals; incoming payments and balances are never read. A daily digest reminds the owner of bills due soon or overdue (outside `FD_SCHEDULER_QUIET_HOURS`), to the bell and the chat they last prepared a bill from. Bills that repeat are spotted and suggested; once the owner tracks one, Flight Deck prepares it each period (or waits for the invoice when the amount changes).
+
+---
+
+## Native Vision — NEW in 0.8.1
+
+An agent whose own model sees images now gets the turn's pictures **as images in its own request**, instead of a text description from a separate vision model.
+
+- **The switch:** `model.vision: auto | on | off`, and `vision` on each allowed model. `auto` is on for model families known to be multimodal and for Ollama. Local Qwen builds need `vision: on` (text-only builds share the names). With vision off, pictures are described as before: by an allowed model with `model_type: vision`, or by a multimodal peer agent.
+- **In Flight Deck:** a **Vision** select in the Spawner, a **Sees images** checkbox per Library tier (carried into archetype, Forge, Library and Quick chat spawns), a Vision select and a "vision" badge in the agent card's model editor, and **Vision** in the kiosk agent Settings. Vision is read when the agent starts, so a change needs a restart. Pictures attached in Flight Deck's chats go to the agent as images, not text references.
+- **What goes inline:** only the current turn's pictures — the user's attachments first, then the newest pictures tools returned (`browser` screenshots, `pinchtab`, `screen_capture`, `cv`, and `image_vision` / `image_ocr` called by the model). Earlier turns keep path markers (`[Attached image: …]`), and `image_vision` on a path shows a picture again. Limits are in [`context.inline_images`](#context): 4 per call, the newest 2 tool pictures, 1280 px, at most 30 % of the context window.
+- **Self-healing:** a server that refuses image input has the picture replaced by the fallback description in the same call and is never sent one again in that process. The refusal is remembered in `~/.captain-claw/vision_rejected.json` for a day, so a restart doesn't pay for it again and a server that gains vision is tried again.
+- **Everywhere:** `image_vision` is always available, so an archetype that left it out can still look at a picture; when no description could be made the model is told to say so rather than guess. Telegram photos and a flow's vision step use the same fallback for a model that doesn't see. HEIC, HEIF, AVIF and TIFF uploads are stored as JPEG.
+
+---
+
+## Reasoning Effort — NEW in 0.8.1
+
+One scale for every model's "think harder" control: **off · minimal · low · medium · high · xhigh · max**, plus **on** for models that only switch thinking on or off. `captain_claw/llm/reasoning.py` translates it for each model family and transport — Claude, OpenAI GPT-5.x and the o-series (Codex included), Gemini and Gemma, Grok, DeepSeek, Kimi, GLM, MiniMax, Qwen, Mistral, gpt-oss and Nemotron; local servers through `chat_template_kwargs`, Ollama through `think`, OpenRouter through its `reasoning` field. A level the model doesn't offer is moved to the nearest one it does, so switching an agent's model never sends a value the new model rejects.
+
+- **The web chat.** The kiosk composer's reasoning button (beside "What can I do?") offers **Auto** (the model's own default) plus exactly the levels the agent's model offers. The pick is kept per agent and sent with every message as `reasoning_effort`.
+- **Every other source** — WhatsApp, Telegram, Messenger, Discord, the app, the glasses, each voice device, scheduled tasks, flows, other agents, autonomous work, the API, shared-agent members and public links — takes the agent's own settings in `~/.captain-claw/reasoning_effort.json`:
+
+  ```json
+  {"default": "low", "channels": {"whatsapp": "auto", "device:stopwatch": "minimal", "scheduled": "high"}}
+  ```
+
+  A turn's level is looked up by its source (`device:stopwatch`), then its channel (`device`), then `default`; `auto` sends nothing. The file is read again whenever it changes. Edit it in the kiosk agent **Settings → Reasoning effort**, or with `GET` / `PUT /fd/agent-reasoning/{kind}/{id}` (the levels offered come from the agent's configured model).
+- **Only the conversation thinks harder.** The level applies to the main conversation's calls; titles, rephrasing, compaction and reflections keep the model's default. Shared-agent members get no picker.
+- **Self-healing:** a server that refuses a reasoning field gets the request again without it, and the model keeps its default for the rest of the run.
+
+---
+
 ## Prompt Caching
 
 Captain Claw supports Anthropic prompt caching to reduce token costs and latency on repeated interactions.
@@ -6091,6 +6570,9 @@ workspace/saved/
 | `JEV_API_KEY` (or `TYPESAFE_API_KEY`) | Jev (TypeSafe AI) API key for the `jev` tool — standalone agents only; under Flight Deck add it in **Connections → Jev** |
 | `SONIOX_API_KEY` | Flight Deck: last-fallback Soniox key (speech-to-text and TTS for WhatsApp voice notes, the glasses bridge, the HUD, the StickS3 device and agents). Prefer Connections → Soniox (per user) and Admin → Integrations → Soniox team key, where **Move server key here** imports this value. Agents no longer inherit it: they transcribe through Flight Deck with their owner's key. |
 | `WHATSAPP_REACTIONS` / `WHATSAPP_REACTION_TIMEOUT` | Flight Deck WhatsApp bridge: `off` disables emoji reactions (on by default); timeout in seconds (default 8) |
+| `STREAM_NARRATION` | Live narration (one message per note the agent writes beside its tool calls) is on by default. `off` turns it off: Telegram folds the notes into the final answer (NEW in 0.8.1), the WhatsApp and Messenger bridges leave them out |
+| `DEVICE_VOICE_MALE` / `DEVICE_VOICE_FEMALE` | Flight Deck: the Soniox voices the M5Stack devices' male / female choice uses (default `Adrian` / `Emma`) |
+| `FD_PAYMENTS`, `FD_SCHEDULER_QUIET_HOURS`, `FD_AGENT_WS_WAIT_S`, `FD_DESKTOP`, `FD_DATA_KEY_FILE`, … | Flight Deck settings — see the Configuration table under [Flight Deck](#flight-deck) |
 | `CLAW_WRITE_GUARD` | `0` turns off the `write` tool's empty/placeholder refusal and read-back check (on by default since 0.8.0) |
 | `FD_JEV_BASE_URL` | Flight Deck: send every user's Jev calls to another Jev-compatible endpoint (a proxy in front of `https://api.typesafe.ai`, or a local stub); default `https://api.typesafe.ai` |
 | `CLAW_BOTPORT_CLIENT__URL` | BotPort WebSocket URL (e.g. `wss://botport.kstevica.com/ws`) |
