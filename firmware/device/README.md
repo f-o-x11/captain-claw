@@ -413,8 +413,12 @@ StickS3:
 StopWatch (0.18.0): press the yellow button once, talk, and press it again —
 or just stop: 2.5 s of quiet sends it, as the on-screen record button does (it
 was hold-to-talk). A press while it speaks stops the speech; a double press
-plays the last answer again; a press that wakes the watch starts a recording
-(dropped if nothing is said). Hold the yellow button (1 s) for **note-taking
+plays the last answer again; a press that wakes the watch — from sleep or a
+dark screen — only wakes it (0.18.1), the next one talks. The clock face is
+the middle of three pages (0.18.1): swipe right for the background picture
+alone, swipe left for the info page — the voice notes waiting and the room
+for more, the Wi-Fi network and its signal, the Flight Deck address, the
+agent — and swipe back the other way; up or down goes to the last answer. Hold the yellow button (1 s) for **note-taking
 mode**, as on the PaperColor B: every recording is kept as a voice note (the
 screen says "Note", the ring goes round once a minute, no quiet stop), the
 clock face shows a red arc and "Note mode · hold yellow to send", and holding

@@ -51,7 +51,7 @@
 #if defined(PAPER_B)
 #define FW_VERSION "1.0.16"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.18.0"
+#define FW_VERSION "0.18.1"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -118,7 +118,7 @@ static void perfReport(uint32_t loopUs) {
 // Ask: a yes/no question (send the voice notes kept offline?).
 // Backdrop: the background picture alone (a double tap on the home screen).
 enum class Mode { Idle, Listening, Waiting, Reply, Image, Menu, Agents, CharPick, Status, Notice, Home, Link, Ask,
-                  Backdrop };
+                  Backdrop, Info };
 
 static WebSocketsClient ws;
 static WiFiMulti wifiMulti;
@@ -441,6 +441,7 @@ static String notesCount() {
 // its sound plays, else Tap to talk's record / stop button.
 static ui::TapButton tapButtonKind() {
   if (!board::kHasTouch) return ui::TapButton::Off;
+  if (mode == Mode::Backdrop || mode == Mode::Info) return ui::TapButton::Off;  // (not drawn there)
   if (mode == Mode::Waiting) return ui::TapButton::Stop;  // stop the agent
   if ((mode == Mode::Reply || mode == Mode::Idle) && audio::playing() && !tapRec) {
     return audio::paused() ? ui::TapButton::Play : ui::TapButton::Pause;
@@ -831,6 +832,31 @@ static void sendNotesNow();
 static void replayAnswer();
 static String phoneUrl;  // "settings on phone" address while it's open
 
+#if defined(BOARD_STOPWATCH)
+// The watch's info page: its voice notes and their room, Wi-Fi, Flight Deck,
+// the agent.
+static std::vector<ui::Row> infoRows() {
+  std::vector<ui::Row> rows;
+  const int n = notes::count();
+  String kept = n ? String(n) + (n == 1 ? " note waiting · " : " notes waiting · ") + clockLength(notes::seconds())
+                  : String("no notes waiting");
+  if (settings.noteMode) kept += " · note mode";
+  rows.push_back({"voice notes", kept, settings.noteMode ? kRed : n ? kYellow : kGreen});
+  const int roomMin = (int)(notes::room(audio::kMicRate) / audio::kMicRate / 60);
+  rows.push_back({"memory", !notes::ready() ? String("not mounted")
+                            : roomMin < 1    ? String("full: no room for notes")
+                                             : "room for " + String(roomMin) + " min of notes",
+                  roomMin < 2 ? kRed : kGreen});
+  const bool wifiOk = WiFi.status() == WL_CONNECTED;
+  rows.push_back({"Wi-Fi", wifiOk ? WiFi.SSID() + " · " + String(WiFi.RSSI()) + " dBm" : String("not connected"),
+                  wifiOk ? kGreen : kRed});
+  rows.push_back({"Flight Deck", wsUp ? serverHost() : String("not connected"), wsUp ? kGreen : kRed});
+  rows.push_back({"agent", agentLinked ? agentName : wsUp ? String("waiting for the agent") : String("-"),
+                  agentLinked ? kGreen : kYellow});
+  return rows;
+}
+#endif
+
 static void redraw() {
   setBarState();
   syncTapButton();
@@ -898,6 +924,11 @@ static void redraw() {
       break;
     case Mode::Home: showIdle(); break;
     case Mode::Backdrop: ui::showBackdrop(); break;
+    case Mode::Info:
+#if defined(BOARD_STOPWATCH)
+      ui::showInfo(infoRows());
+#endif
+      break;
     case Mode::Ask:
       ui::showAsk("Saved voice notes",
                   notesCount() + " recorded offline (" + clockLength(notes::seconds()) + "). Send " +
@@ -3008,6 +3039,21 @@ static void goHome() {
   hapticTick();
 }
 
+// Home is the middle of three pages (the watch): swiped right, the page on
+// its left — the picture alone; swiped left, the one on its right — the info
+// page (notes and their room, Wi-Fi, Flight Deck, the agent). Back the other way.
+static void homePages(bool right) {
+  const bool onHome = mode == Mode::Home || (mode == Mode::Idle && !ui::hasReply());
+  Mode to = mode;
+  if (right) to = mode == Mode::Info ? Mode::Home : onHome ? Mode::Backdrop : mode;
+  else to = mode == Mode::Backdrop ? Mode::Home : onHome ? Mode::Info : mode;
+  if (to == mode) return;
+  hapticTick();
+  ui::slide(!right);
+  mode = to;
+  redraw();
+}
+
 // The stop button while the agent works: it stops after its current step
 // (its "ready" ends the turn).
 static void stopAgent() {
@@ -3051,10 +3097,13 @@ static void pollTouch(bool dark) {
   const bool picker = mode == Mode::Menu || mode == Mode::Agents || mode == Mode::CharPick;
   if (dist >= 45) {
     const bool sideways = abs(dx) > abs(dy);
+    const bool onHome = mode == Mode::Home || (mode == Mode::Idle && !ui::hasReply());
     if (mode == Mode::Reply || mode == Mode::Image) {
       swipeAnswer(sideways ? dx < 0 : dy < 0);
-    } else if ((mode == Mode::Home || mode == Mode::Backdrop) && ui::hasReply()) {
-      backToMain();  // home → the answer again
+    } else if (sideways && (onHome || mode == Mode::Backdrop || mode == Mode::Info)) {
+      homePages(dx > 0);
+    } else if ((mode == Mode::Home || mode == Mode::Backdrop || mode == Mode::Info) && ui::hasReply()) {
+      backToMain();  // home → the answer again (up or down)
     } else if ((picker || mode == Mode::Status) && sideways) {
       hapticTick();  // left: the next row or page; right: the one before
       if (dx < 0) sideClick();
@@ -3238,7 +3287,8 @@ void loop() {
   }
   bool inMenu = mode == Mode::Menu || mode == Mode::Agents || mode == Mode::Status || mode == Mode::CharPick;
   // On a dark screen a press only wakes it — except the front button on the
-  // main screen, which starts talking right away.
+  // main screen, which starts talking right away where a wake press talks
+  // (board::kTalkFromSleep: not the watch or the stick).
   bool dark = screenOff;
 
   // The paper changes slowly: a short beep says the press was heard — A
@@ -3259,8 +3309,8 @@ void loop() {
   if (talkBtn().wasPressed() && !prerollOn) {
     touch();
     talkHoldArms = false;
-    if (dark && inMenu) {
-      // woken only
+    if (dark && (inMenu || !board::kTalkFromSleep)) {
+      // woken only (the watch, the stick: the next press talks)
     } else if (mode == Mode::Menu || mode == Mode::Agents || mode == Mode::CharPick) {
       chooseHere();
     } else if (mode == Mode::Status) {

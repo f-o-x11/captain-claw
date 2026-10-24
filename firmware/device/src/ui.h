@@ -171,6 +171,11 @@ struct Home {
 };
 
 void showHome(const Home& home);
+#if defined(BOARD_STOPWATCH)
+// The watch's info page — swipe left from the clock face (ui_round.cpp): a
+// tile a row, its value by a coloured dot, what it is under it.
+void showInfo(const std::vector<Row>& rows);
+#endif
 #if defined(PAPER_B)
 // The B paper (ui_paper_b.cpp): seconds until its dashboard is next due
 // (0: now) — the sleep timer is set to land on it.
