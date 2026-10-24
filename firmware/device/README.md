@@ -97,7 +97,11 @@ at all. So it's voice-first and redraws when you put it down:
   (red if there's none) and the right one green when the agent is reached
   (red if it isn't); both green stay for 6 s, then go out. Idle, a short blink
   every 10 s says how near sleep is: green for the first 30% of the wait,
-  blue for the next 50%, yellow for the last 20%. Off / low / bright in the
+  blue for the next 50%, yellow for the last 20%. Offline, for the first
+  minute, one light blinks blue (half a second on, half off): the left one
+  when there's no Wi-Fi, the right one when there's Wi-Fi but Flight Deck or
+  the agent can't be reached (before 1.0.13 both blinked, whichever it was).
+  Off / low / bright in the
   settings.
 - **Options instead of a menu:** hold A for a QR code. Open it on a phone on
   the same Wi-Fi: every setting is there (the link carries a one-time key and
@@ -179,6 +183,12 @@ speaking and trouble exactly as above; the voice carries the answers:
   nowhere to go: the lights say what matters, and go back to their idle
   blink once a recording is over (1.0.11: after an offline note they stayed
   on the recording lights).
+- **Offline** (1.0.13): once Wi-Fi, Flight Deck or the agent has been
+  down for 30 s, the paper is redrawn with it — the dashboard's LINKS rows
+  and the top bar's dots in red (an answer being read keeps its page; the
+  options code stays) — and again once they've been back for 10 s. The
+  offline blink says which: the left light for Wi-Fi, the right for Flight
+  Deck or the agent.
 - **Moving it does nothing** (1.0.1): motion is never read as use, and what
   the paper shows, with when the dashboard was drawn, is kept in flash as
   well as across deep sleep — a restart, a brownout or the battery jolted

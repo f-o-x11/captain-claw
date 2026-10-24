@@ -7,15 +7,17 @@
 // for narration and progress, purple for the model thinking — green with the voice
 // while it speaks, a soft white glow while the paper redraws, purple blinks
 // left and right in turn, one a second, while an update downloads. Starting up,
-// the left light shows Wi-Fi and the right one the agent; idle, a short blink
-// every 10 s says how close sleep is. Devices without lights ignore all of it.
+// the left light shows Wi-Fi and the right one the agent; offline (the first
+// minute), the left one blinks blue with no Wi-Fi, the right one with Wi-Fi
+// but no Flight Deck or agent; idle, a short blink every 10 s says how close
+// sleep is. Devices without lights ignore all of it.
 #pragma once
 
 #include <Arduino.h>
 
 namespace leds {
 
-enum class State : uint8_t { Off, Connecting, Listening, Working, Speaking, Redrawing, Updating, LowBattery,
+enum class State : uint8_t { Off, NoWifi, NoAgent, Listening, Working, Speaking, Redrawing, Updating, LowBattery,
                              Startup, Idle };
 
 void begin();

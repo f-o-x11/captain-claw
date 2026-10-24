@@ -49,7 +49,7 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.12"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.13"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
 #define FW_VERSION "0.17.1"
 #endif
@@ -500,11 +500,18 @@ static ui::Status statusNow() {
   return s;
 }
 
+static ui::Home homeNow();
+
 static void showIdle() {
   if (settings.iconMode && !board::kPaperB) {
     ui::showFace(settings.character, agentLinked ? face::Pose::Idle : face::Pose::Sad, 0);
     return;
   }
+  ui::showHome(homeNow());
+}
+
+// What the home screen says about the device and its links.
+static ui::Home homeNow() {
   bool wifiOk = WiFi.status() == WL_CONNECTED;
   bool ok = wsUp && agentLinked && wifiOk;
   ui::Home home;
@@ -527,7 +534,7 @@ static void showIdle() {
                        agentLinked ? kGreen : kYellow});
   home.character = settings.character;
   home.battery = batteryLine();
-  ui::showHome(home);
+  return home;
 }
 
 // ── menu ─────────────────────────────────────────────────────────────
@@ -822,6 +829,9 @@ static String phoneUrl;  // "settings on phone" address while it's open
 static void redraw() {
   setBarState();
   syncTapButton();
+#if defined(PAPER_B)
+  ui::setHome(homeNow());  // the dashboard's LINKS rows, current in any mode
+#endif
   ui::setReplayable((mode == Mode::Reply || mode == Mode::Idle) && canReplay() && !audio::playing());
   switch (mode) {
     case Mode::Listening:
@@ -2484,6 +2494,33 @@ static void backClick() {
 
 static int micLevel = 0;
 static uint32_t linkChangeMs = 0;  // when the deck link last came or went
+static uint32_t offlineSinceMs = 0;  // Wi-Fi, Flight Deck or the agent down since (0: all up)
+static uint32_t onlineSinceMs = 0;   // all up since
+
+// Whether everything's linked — Wi-Fi, Flight Deck, the agent — and since
+// when it isn't. The B paper is redrawn once it has been down 30 s (the
+// dashboard's LINKS rows, the dots), and again once it's been back 10 s.
+static void trackLinks() {
+  const bool linked = WiFi.status() == WL_CONNECTED && wsUp && agentLinked;
+  if (linked) {
+    offlineSinceMs = 0;
+    if (!onlineSinceMs) onlineSinceMs = millis() ? millis() : 1;
+  } else {
+    onlineSinceMs = 0;
+    if (!offlineSinceMs) offlineSinceMs = millis() ? millis() : 1;
+  }
+#if defined(PAPER_B)
+  static bool shownDown = false;  // the paper was redrawn with the links down
+  if (mode != Mode::Idle && mode != Mode::Reply) return;  // (not over a recording, a turn, the options)
+  const bool down = !linked && millis() - offlineSinceMs > 30000;
+  const bool back = linked && shownDown && millis() - onlineSinceMs > 10000;
+  if ((down && !shownDown) || back) {
+    shownDown = down;
+    ui::setHome(homeNow());
+    ui::linksChanged();
+  }
+#endif
+}
 
 static void updateLeds() {
   using S = leds::State;
@@ -2500,7 +2537,12 @@ static void updateLeds() {
   else if (audio::playing()) leds::set(S::Speaking, audio::outputLevel());
   else if (mode == Mode::Waiting) leds::set(S::Working);
   else if (leds::startingUp()) leds::set(S::Startup);
-  else if (!wsUp && millis() - linkChangeMs < 60000) leds::set(S::Connecting);  // not forever
+  // Offline, for its first minute (the paper says so after 30 s): the left
+  // light blinks with no Wi-Fi, the right one with Wi-Fi but no Flight Deck
+  // or no agent.
+  else if (offlineSinceMs && millis() - offlineSinceMs < 60000) {
+    leds::set(WiFi.status() == WL_CONNECTED ? S::NoAgent : S::NoWifi);
+  }
   else if (ui::busy()) leds::set(S::Redrawing);
   else if (batteryPct >= 0 && batteryPct < 15) leds::set(S::LowBattery);
   else leds::setIdle(millis() - lastActivityMs, settings.powerOffMs());
@@ -3057,6 +3099,7 @@ void loop() {
   if (wsUp != wasUp) linkChangeMs = millis();
   holdTurn();
   paperAnswerPoll();
+  trackLinks();
   // Raise to wake: a wrist raise lights a dark or dimmed screen; lowering
   // the wrist on an idle screen puts it out (the watch sleeps on its timer
   // as before — set Power off to 3 min to keep it wakeable longer).
