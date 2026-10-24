@@ -520,14 +520,13 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     }
   }
 
-  // The kiosk's "⋯" on an agent. Its files and data, as the kiosk has no right
-  // column: an agent the libraries index opens in them, filtered to it. Every
-  // agent also has the column's panels in a dialog ("Files & data"): what the
-  // agent itself lists, which can be more than the library has — a type it
-  // doesn't index, a file in a VFS or linked folder (a shared agent only when
-  // its owner's deck gives members some). Instructions, Settings and Remove
-  // are for the user's own agents only — not one shared with them, a local
-  // one, or one Flight Deck runs itself.
+  // The kiosk's "⋯" on an agent. Its files and data live in the Library and
+  // Data buttons (bottom left) for the agents those index — the library's
+  // "Everything it keeps" opens the agent's own live view. An agent they
+  // don't index keeps "Files & data" here, its only way to them: one shared
+  // with the user (when its owner's deck gives members some) or a Docker one.
+  // Instructions, Settings and Remove are for the user's own agents only —
+  // not one shared with them, a local one, or one Flight Deck runs itself.
   const agentMenuItems = (a: SimpleAgent): AgentMenuItem[] => {
     if (a.kind === 'shared') {
       return agentPanels(a.id, memberWorkspace, sharedAgents).region === 'member'
@@ -539,19 +538,14 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
       icon: Info, label: 'Info', hint: up ? 'Its intentions and topics' : 'Power it on to see its intentions and topics',
       onSelect: () => setAgentInfoId(a.id), disabled: !up,
     }]
-    const indexed = inLibraries(a)
-    if (indexed) {
-      items.push(
-        { icon: LibraryBig, label: 'Files', hint: 'Its files in the File library', onSelect: () => openLibrary(a.startKey) },
-        { icon: Database, label: 'Data', hint: 'Its tables in the Data library', onSelect: () => openData(a.startKey) },
-      )
-    }
     // Read from the agent itself: a stopped one has none to show.
-    items.push({
-      icon: FolderOpen, label: 'Files & data',
-      hint: !up ? 'Its files and tables show while it runs' : indexed ? 'Everything it keeps, live' : 'Its files and datastore tables',
-      onSelect: () => setFilesDataId(a.id), disabled: !up,
-    })
+    if (!inLibraries(a)) {
+      items.push({
+        icon: FolderOpen, label: 'Files & data',
+        hint: up ? 'Its files and datastore tables' : 'Its files and tables show while it runs',
+        onSelect: () => setFilesDataId(a.id), disabled: !up,
+      })
+    }
     if ((a.kind === 'docker' || a.kind === 'process') && !a.managed) {
       items.push(
         { icon: BookOpen, label: 'Instructions', hint: 'What it should always keep in mind', onSelect: () => setAgentInstructionsId(a.id) },
@@ -601,7 +595,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     handleOpen(a)
   }
   // The library's "Everything it keeps": the agent's own files and data
-  // (its "⋯" → Files & data), in place of the library.
+  // (the Files & data dialog), in place of the library.
   const openLibraryLive = (slug: string) => {
     const a = agents.find((x) => x.id === `proc-${slug}`)
     const notify = useNotificationStore.getState().add
@@ -1614,7 +1608,7 @@ function EmptyChat({ hasAgents, onSpawn, locked = false, onGuide }: {
         <p className="text-sm text-zinc-400">
           {hasAgents
             ? locked
-              ? 'Choose an agent on the left to start a conversation. What it saves for you lands in Library and Data, bottom left, and under the agent’s ⋯ → Files & data.'
+              ? 'Choose an agent on the left to start a conversation. What it saves for you lands in Library and Data, bottom left.'
               : 'Choose an agent on the left to start a conversation. Its files and data show up on the right.'
             : locked
               ? 'Create an agent from an archetype to start chatting.'
