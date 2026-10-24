@@ -174,9 +174,10 @@ void tick() {
       show(c, c);
       break;
     }
-    case State::Updating: {
-      uint32_t c = scale(200, 0, 255, 0.4f + 0.6f * (0.5f + 0.5f * sinf(t * 6.0f)));
-      show(c, c);
+    case State::Updating: {  // downloading an update: left, then right, a purple blink a second each
+      const uint32_t c = now % 1000 < 600 ? scale(200, 0, 255, 1) : 0;
+      if ((now / 1000) % 2) show(0, c);
+      else show(c, 0);
       break;
     }
     case State::Redrawing: {  // a slow, soft white glow: the paper is changing

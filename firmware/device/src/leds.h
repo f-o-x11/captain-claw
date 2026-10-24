@@ -3,7 +3,8 @@
 // (like a REC light, brighter when you're louder), a blink for every step
 // the deck reports while the agent works — light blue for a tool, dark blue
 // for narration and progress, purple for the model thinking — green with the voice
-// while it speaks, a soft white glow while the paper redraws. Starting up,
+// while it speaks, a soft white glow while the paper redraws, purple blinks
+// left and right in turn, one a second, while an update downloads. Starting up,
 // the left light shows Wi-Fi and the right one the agent; idle, a short blink
 // every 10 s says how close sleep is. Devices without lights ignore all of it.
 #pragma once
