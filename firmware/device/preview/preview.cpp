@@ -146,6 +146,13 @@ int main(int argc, char** argv) {
   ui::showHome(home);
   save("01b_home_note_mode");
   home.noteMode = false;
+  // Swiped left from the clock face: the info page.
+  ui::showInfo({{"voice notes", "3 notes waiting · 1:24", kYellow},
+                {"memory", "room for 14 min of notes", kGreen},
+                {"Wi-Fi", "Kuharski-5G · -58 dBm", kGreen},
+                {"Flight Deck", "glasses.captain-claw.com", kGreen},
+                {"agent", "deepseek-v4-flash-glasses", kGreen}});
+  save("01c_info");
 
   bar("ready", kYellow, ui::Up, ui::Partial);
   ui::showHome({false, "Getting ready", kYellow, "Waiting for the agent", {}});

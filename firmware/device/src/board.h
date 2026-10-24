@@ -27,7 +27,7 @@ constexpr const char* kTalkHint = "Press the yellow button to talk";  // the hom
 // Hold to talk, let go to send (false), or press to start and press again to
 // send (true) — or 2.5 s of quiet sends it, as the on-screen button does.
 constexpr bool kTalkToggles = true;
-constexpr bool kTalkFromSleep = true;  // a press that wakes it starts a recording (dropped if nothing's said)
+constexpr bool kTalkFromSleep = false;  // a press that wakes it (or lights a dark screen) only wakes it
 // Which of M5Unified's buttons (A/B/C) talks, goes next and goes back (0: none).
 constexpr char kTalkM5 = 'A', kSideM5 = 'B', kBackM5 = 0;
 constexpr const char* kTalkKey = "A";         // the letters a screen prints for them

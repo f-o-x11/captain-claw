@@ -1575,6 +1575,16 @@ void setBackground(const uint8_t* jpg, size_t len) {
 
 bool hasBackground() { return hasBackdrop; }
 
+void showInfo(const std::vector<Row>& rows) {
+  beginFrame();
+  ringArc(0, 360, mix(kBlack, kText, 0.12f));
+  drawChrome();
+  const int n = min((int)rows.size(), 5);
+  for (int i = 0; i < n; ++i) statusTile(120 + i * 60, rows[i].color, rows[i].value, rows[i].label, kDim);
+  drawPageDots(3, 2, 424);  // home's pages: the picture, the clock face, this
+  push();
+}
+
 void showBackdrop() {
   beginFrame(true);  // black when there's none
   if (hasBackdrop) backdrop.pushSprite(&canvas, 0, 0);  // as it is: nothing over it to read
