@@ -149,9 +149,9 @@ int main(int argc, char** argv) {
   // Swiped left from the clock face: the info page.
   ui::showInfo({{"voice notes", "3 notes waiting · 1:24", kYellow},
                 {"memory", "room for 14 min of notes", kGreen},
-                {"Wi-Fi", "Kuharski-5G · -58 dBm", kGreen},
-                {"Flight Deck", "glasses.captain-claw.com", kGreen},
-                {"agent", "deepseek-v4-flash-glasses", kGreen}});
+                {"Wi-Fi", "Harbour-5G · -58 dBm", kGreen},
+                {"Flight Deck", "deck.example.com", kGreen},
+                {"agent", "Captain Claw", kGreen}});
   save("01c_info");
 
   bar("ready", kYellow, ui::Up, ui::Partial);
@@ -187,6 +187,21 @@ int main(int argc, char** argv) {
   ui::showReply();
   ui::showSpeaking(70);  // the speaking line, drawn over the page
   save("05_reply_speaking");
+  // As the watch shows it speaking: the sentence the voice is in lit, the
+  // rest dimmed, the pause button under it.
+  ui::setTapButton(ui::TapButton::Pause);
+  ui::setSpoken(5);
+  ui::showReply();
+  ui::showSpeaking(70);
+  save("05b_reply_speaking_lit");
+  ui::setReply("Tomorrow in Zagreb: sunny in the morning, 19°C by noon. Showers roll in around 17:00, so take an "
+               "umbrella if you're out late. The weekend looks dry and warmer.");
+  ui::setSpoken(70);  // the voice in the second sentence
+  ui::showReply();
+  ui::showSpeaking(70);
+  save("05c_reply_follow_voice");
+  ui::setSpoken(-1);
+  ui::setTapButton(ui::TapButton::Off);
   gPlaying = false;
 
   bar("ready", kGreen);
@@ -218,9 +233,11 @@ int main(int argc, char** argv) {
   save("08_menu_volume");
   ui::showPicker(items, 4, -1);
   save("09_menu_settings");
+  ui::showPicker(items, 5, -1);
+  save("09b_menu_boost_off");
   ui::showPicker(items, 2, -1);
   save("10_menu_agent");
-  ui::showPicker(items, 15, -1);
+  ui::showPicker(items, 16, -1);  // (the last card since Settings joined the list)
   save("11_menu_wifi");
   ui::showPicker(items, 0, -1);
   save("11b_menu_replay");
@@ -234,16 +251,16 @@ int main(int argc, char** argv) {
   save("13_agents_other");
 
   ui::Status st;
-  st.wifi = true, st.ssid = "Kuharski-5G", st.rssi = -54, st.ip = "192.168.1.48";
-  st.deck = true, st.deckHost = "glasses.captain-claw.com", st.rttMs = 38;
+  st.wifi = true, st.ssid = "Harbour-5G", st.rssi = -54, st.ip = "192.168.1.48";
+  st.deck = true, st.deckHost = "deck.example.com", st.rttMs = 38;
   st.agent = "Captain Claw", st.agentLinked = true;
   st.batteryPct = 82, st.batteryMv = 3980, st.charging = false, st.usb = false;
   st.minutesLeft = 130;
   st.uptime = "1h 12m", st.turns = 7, st.lastAnswerMin = 2;
   st.voice = "female", st.volumePct = 75, st.boostDb = 6, st.speak = true, st.textSize = 1;
-  st.deviceId = "watch-a1b2c3", st.fw = "0.16.0", st.freeKb = 7480;
+  st.deviceId = "watch-a1b2c3", st.fw = "0.18.0", st.freeKb = 7480;
   st.notes = 3, st.notesLength = "1:24", st.notesRoomMin = 14;
-  st.update = "0.16.1";
+  st.update = "0.18.1";
   bar("status 1/3", kText);
   ui::showStatus(st, 0);
   save("14_status_connection");

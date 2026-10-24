@@ -129,8 +129,8 @@ int main(int argc, char** argv) {
   static constexpr uint16_t kRed = ui::rgb(230, 50, 50), kYellow = ui::rgb(250, 200, 40);
   ui::Home home{true, "All good", kGreen, "", {}};
   home.rows = {{"Paper", "ready — press C", kGreen},
-               {"Wi-Fi", "Kuharski-5G", kGreen},
-               {"Deck", "glasses.captain-claw.com", kGreen},
+               {"Wi-Fi", "Harbour-5G", kGreen},
+               {"Deck", "deck.example.com", kGreen},
                {"Agent", "Captain Claw", kGreen}};
   ui::showHome(home);
   save("01_dashboard");
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
   ui::nextPage();  // past the last page: the dashboard again
   save("06_dashboard_again");
 
-  ui::showLink("Options · 1.0.0", "http://192.168.1.48/", "Scan it with your phone (same Wi-Fi): every setting is there.");
+  ui::showLink("Options · 1.0.16", "http://192.168.1.48/", "Scan it with your phone (same Wi-Fi): every setting is there.");
   save("07_options");
 
   ui::showSetup("First-time setup", "Captain-PaperColor-b2c3", "192.168.4.1");
@@ -171,8 +171,8 @@ int main(int argc, char** argv) {
 
   ui::setHealth(ui::Up, ui::Up);
   home.rows = {{"Paper", "ready — press A", kGreen},
-               {"Wi-Fi", "Kuharski-5G", kGreen},
-               {"Deck", "glasses.captain-claw.com", kGreen},
+               {"Wi-Fi", "Harbour-5G", kGreen},
+               {"Deck", "deck.example.com", kGreen},
                {"Agent", "Captain Claw", kGreen}};
   home.noteMode = true;  // hold A: note-taking mode
   ui::drawNow();

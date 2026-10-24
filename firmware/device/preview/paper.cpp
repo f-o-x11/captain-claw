@@ -176,15 +176,15 @@ int main(int argc, char** argv) {
 
 
   std::vector<ui::Row> rows = {
-      {"Wi-Fi", "Kuharski-5G  -54 dBm", kGreen},
+      {"Wi-Fi", "Harbour-5G  -54 dBm", kGreen},
       {"IP", "192.168.1.48", kText},
-      {"Deck", "glasses.captain-claw.com  38 ms", kGreen},
+      {"Deck", "deck.example.com  38 ms", kGreen},
       {"Agent", "Captain Claw", kGreen},
       {"Battery", "82%  3.98 V", kGreen},
       {"Room", "22.6 °C  44% humidity", kText},
       {"Voice", "female  vol 75%  +6 dB", kText},
       {"Usage", "7 turns  last 2m ago  up 1h 12m", kText},
-      {"Device", "paper-a1b2c3  fw 0.10.0  7480k free", kText},
+      {"Device", "paper-a1b2c3  fw 0.18.1  7480k free", kText},
   };
   ui::showPanel("", kText, rows, 0);
   save("14_status");
@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
   ui::showAsk("Saved voice notes", "3 voice notes recorded offline (1:24). Send them to the agent?", "send", "later");
   save("15b_ask_notes");
 
-  ui::showLink("Options · 0.11.5", "http://192.168.1.48/?k=3fa91c07be22",
+  ui::showLink("Options · 0.18.1", "http://192.168.1.48/?k=3fa91c07be22",
                "Scan it with your phone (same Wi-Fi): every setting is there.");
   save("16_options");
 

@@ -1,23 +1,25 @@
 # Captain Claw · handheld voice client (M5Stack StickS3, StopWatch and PaperColor)
 
 Press the talk button and talk; press it again, or just stop talking for
-2.5 s, to send (on the StopWatch: hold it, talk, let go). Flight Deck transcribes it, sends it to
+2.5 s, to send. Flight Deck transcribes it, sends it to
 one of your agents, and the device shows the reply, reads it aloud, and shows
 any picture the agent made.
 
 Server side: `captain_claw/flight_deck/device_bridge.py` (`/device/ws`).
 
-One source tree builds both devices (`src/board.h` holds what differs):
+One source tree builds all three devices (`src/board.h` holds what differs):
 
 | | StickS3 | StopWatch | PaperColor |
 |---|---|---|---|
 | screen | 240×135 LCD (`ui_stick.cpp`) | 466×466 round AMOLED (`ui_round.cpp`) | 4" colour e-paper, 400×600, six inks (`ui_paper.cpp`) |
-| talk button | front (A) | yellow (A) | top (C) |
+| talk button | front (A) | yellow (A) | top (C) — on the B build (`papercolor_b`): A |
 | other button | side (B) | the second button (B) | A: next · status · hold = Options |
 | third button | — | — | B: back · home · hold = Wi-Fi & settings |
 | extras | — | vibration (buzz before speech, on talk), clock | two status lights, room temperature + humidity, keeps its screen asleep |
-| build | `pio run -e sticks3` | `pio run -e stopwatch` | `pio run -e papercolor` |
+| build | `pio run -e sticks3` | `pio run -e stopwatch` | `pio run -e papercolor` (A) or `-e papercolor_b` (B) |
 
+The PaperColor's other buttons above are the A build's; the B build's are in
+[PaperColor the "B" way](#papercolor-the-b-way-papercolor_b-versions-1x).
 The sections below say "front"/"side" for A/B.
 
 ## What the agent learns about the device

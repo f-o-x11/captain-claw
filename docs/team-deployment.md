@@ -49,15 +49,30 @@ These are code changes already in this build; the env vars above turn them on.
 ## First-run checklist
 
 1. Set the environment variables above and start the backend.
-2. Register the **first** account — it becomes the admin automatically.
-3. On the **Admin** page: create an account for each teammate (you can set their
-   password directly; they can change it later under their profile).
-4. On the **Admin** page: set the org **provider API keys** (Anthropic, OpenAI,
-   …). These stay server-side.
-5. Publish a **team tier set** (Library → tier sets → *Publish to team*) so
-   teammates run models without pasting keys.
-6. Ask each teammate to connect their **own** Google account (Connections) if
-   they will use Drive.
+2. Register the **first** account — it becomes the admin automatically and opens
+   in the **Admin console** (`<deck>/console`), whose Overview carries a setup
+   checklist.
+3. Add people (**Console → Users**, or the Users page): **Invite by email** —
+   sent from your own connected Gmail or Outlook; they choose their password
+   from a one-time link — or **Add user** with a temporary password they must
+   change at their first sign-in. With sign-up closed, *No account?* leads to a
+   waitlist; approving an application can email the applicant their sign-in
+   link.
+4. Set the org **provider API keys** (Admin page, or Console → Models → team
+   API keys). These stay server-side.
+5. Publish a **team tier set** (Library → tier sets → *Publish to team*, or
+   Console → Models) so teammates run models without pasting keys.
+6. Check the **daily plan limits** (Console → Usage & limits, or Admin → Plans):
+   since 0.8.1 every non-admin is counted per UTC day — by default **free** 30
+   messages and 300,000 tokens, **premium** 300 and 3,000,000, **enterprise**
+   unlimited. Put each user on the right plan; grant free resets if someone
+   runs out.
+7. Decide who gets the **kiosk** (Admin → Settings → Kiosk mode: Off,
+   Everyone, Selected users) and set the deck's **branding** (instance name,
+   logo, description).
+8. Ask each teammate to connect their **own** Google or Microsoft account
+   (Connections). For the M5Stack devices and voice notes, share a **Soniox**
+   team key (Admin → Integrations) or let each person add their own.
 
 ## Collaboration features (0.8.x)
 
@@ -87,7 +102,14 @@ These are code changes already in this build; the env vars above turn them on.
   closed lands in the bell (persisted server-side, polled every ~30s).
 - **Team cost rollup.** Admin → Usage → *Team spend*: dollars by user and by run
   kind across the whole team.
-- **Admin password reset.** Admin → Users → expand a user → *Reset password*.
+- **Passwords.** Admin → Users → a user → *Set password* (with "sign them out
+  everywhere"); an admin-set password must be changed at the next sign-in.
+  Everyone can change their own under Profile → Password.
+- **MCP servers are private to whoever added them** (0.8.1). Only the owner's
+  agents use a server, and only the owner sees or manages it — so one person's
+  OAuth sign-in never reaches everyone. An admin can share a server with the
+  whole deck (*deck-wide*) from Connections → MCP Servers or Admin →
+  Integrations.
 
 ## Connect Claude to your agents (inbound MCP)
 
