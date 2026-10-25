@@ -19,6 +19,7 @@
     <nav class="tabs" aria-label="Views">
       <a class="tab" href="#/" data-route="network">Network</a>
       <a class="tab" href="#/requests" data-route="requests">Requests</a>
+      <a class="tab" href="#/decks" data-route="decks">Decks</a>
       <a class="tab" href="#/swarm" data-route="swarm">Swarm</a>
     </nav>
     <div class="topbar-right">
@@ -76,7 +77,7 @@
           </div>
           <div class="map-empty" id="map-empty" hidden>
             <b>Waiting for Flight Decks</b>
-            Each Flight Deck connects from <em>Admin console &rarr; BotPort</em> with a key made by <code>botport gen-key &lt;deck&gt;</code>.
+            <span><a href="#/decks">Add a Flight Deck</a>, then paste its join code into that deck's <em>Admin console &rarr; BotPort</em>. It connects right away.</span>
           </div>
           <div class="legend" aria-hidden="true">
             <span><i class="k-request"></i>Request</span>
@@ -128,6 +129,22 @@
       </div>
     </section>
 
+    <!-- Decks: who may join, with a name and description each (decks.js) -->
+    <section class="page" id="page-decks" hidden>
+      <div class="req-head decks-head">
+        <div>
+          <h1>Flight Decks</h1>
+          <p id="decks-sub">Each Flight Deck that joins this hub gets its own key.</p>
+        </div>
+        <button class="btn-grad" type="button" data-deck-act="add">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Add Flight Deck</span>
+        </button>
+      </div>
+      <div id="decks-banner"></div>
+      <div class="deck-grid" id="deck-grid"><div class="deck-empty"><span class="spinner"></span></div></div>
+    </section>
+
     <!-- Swarm (swarm.js) -->
     <section class="page" id="page-swarm" hidden>
       <div class="swarm-layout">
@@ -170,6 +187,12 @@
     </aside>
   </div>
 
+  <!-- Deck dialogs (decks.js) -->
+  <div class="dm-root" id="deck-modal" hidden>
+    <div class="dm-scrim" data-mclose></div>
+    <div class="dm-card" role="dialog" aria-modal="true" aria-labelledby="dm-title"></div>
+  </div>
+
   <!-- Admin token -->
   <div class="signin" id="signin" hidden>
     <form class="signin-card" id="signin-form">
@@ -184,6 +207,7 @@
 
   <script src="/auth.js"></script>
   <script src="/dashboard.js"></script>
+  <script src="/decks.js"></script>
   <script src="/swarm.js"></script>
 </body>
 </html>

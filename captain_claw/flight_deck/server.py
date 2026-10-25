@@ -4775,6 +4775,7 @@ class FleetAgent(BaseModel):
     status: str
     description: str = ""
     deck: str = ""  # remote agents: the Flight Deck that runs it
+    deck_label: str = ""  # ...and what the hub's operator calls that deck
 
 
 def _fleet_snapshot() -> list[dict[str, Any]]:
@@ -4847,6 +4848,7 @@ async def get_fleet(request: Request, include_remote: bool = False, user: dict |
             fleet.append(FleetAgent(
                 name=r["name"], slug=r.get("slug", ""), kind="remote", host="", port=0,
                 status="running", description=r.get("description", ""), deck=r["deck"],
+                deck_label=r.get("deck_label", ""),
             ))
     return fleet
 

@@ -58,17 +58,29 @@ Deck-to-deck requests are addressed (`Agent@deck`) and never need it.
 
 ## 2. Keys — one per deck
 
-```bash
-~/botport-venv/bin/botport gen-key pi
-~/botport-venv/bin/botport gen-key vps1
-~/botport-venv/bin/botport gen-key vps2
-```
+Every Flight Deck connects with a key of its own, and the key is **bound to
+the deck's name**: a deck that connects with it *is* that deck and cannot
+pretend to be another. Two ways to make keys, side by side:
 
-Each prints an `auth.keys` entry for the hub (`instance`, `key`, `secret`) and
-the values to enter in that Flight Deck. The `instance:` name is **binding**: a
-deck that connects with that key *is* that deck and cannot pretend to be
-another. A key without an `instance` cannot be used by a Flight Deck at all
-(only by a legacy agent), and no agent may register under a deck's name.
+* **On the hub's dashboard (recommended).** Once the hub runs, its **Decks**
+  page adds a Flight Deck in one step ([step 6](#6-connect-each-flight-deck)):
+  it makes the key, gives the deck a display name and a description, and hands
+  you a *join code* to paste into that deck. The deck can connect at once: no
+  file to edit, no restart. Rotating or removing a key there also takes effect
+  at once. With this, leave `auth.keys` empty and go on to step 3. (The hub
+  makes keys only with auth on: on an open hub any deck joins without one.)
+* **In the config file.** `botport gen-key` prints an `auth.keys` entry;
+  the hub reads the file at start, so a new or changed key needs a restart.
+  Handy when the dashboard is off.
+
+  ```bash
+  ~/botport-venv/bin/botport gen-key pi
+  ```
+
+  It prints the entry for the hub (`instance`, `key`, `secret`) and the values
+  to enter in that Flight Deck. A key without an `instance` cannot be used by a
+  Flight Deck at all (only by a legacy agent), and no agent may register under
+  a deck's name.
 
 ## 3. Configure the hub
 
@@ -80,7 +92,8 @@ openssl rand -hex 24          # the admin token for the dashboard and the API
 nano ~/.botport/config.yaml
 ```
 
-Replace the example keys with the entries from `gen-key`; the rest can stay:
+Set the admin token and empty the example keys (decks added on the
+dashboard need nothing here); the rest can stay:
 
 ```yaml
 server:
@@ -89,22 +102,19 @@ server:
   admin_token: "<the openssl output>"
 auth:
   enabled: true
-  keys:
-    - instance: pi
-      key: pi-9c0d1e2f
-      secret: "…"
-    - instance: vps1
-      key: vps1-1a2b3c4d
-      secret: "…"
-    - instance: vps2
-      key: vps2-5e6f7a8b
-      secret: "…"
+  keys: []                 # or `botport gen-key` entries, if you make keys that way
 logging:
   file: "~/.botport/botport.log"   # rotated; survives a closed tmux pane
 ```
 
+The dashboard's keys live in the hub's database (`botport.db` in its data
+directory, `~/.botport/` by default) with their display names and
+descriptions. Only a fingerprint of each secret is stored there.
+
 Check it. This prints the effective configuration (secrets masked) and every
-warning, and exits non-zero on mistakes; the last line should be `OK`:
+warning, and exits non-zero on mistakes; the last line should be `OK`. With no
+keys in the file it warns *auth.keys is empty: only Flight Decks added on the
+dashboard (Decks) can connect*, which is what you want here:
 
 ```bash
 ~/botport-venv/bin/botport check -c ~/.botport/config.yaml
@@ -146,11 +156,11 @@ To start the hub at boot, `crontab -e` and add:
 What the hub prints when it is up:
 
 ```
-BotPort v0.8.1 (protocol 2) listening on http://0.0.0.0:23180
+BotPort v0.8.2 (protocol 2) listening on http://0.0.0.0:23180
   Flight Decks / agents connect to: ws://<this-host>:23180/ws
   Dashboard: http://<this-host>:23180/  (admin token required)
   Health:    http://<this-host>:23180/healthz
-  Auth: enabled (3 keys)
+  Auth: enabled (0 key(s) in the config file, 3 deck(s) added on the dashboard)
 ```
 
 It never silently moves to another port: if 23180 is taken it says so and
@@ -193,12 +203,47 @@ address: a bare host means port 80.
 
 ## 6. Connect each Flight Deck
 
-Sign in to each Flight Deck as an **admin**, open the Admin console (the shield
+Two steps per deck: add it on the hub, then paste its join code into the deck.
+
+### Add it on the hub
+
+Open the hub's dashboard (signing in: [step 9](#9-watch-the-network-the-hub-dashboard)),
+go to **Decks** and press **Add Flight Deck**:
+
+* **Display name** — what people see: on the hub's map and Decks page, in
+  every Flight Deck's **Network** card, and in the list your agents get
+  (*Flight Deck 'pi' (Kitchen Pi)*).
+* **Deck name** — the deck's address on the network: other decks reach its
+  agents as `Agent@pi`. Letters, digits, `-`, `_`, `.`, up to 63 characters.
+  It is suggested from the display name and cannot change later.
+* **Description** (optional) — who runs it, what is on it, what it is for.
+
+**Create key** shows what the deck needs, **once**:
+
+* the **join code**: address, deck name, key and secret in a single line;
+* the **hub address** the deck should use. It is taken from the page's own
+  address: change it when the deck reaches the hub another way (the dashboard
+  open on `127.0.0.1` on the Pi, but a VPS dialling the tailnet IP or your
+  `wss://` name). The join code follows the change.
+* the same, field by field, and as `FD_BOTPORT_*` variables for a headless deck.
+
+The hub keeps only a fingerprint of the secret: copy the join code before you
+close the dialog (lost it? **Rotate**, below). The join code contains the
+secret, so pass it on the way you would a password. The dialog stays open and
+turns green the moment the deck connects.
+
+### Paste it into the deck
+
+Sign in to the Flight Deck as an **admin**, open the Admin console (the shield
 button, *Admin console — models, archetypes, connections, users, settings*) and
 choose **BotPort** in its left menu — or go straight to
 `http://<deck>:25080/console/network`.
 
-In the **Connection** card:
+In the **Connection** card, paste the join code into **Join code**: the
+address, deck name, key and secret fill in and **Connect to BotPort** switches
+on. Press **Save**. That's all.
+
+**By hand** (keys from `botport gen-key`, or to check the fields), in the same card:
 
 1. **Hub address** — the address from step 5:
 
@@ -210,19 +255,42 @@ In the **Connection** card:
    `host:port`, `http(s)://` and `ws(s)://` forms are accepted; `/ws` is added
    when missing.
 2. **Test** — checks the typed address without connecting as the deck.
-   Expected: *BotPort v0.8.1 reachable (protocol 2)*.
+   Expected: *BotPort v0.8.2 reachable (protocol 2)*.
 3. **Deck name** — the key's `instance` (`pi`, `vps1`, …): letters, digits,
    `-`, `_`, `.`, up to 63 characters, no spaces or `@`.
-4. **Key** and **Secret** — from that deck's `gen-key` output. The secret is
-   write-only and stored encrypted.
+4. **Key** and **Secret** — from the hub's dialog, or that deck's `gen-key`
+   output. The secret is write-only and stored encrypted.
 5. Switch on **Connect to BotPort**. Leave **Let this deck's agents consult
    other decks** on (the default).
 6. **Save**.
 
 The **Status** card then reads **Connected**, *This deck on the network* shows
-the name the hub confirmed, and the **Network** card lists every other deck and
-the agents it shares. On a problem it shows *Retrying in Ns* or *Error* with
-the reason (see [Troubleshooting](#troubleshooting)).
+the name the hub confirmed, and the **Network** card lists every other deck,
+by its display name and description, with the agents it shares. On a problem
+it shows *Retrying in Ns* or *Error* with the reason (see
+[Troubleshooting](#troubleshooting)).
+
+### Manage the decks
+
+The hub's **Decks** page lists every deck it knows: added there, keyed in the
+config file, or (on a hub with auth off) seen connecting. Each card shows the
+deck's display name and description, whether it is online (and since when),
+waiting for its first connection or offline, the agents it shares, its load
+and address, and its key (*Dashboard key*, *botport.yaml*, or *open hub*).
+
+* **Edit** — the display name and description. The hub map and every deck's
+  Network card pick the change up within seconds. Works for decks keyed in the
+  config file too.
+* **Rotate** — a new secret for the same key. The old one stops working at
+  once and the deck is disconnected; its Status card says *this deck's secret
+  was replaced on the hub*. Paste the new join code there and **Save**. Use it
+  when a secret may have leaked or was lost.
+* **Remove** — the key stops working, the deck is disconnected, requests it was
+  handling fail, and its name and description are forgotten. To bring it back,
+  add it again.
+
+A key from the config file is changed there (and the hub restarted); its card
+offers **Edit** only.
 
 > Two other BotPort settings in Flight Deck do **not** connect the deck: the
 > sidebar's *Connection settings → BotPort Address* (only the browser's link to
@@ -244,7 +312,7 @@ environment* and cannot be changed in the UI). For Docker, put them under
 |---|---|
 | `FD_BOTPORT_URL` | hub address (setting it also switches the link on) |
 | `FD_BOTPORT_DECK_NAME` | this deck's name |
-| `FD_BOTPORT_KEY`, `FD_BOTPORT_SECRET` | credentials from `botport gen-key` |
+| `FD_BOTPORT_KEY`, `FD_BOTPORT_SECRET` | credentials from the hub's Decks page (or `botport gen-key`) |
 | `FD_BOTPORT_EXPOSE` | comma-separated agent names/slugs, or `*` |
 | `FD_BOTPORT_ACCEPT_FROM` | comma-separated deck names, or `*` |
 | `FD_BOTPORT_ALLOW_OUTBOUND` | `true` / `false` — this deck's agents may consult other decks |
@@ -276,7 +344,10 @@ agents through this list; only an agent's owner shares it from its card.)
 
 **Users** — on their own agent: in the kiosk, the agent's **⋯** menu →
 **Share on network…**; in the Agent Desktop, the card's actions menu (the
-small gear) → **Share on network…**. Confirm, and the agent shows a
+small gear) → **Share on network…**. A dialog explains what sharing means
+(who can ask it, what stays out of reach, what it can still draw on, and that
+it counts toward the deck's usage) and lists the decks on the network now.
+Confirm, and the agent shows a
 **network** badge while it is on the network; **Stop sharing on network** (same
 menu) takes it off. The item appears only when the deck is connected to a hub
 and the admin lets users share. A share
@@ -344,7 +415,9 @@ from the address bar.
   success rate and the median answer time; the requests in flight with each
   agent's latest step; recent results; and a live ticker.
 * **Requests** — everything recent, filterable by state and deck, searchable.
-* Click a deck or a request for its details (Esc or the × closes them).
+* **Decks** — add, name, rotate and remove Flight Decks ([step 6](#6-connect-each-flight-deck)).
+* Click a deck or a request for its details (Esc or the × closes them). A
+  deck's details show its description, with a link to edit it.
 * **Swarm** — the hub's multi-agent workflows.
 
 **Kiosk mode** turns it into a wall display: full screen, scaled to the
@@ -356,9 +429,12 @@ screen, cursor hidden when idle. Toggle it with the ⛶ button or **K**, or open
 chromium --kiosk --noerrdialogs --disable-infobars "http://127.0.0.1:23180/?kiosk=1&token=<admin-token>"
 ```
 
-For scripts: `/healthz` (open), `/api/status` (decks, agents, load, counters)
-and `/api/overview` (what the dashboard draws), both with
-`Authorization: Bearer <admin-token>`.
+For scripts: `/healthz` (open), `/api/status` (decks, agents, load, counters),
+`/api/overview` (what the dashboard draws) and `/api/decks` (the Decks page:
+`GET` lists, `POST {"name", "label", "description"}` adds and returns the
+credentials, `PATCH /api/decks/<name>` edits, `POST /api/decks/<name>/rotate`,
+`DELETE /api/decks/<name>`), all with `Authorization: Bearer <admin-token>`;
+changes must be sent as JSON.
 
 ## 10. First test across your decks
 
@@ -398,6 +474,12 @@ and `/api/overview` (what the dashboard draws), both with
   `shared_agent_usage`) — the agent itself enforces this for every `BP` lane —
   plus whatever the admin denies (for an agent other people's decks use,
   consider `shell, scripts, write, edit`).
+* It still answers **with the agent's own tools and data**: its files, its
+  datastore, and accounts connected to it (an inbox, for instance — reading
+  mail is not blocked, only writing). Share an agent only when its owner is
+  comfortable with other decks getting answers drawn from those, or deny the
+  tools in question (e.g. `read, datastore, google_mail, microsoft_mail`) for remote requests. The
+  "Share on network" dialog tells users exactly this.
 * Only Flight Decks are identified by the hub. A legacy agent (or a hub swarm)
   asking is let in only when *Accept requests from* is *Any deck*, and gets a
   lane of its own.
@@ -424,8 +506,10 @@ and `/api/overview` (what the dashboard draws), both with
 
 | Message | Cause | Fix |
 |---|---|---|
-| `hub refused registration: Authentication failed` | Wrong **Key** or **Secret** | Enter them again, **Save**, then **Reconnect** (after this refusal the link otherwise waits up to 10 min). |
-| `… Too many failed registrations from this address; try again later` | 10 failures in a minute for this key from this address: blocked for 5 min | Wait, or restart the hub. |
+| `hub refused registration: Authentication failed` | Wrong **Key** or **Secret** | Paste the join code again (or enter them again), **Save**, then **Reconnect** (after this refusal the link otherwise waits up to 10 min). |
+| `… Authentication failed: this deck's secret was replaced on the hub …` | Someone pressed **Rotate** for this deck on the hub | Paste the new join code, **Save**. |
+| `… Authentication failed: this key was removed on the hub` | The deck was removed on the hub's Decks page | Add it there again and paste the new join code. |
+| `… Too many failed registrations from this address; try again later` | 10 failures in a minute for this key from this address: blocked for 5 min | Wait, restart the hub, or **Rotate** the deck's key on the dashboard (that clears the block). |
 | ``… This key is not bound to a deck name: set `instance:` …`` | The key has no `instance:` | Add `instance: <deck>` in the hub's `auth.keys`, restart the hub. |
 | `… A different Flight Deck is already connected as 'x'` | Two decks use one name or key — or a deck's data directory was reset while its old connection is still open | Use unique names; a dead connection drops within about a minute. |
 | `another Flight Deck process with this deck's identity took over the link (code 4000) …` | Two Flight Deck processes share one data directory | Stop the duplicate. |
@@ -470,10 +554,13 @@ and `/api/overview` (what the dashboard draws), both with
 |---|---|
 | `Cannot listen on 0.0.0.0:23180 — … Is another BotPort already running?` | An old hub still holds the port: find it (`ss -ltnp \| grep 23180`) and stop it. |
 | `error: config check failed …` | Run `botport check -c ~/.botport/config.yaml` and fix each `ERROR:`. |
-| `ERROR: auth.enabled is true but auth.keys is empty — nobody could connect` | Paste the `gen-key` entries. |
+| `WARNING auth.keys is empty: only Flight Decks added on the dashboard (Decks) can connect` | Expected when you add decks on the dashboard. With the dashboard off it says so, and you need `gen-key` entries. |
+| **Join code** field says *That isn't a whole join code* | It was cut off when copied: press **Copy join code** again (it starts with `bpj1.`), or enter the fields by hand. A join code that was shown once and lost can't be shown again: **Rotate**. |
 | `WARNING: … readable by other users (chmod 600 …)` | `chmod 600 ~/.botport/config.yaml` |
 | Banner shows port 33080 or `Auth: DISABLED (open)` | The hub was started without `-c`: use the tmux script. |
-| Dashboard / API answer 401 | Enter the admin token (or `Authorization: Bearer …`); without `admin_token` set, the API answers only on the hub's own machine. |
+| Dashboard / API answer 401 | Enter the admin token (or `Authorization: Bearer …`); without `admin_token` set, the API answers only on the hub's own machine, opened as `http://127.0.0.1:23180/` or `http://localhost:23180/` (not by another name: that is what a DNS-rebinding page would use). |
+| Decks page: *Two keys for one deck* | A deck has a key in botport.yaml and one made on the dashboard; both connect as it. Remove one: the dashboard's with **Remove**, the file's by deleting the entry and restarting. |
+| **Add Flight Deck** says *Turn on auth first* | The hub runs with auth off, where keys change nothing. Set `auth.enabled: true` and restart once. |
 
 ## Upgrading
 
@@ -482,7 +569,9 @@ check) and waits before retrying.
 
 * **Hub** — `cd ~/captain-claw && git pull`, then
   `~/botport-venv/bin/pip install ~/captain-claw/botport` and
-  `scripts/botport-tmux.sh restart`. If an older hub was started some other
+  `scripts/botport-tmux.sh restart`. Decks added on the dashboard live in
+  `botport.db` in the data directory and survive upgrades; back that file up
+  with the config. If an older hub was started some other
   way (e.g. from `~/captain-claw/botport/` on port 33080), stop it first
   (`tmux ls`, `ss -ltnp | grep -E ':(23180|33080)'`).
 * **Flight Deck (Python install)** — `git pull`, `pip install -e .` (or

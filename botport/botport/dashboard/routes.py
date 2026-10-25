@@ -22,6 +22,7 @@ _STATIC_FILES = {
     "dashboard.css": "text/css",
     "dashboard.js": "application/javascript",
     "auth.js": "application/javascript",
+    "decks.js": "application/javascript",
     "swarm.js": "application/javascript",
     "icon.svg": "image/svg+xml",
 }
@@ -61,9 +62,11 @@ def _concern_view(c: Concern, live: dict[str, Any] | None = None,
     }
 
 
-def _instance_view(i: InstanceInfo) -> dict[str, Any]:
+def _instance_view(i: InstanceInfo, server: BotPortServer) -> dict[str, Any]:
     d = i.to_dict()
     d["remote_addr"] = getattr(i, "remote_addr", "") or ""
+    if i.is_deck:
+        d.update(server.decks.meta(i.name))
     return d
 
 
@@ -119,13 +122,13 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
         snap = server.status_snapshot()
         snap["decks"] = [
             {
-                "name": d.name, "status": d.status, "version": d.version,
+                "name": d.name, **server.decks.meta(d.name), "status": d.status, "version": d.version,
                 "connected_at": d.connected_at, "disconnected_at": d.disconnected_at,
                 "last_heartbeat": d.last_heartbeat, "remote_addr": d.remote_addr,
                 "active_concerns": d.active_concerns, "max_concurrent": d.max_concurrent,
                 "agents": [a.to_dict() for a in d.agents],
             }
-            for d in server.connections.list_decks(connected_only=False)
+            for d in server.connections.list_decks(connected_only=False) if server.can_return(d)
         ]
         return web.json_response(snap)
 
@@ -140,12 +143,14 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
         active = server.concerns.get_active_concerns()
         active_ids = {c.id for c in active}
         recent = [c for c in await server.store.list_concerns(limit=limit) if c.id not in active_ids]
+        await server.decks.ensure_loaded()
         counts = await server.store.message_counts([c.id for c in recent])
         return web.json_response({
             "now": datetime.now(timezone.utc).isoformat(),
             "hub": server.status_snapshot(),
             "stats": await server.concerns.get_stats(),
-            "instances": [_instance_view(i) for i in server.connections.list_instances()],
+            "instances": [_instance_view(i, server) for i in server.connections.list_instances()
+                          if server.can_return(i)],
             "active": [_concern_view(c, server.live_progress.get(c.id)) for c in active],
             "recent": [_concern_view(c, counts=counts.get(c.id, {})) for c in recent],
         })

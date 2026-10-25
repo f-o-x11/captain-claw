@@ -60,7 +60,7 @@ async def deck(tmp_path: Path, monkeypatch):
     link = bl.BotPortLink()
     link.settings = bl.LinkSettings.from_dict({"enabled": True, "url": "hub:23180", "deck_name": "vps1"})
     link.state, link._ws = "connected", object()
-    link.network = {"decks": [{"name": "pi", "status": "connected", "agents": [
+    link.network = {"decks": [{"name": "pi", "label": "Kitchen Pi", "status": "connected", "agents": [
         {"name": "Researcher", "slug": "researcher", "description": "Finds things", "status": "running"}]}],
         "agents": []}
     calls: list[dict] = []
@@ -167,7 +167,8 @@ async def test_fleet_lists_remote_agents_only_on_request(deck):
     assert any(a["kind"] == "remote" for a in as_agent)
     remote = [a for a in full if a["kind"] == "remote"]
     assert remote == [{"name": "Researcher@pi", "slug": "researcher", "kind": "remote", "host": "",
-                       "port": 0, "status": "running", "description": "Finds things", "deck": "pi"}]
+                       "port": 0, "status": "running", "description": "Finds things", "deck": "pi",
+                       "deck_label": "Kitchen Pi"}]
 
 
 async def test_config_is_admin_only_and_secret_never_returned(deck):
@@ -190,7 +191,9 @@ async def test_config_is_admin_only_and_secret_never_returned(deck):
     raw = await deck.db.get_system_setting(bl.SETTING_KEY)
     assert "very-secret-value" not in raw
     assert deck.applied[-1]["secret"] == "very-secret-value"
-    assert set(status_user.json()) == {"enabled", "state", "deck_name", "remote_agents"}
+    assert set(status_user.json()) == {"enabled", "state", "deck_name", "remote_agents", "decks"}
+    # A user sees the decks online by the names the hub gives them, no more.
+    assert status_user.json()["decks"] == [{"name": "pi", "label": "Kitchen Pi"}]
 
 
 async def test_sign_in_off_deck_takes_link_settings_only_from_this_machine(deck, monkeypatch):

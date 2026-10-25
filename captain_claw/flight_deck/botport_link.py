@@ -472,6 +472,8 @@ class BotPortLink:
                     "agent": a.get("name", ""),
                     "slug": a.get("slug", ""),
                     "deck": deck.get("name", ""),
+                    # What the hub's operator calls that deck (may be empty).
+                    "deck_label": str(deck.get("label") or ""),
                     "description": a.get("description", ""),
                     "expertise_tags": a.get("expertise_tags", []),
                 })

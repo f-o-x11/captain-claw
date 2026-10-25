@@ -228,7 +228,9 @@ class FlightDeckTool(Tool):
             port = a.get("port", 0)
             desc = a.get("description", "")
             if kind == "remote":
-                line = f"- **{name}** [remote · Flight Deck '{a.get('deck', '?')}' via BotPort]"
+                label = a.get("deck_label") or ""
+                where = f"'{a.get('deck', '?')}'" + (f" ({label})" if label else "")
+                line = f"- **{name}** [remote · Flight Deck {where} via BotPort]"
                 if desc:
                     line += f" — {desc}"
                 remote_lines.append(line)

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Cable, Share2, Save, Stethoscope, Lock, Trash2, Loader2, CheckCircle2, XCircle, Bot, Globe } from 'lucide-react'
+import { Cable, Share2, Save, Stethoscope, Lock, Trash2, Loader2, CheckCircle2, XCircle, Bot, Globe, Ticket } from 'lucide-react'
 import {
-  getBotportConfig, saveBotportConfig, getBotportAgents, probeBotport, botportEnvVar, setBotportShare,
+  getBotportConfig, saveBotportConfig, getBotportAgents, probeBotport, botportEnvVar, setBotportShare, parseJoinCode,
   type BotportConfig, type BotportConfigPatch, type BotportLocalAgent, type BotportProbe,
 } from '../../services/botportLink'
 import { useNetworkShareStore } from '../../stores/networkShareStore'
@@ -149,6 +149,30 @@ function ConnectionCard({ config, save }: { config: BotportConfig; save: Save })
   const { busy, error, flash, run } = useSaving(save)
   const locked = (f: string) => config.env_locked.includes(f)
   const set = <K extends keyof ConnDraft>(k: K, v: ConnDraft[K]) => setD((p) => ({ ...p, [k]: v }))
+  const [join, setJoin] = useState('')
+  const [joined, setJoined] = useState('')
+  const credFields = ['url', 'deck_name', 'key', 'secret']
+  const joinable = credFields.some((f) => !locked(f))
+  const joinBad = join.trim().length > 8 && parseJoinCode(join) === null
+
+  // A join code from the hub's Decks page fills in the whole connection (the
+  // fields the environment pins keep their values); Save then connects.
+  const applyJoin = (text: string) => {
+    setJoin(text)
+    const j = parseJoinCode(text)
+    if (!j) return
+    setD((p) => ({
+      ...p,
+      enabled: locked('enabled') ? p.enabled : true,
+      url: locked('url') ? p.url : j.url,
+      deck_name: locked('deck_name') ? p.deck_name : j.deck_name,
+      key: locked('key') ? p.key : j.key,
+      secret: locked('secret') ? p.secret : j.secret,
+    }))
+    setProbe(null)
+    setJoin('')
+    setJoined(j.deck_name)
+  }
 
   // Only what changed (a pinned field can't change: its input is disabled).
   const patch: BotportConfigPatch = {}
@@ -163,7 +187,10 @@ function ConnectionCard({ config, save }: { config: BotportConfig; save: Save })
 
   const submit = async () => {
     const next = await run(patch)
-    if (next) setD(connDraft(next))
+    if (next) {
+      setD(connDraft(next))
+      setJoined('')
+    }
   }
 
   const test = async () => {
@@ -191,6 +218,51 @@ function ConnectionCard({ config, save }: { config: BotportConfig; save: Save })
       hint="The hub this deck connects to and its name there. Credentials come from the hub's admin."
     >
       <div className="space-y-5">
+        {joinable && (
+          <div className="rounded-xl border border-cyan-500/25 bg-gradient-to-br from-cyan-500/[0.06] via-transparent to-violet-500/[0.07] p-4">
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-cyan-400 via-indigo-400 to-violet-500 text-white shadow-md shadow-cyan-500/20">
+                <Ticket className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-zinc-100">Join code</div>
+                <p className="mt-0.5 text-xs leading-relaxed text-zinc-500">
+                  {config.key && config.secret_set ? (
+                    <>A new one from the hub (after it replaced this deck's secret, say)? Paste it here and Save.</>
+                  ) : (
+                    <>
+                      The hub's dashboard makes one under <span className="font-medium text-zinc-300">Decks → Add Flight Deck</span>.
+                      Paste it here and the address, name, key and secret below fill in; then Save.
+                    </>
+                  )}
+                </p>
+                <input
+                  value={join}
+                  onChange={(e) => applyJoin(e.target.value)}
+                  placeholder="bpj1.…"
+                  aria-label="Join code"
+                  spellCheck={false}
+                  autoComplete="off"
+                  className={`${inputCls} mt-2.5 font-mono`}
+                />
+                {joinBad && (
+                  <p className="mt-1.5 text-[11px] text-red-700 dark:text-red-400">
+                    That isn't a whole join code. Copy it again from the hub's Decks page: it starts with bpj1.
+                  </p>
+                )}
+                {joined && (
+                  <div className="mt-2.5">
+                    <Notice tone="emerald">
+                      Filled in for <span className="font-mono">{joined}</span>
+                      {credFields.some(locked) ? ' (fields pinned by the environment keep their values)' : ''}. Save to connect.
+                    </Notice>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="divide-y divide-zinc-800/80">
           <SettingRow
             title="Connect to BotPort"
@@ -225,7 +297,11 @@ function ConnectionCard({ config, save }: { config: BotportConfig; save: Save })
           <div className="flex gap-2">
             <input
               value={d.url}
-              onChange={(e) => { set('url', e.target.value); setProbe(null) }}
+              onChange={(e) => {
+                // A join code pasted here instead of in its own box works too.
+                if (parseJoinCode(e.target.value)) applyJoin(e.target.value)
+                else { set('url', e.target.value); setProbe(null) }
+              }}
               disabled={locked('url')}
               placeholder="ws://host:23180/ws"
               spellCheck={false}
@@ -297,8 +373,8 @@ function ConnectionCard({ config, save }: { config: BotportConfig; save: Save })
           </Field>
         </div>
         <p className="-mt-2 text-[11px] leading-relaxed text-zinc-500">
-          On the hub, <code className="text-zinc-400">botport gen-key &lt;deck name&gt;</code> prints both. Leave them blank for a hub without sign-in.
-          The secret is never shown again.
+          The hub's dashboard makes both (Decks → Add Flight Deck), as does <code className="text-zinc-400">botport gen-key &lt;deck name&gt;</code> on
+          the hub. Leave them blank for a hub without sign-in. The secret is never shown again.
         </p>
 
         {error && <Notice tone="red">{error}</Notice>}

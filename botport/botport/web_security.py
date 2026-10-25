@@ -6,7 +6,8 @@ through :func:`security_middleware`:
 
 * ``server.admin_token`` set   → a matching token is required (Authorization:
   Bearer, X-BotPort-Token, ``?token=``; or the dashboard cookie for GETs).
-* no token, auth enabled      → loopback clients only (and with
+* no token, auth enabled      → loopback clients that opened the hub by a
+  loopback name (127.0.0.1, localhost, ::1 — not a rebound domain) only (and with
   ``server.behind_proxy`` not even those: a local reverse proxy would launder
   every remote caller into 127.0.0.1).
 * no token, auth disabled     → open, as before (development / trusted LAN).
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import hmac
 from typing import Awaitable, Callable
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -64,6 +66,14 @@ def _presented_token(request: web.BaseRequest) -> str:
     return ""
 
 
+def _loopback_host(request: web.BaseRequest) -> bool:
+    """Was the page opened by a loopback name? A web page that rebinds its
+    own domain to 127.0.0.1 reaches the hub from loopback too, but under its
+    own name in the Host header."""
+    host = urlsplit("//" + (request.host or "")).hostname or ""
+    return host.lower() in _LOOPBACK
+
+
 def admin_allowed(request: web.BaseRequest, config: BotPortConfig | None = None) -> bool:
     """May this request use the dashboard API?"""
     cfg = config or get_config()
@@ -73,7 +83,7 @@ def admin_allowed(request: web.BaseRequest, config: BotPortConfig | None = None)
         return bool(presented) and hmac.compare_digest(presented.encode(), token.encode())
     if not cfg.auth.enabled:
         return True
-    return not cfg.server.behind_proxy and is_loopback(request)
+    return not cfg.server.behind_proxy and is_loopback(request) and _loopback_host(request)
 
 
 def _needs_admin(path: str) -> bool:
@@ -112,8 +122,8 @@ async def security_middleware(request: web.Request, handler: Handler) -> web.Str
         hint = (
             "admin token required (server.admin_token)"
             if cfg.server.admin_token
-            else "the BotPort API answers only local requests when auth is enabled; "
-                 "set server.admin_token to use it remotely"
+            else "the BotPort API answers only local requests (http://127.0.0.1:<port>/) when auth "
+                 "is enabled; set server.admin_token to use it remotely"
         )
         resp: web.StreamResponse = web.json_response({"error": "unauthorized", "detail": hint}, status=401)
     else:

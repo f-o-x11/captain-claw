@@ -544,6 +544,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
   const netAdmin = useNetworkShareStore((s) => s.admin)
   const netDeck = useNetworkShareStore((s) => s.deckName)
   const netSetShared = useNetworkShareStore((s) => s.setShared)
+  const netAskShare = useNetworkShareStore((s) => s.askShare)
   const shareKeys = useMemo(() => agents.map(shareKeyOf).filter(Boolean).join('|'), [agents])
   useEffect(() => {
     const st = useNetworkShareStore.getState()
@@ -585,6 +586,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
       )
       const net = networkShareAction(netAgents[shareKeyOf(a)], {
         canShare: netCanShare, admin: netAdmin, deckName: netDeck, displayName: a.name, setShared: netSetShared,
+        ask: netAskShare,
         onError: (m) => useNotificationStore.getState().add('error', 'BotPort network', m),
       })
       if (net.show) items.push({ icon: Globe, label: net.label, hint: net.hint, onSelect: net.onClick, disabled: net.disabled })
