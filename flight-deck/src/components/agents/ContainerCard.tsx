@@ -1128,8 +1128,8 @@ function ActionsDropdown({ isRunning, network, actionLoading, onStart, onStop, o
     { icon: Inbox,     label: 'Pending Insights…', onClick: onReviewPending, show: isRunning && canMemory },
     { icon: RefreshCw, label: 'Rebuild', onClick: onRebuild, loading: actionLoading === 'rebuild' },
     { icon: Users,     label: 'Share…',  onClick: onShare,   show: canShare },
-    { icon: Globe,     label: network.label || 'Share on network…', onClick: network.onClick, show: network.show, disabled: network.disabled },
     { icon: Layers,    label: PACKS_MENU_LABEL, onClick: onPacks, show: canPacks },
+    { icon: Globe,     label: network.label || 'Share on network…', onClick: network.onClick, show: network.show, disabled: network.disabled },
     { icon: Copy,      label: 'Clone',   onClick: onClone,   loading: actionLoading === 'clone' },
     { icon: Trash2,    label: 'Remove',  onClick: onRemove,  loading: actionLoading === 'remove',  danger: true },
   ]

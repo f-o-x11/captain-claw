@@ -963,8 +963,8 @@ function ProcessActionsDropdown({ isRunning, network, actionLoading, onStart, on
     { icon: Brain,     label: 'Merge Reflection…', onClick: onMergeReflection, show: isRunning },
     { icon: Inbox,     label: 'Pending Insights…', onClick: onReviewPending, show: isRunning },
     { icon: Users,     label: 'Share…',  onClick: onShare,   show: canShare },
-    { icon: Globe,     label: network.label || 'Share on network…', onClick: network.onClick, show: network.show, disabled: network.disabled },
     { icon: Layers,    label: PACKS_MENU_LABEL, onClick: onPacks, show: canPacks },
+    { icon: Globe,     label: network.label || 'Share on network…', onClick: network.onClick, show: network.show, disabled: network.disabled },
     { icon: Copy,      label: 'Clone',   onClick: onClone,   loading: actionLoading === 'clone' },
     { icon: Trash2,    label: 'Remove',  onClick: onRemove,  loading: actionLoading === 'remove',  danger: true },
   ]
