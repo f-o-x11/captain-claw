@@ -72,7 +72,7 @@ Push-to-talk Captain Claw clients on three M5Stack devices:
 - the **PaperColor**: a 4" colour e-paper dashboard with two status lights and a room sensor;
 - the **StickS3**.
 
-Press, talk, press again, or just stop talking. Flight Deck transcribes it, one of your agents answers, and the device **speaks the answer sentence by sentence while the model is still writing it**, the text following the voice. Since 0.8.2 an answer can be **any length**.
+Press, talk, press again, or just stop talking. Flight Deck transcribes it, one of your agents answers, and the device **speaks the answer sentence by sentence while the model is still writing it**, the text following the voice. Since 0.8.2 the voice no longer stops at about 66 seconds: Flight Deck speaks up to about 1,500 characters of an answer, and the device shows the rest.
 
 - Out of Wi-Fi, it keeps **voice notes** and sends them when the deck is back.
 - Every question carries the battery, the room's temperature and the local time.
@@ -157,7 +157,7 @@ Captain Claw is **MIT licensed and free forever** — your data stays on your ma
   - Agent tokens go only to that agent's own address.
   - The hub has an admin token, a DNS-rebinding guard, constant-time key checks and a failure limiter.
   - Fixed: a swarm path traversal and a dashboard XSS.
-- **Devices** speak answers of any length (no more 66-second ceiling); the PaperColor does an hourly white pass to keep its six inks clean.
+- **Devices** play long answers through (no more 66-second ceiling; Flight Deck speaks up to about 1,500 characters and shows the rest); the PaperColor does an hourly white pass to keep its six inks clean.
 - **Research reports with pictures.** `web_fetch` keeps the relevant pictures a page shows, and reports embed them (.md, .html, .docx).
 
 See [RELEASE_NOTES_0.8.2.md](release-notes/RELEASE_NOTES_0.8.2.md) and [docs/botport-deployment.md](docs/botport-deployment.md).

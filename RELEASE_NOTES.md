@@ -24,8 +24,9 @@ And it isn't only for admins. **Anyone can share the agents they own**, from
 the agent's menu or the kiosk's **⋯**, after a dialog that says plainly what
 other decks will and won't be able to do with it.
 
-Also in 0.8.2: devices speak answers **of any length** (the old 66-second
-ceiling is gone), the PaperColor keeps its colours clean with an **hourly white
+Also in 0.8.2: devices play **long answers through** (the old 66-second
+ceiling is gone; Flight Deck speaks up to about 1,500 characters and shows
+the rest), the PaperColor keeps its colours clean with an **hourly white
 pass**, and research reports now carry **the pictures** from the pages they
 cite.
 
@@ -160,13 +161,14 @@ decks, is in [docs/botport-deployment.md](docs/botport-deployment.md).
 
 ### Devices
 
-- **Answers of any length.** The answer's voice now plays through a ring
-  instead of one buffer: a three-minute answer plays to the end. A long answer
-  arrives faster than it is spoken, so the device asks the deck to hold
-  (`audio_hold`) and to go on (`audio_go`); a pause holds it. Replay comes from
-  the ring while the whole clip is still there, otherwise from the deck.
-  Firmware **0.18.2** (StopWatch, StickS3, PaperColor A) and **1.0.17**
-  (PaperColor B).
+- **Long answers play through.** The answer's voice now plays through a ring
+  instead of one buffer, so it no longer stops at about 66 seconds. Flight
+  Deck speaks up to about 1,500 characters of an answer (`MAX_SPOKEN_CHARS`);
+  the rest is shown, not read. A long answer arrives faster than it is spoken,
+  so the device asks the deck to hold (`audio_hold`) and to go on
+  (`audio_go`); a pause holds it. Replay comes from the ring while the whole
+  clip is still there, otherwise from the deck. Firmware **0.18.2**
+  (StopWatch, StickS3, PaperColor A) and **1.0.17** (PaperColor B).
 - **PaperColor: a white pass.** Six-ink paper that only ever goes from one
   picture to the next loses colour and keeps faint shadows. Once an hour, and
   once after a real restart, it goes all white before the dashboard. A screen
