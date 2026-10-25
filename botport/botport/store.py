@@ -103,6 +103,17 @@ class BotPortStore:
                 FOREIGN KEY (concern_id) REFERENCES concerns(id)
             );
 
+            CREATE TABLE IF NOT EXISTS decks (
+                name         TEXT PRIMARY KEY COLLATE NOCASE,
+                label        TEXT DEFAULT '',
+                description  TEXT DEFAULT '',
+                key          TEXT DEFAULT '',
+                secret_hash  TEXT DEFAULT '',
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                rotated_at   TEXT DEFAULT ''
+            );
+
             CREATE INDEX IF NOT EXISTS idx_concerns_status ON concerns(status);
             CREATE INDEX IF NOT EXISTS idx_concerns_from ON concerns(from_instance);
             CREATE INDEX IF NOT EXISTS idx_concerns_assigned ON concerns(assigned_instance);
@@ -237,6 +248,31 @@ class BotPortStore:
             async for row in cursor:
                 out.setdefault(row["concern_id"], {})[row["direction"]] = int(row["n"])
         return out
+
+    async def list_deck_records(self) -> list[dict[str, Any]]:
+        """Every row of the deck registry (see botport.decks)."""
+        db = await self._ensure_db()
+        async with db.execute("SELECT * FROM decks") as cursor:
+            return [dict(row) async for row in cursor]
+
+    async def save_deck_record(self, rec: dict[str, Any]) -> None:
+        db = await self._ensure_db()
+        await db.execute(
+            """INSERT INTO decks (name, label, description, key, secret_hash, created_at, updated_at, rotated_at)
+               VALUES (:name, :label, :description, :key, :secret_hash, :created_at, :updated_at, :rotated_at)
+               ON CONFLICT(name) DO UPDATE SET
+                 label = excluded.label, description = excluded.description, key = excluded.key,
+                 secret_hash = excluded.secret_hash, updated_at = excluded.updated_at,
+                 rotated_at = excluded.rotated_at
+            """,
+            rec,
+        )
+        await db.commit()
+
+    async def delete_deck_record(self, name: str) -> None:
+        db = await self._ensure_db()
+        await db.execute("DELETE FROM decks WHERE name = ?", (name,))
+        await db.commit()
 
     async def list_concerns(
         self,

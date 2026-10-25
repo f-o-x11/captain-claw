@@ -176,6 +176,12 @@ function timeAgo(iso) {
     return i ? i.name : deckOf(id) || shortId(id);
   }
 
+  // What people call a connection: a deck's display name, else its name.
+  function instTitle(id) {
+    const i = id && S.byId.get(id);
+    return (i && i.label) || instName(id);
+  }
+
   // A concern's asker and target as { agent, place } ("Jev" @ "glasses").
   function fromParts(c) {
     return { agent: c.from_agent || "", place: c.from_name || instName(c.from) || "?" };
@@ -369,7 +375,7 @@ function timeAgo(iso) {
   let refreshAgain = false;
 
   async function refresh() {
-    if (S.route === "swarm") return;
+    if (S.route === "swarm" || S.route === "decks") return;
     if (refreshing) {
       refreshAgain = true;
       return;
@@ -450,16 +456,20 @@ function timeAgo(iso) {
         soon();
         break;
       case "instance_connected":
-        if (ev.instance) addTick("online", { name: ev.instance.name, key: "on:" + ev.instance.id + ":" + ev.instance.connected_at });
+        if (ev.instance) addTick("online", { name: ev.instance.label || ev.instance.name, key: "on:" + ev.instance.id + ":" + ev.instance.connected_at });
         soon();
         break;
       case "instance_disconnected":
-        addTick("offline", { name: instName(ev.instance_id), key: "off:" + ev.instance_id + ":" + Date.now() });
+        addTick("offline", { name: instTitle(ev.instance_id), key: "off:" + ev.instance_id + ":" + Date.now() });
+        soon();
+        break;
+      case "deck_updated":
         soon();
         break;
       default:
         break;
     }
+    if (window.BotPortDecks && /^(instance_connected|instance_disconnected|deck_updated)$/.test(ev.type)) BotPortDecks.onEvent(ev);
     trimSets();
   }
 
@@ -712,7 +722,7 @@ function timeAgo(iso) {
       cls.toggle("dense", density === "dense");
 
       const ctx = busyAgents.get(inst.id) || new Set();
-      const sig = JSON.stringify([inst.name, inst.status, inst.version, act, max, inst.agents, inst.personas,
+      const sig = JSON.stringify([inst.name, inst.label, inst.description, inst.status, inst.version, act, max, inst.agents, inst.personas,
         (inst.tools || []).length, Array.from(ctx), on ? "" : timeAgo(inst.disconnected_at)]);
       if (sig !== node.sig) {
         node.sig = sig;
@@ -787,13 +797,17 @@ function timeAgo(iso) {
     const max = Number(inst.max_concurrent) || 0;
     const act = Number(inst.active_concerns) || 0;
     const pct = max ? Math.min(100, Math.round((act / max) * 100)) : 0;
+    const title = (deck && inst.label) || inst.name;
+    // With a display name, the sub line carries the deck's network name.
+    const what = deck && inst.label ? `<span class="node-handle">${esc(inst.name)}</span>` : deck ? `Flight Deck${inst.version ? " " + esc(inst.version) : ""}` : "";
     const sub = !on
-      ? `offline · ${esc(timeAgo(inst.disconnected_at)) || "just now"}`
+      ? `${deck && inst.label ? what + " · " : ""}offline · ${esc(timeAgo(inst.disconnected_at)) || "just now"}`
       : deck
-        ? `Flight Deck${inst.version ? " " + esc(inst.version) : ""} · ${plural(agents.length, "agent")}`
+        ? `${what} · ${plural(agents.length, "agent")}`
         : `Captain Claw agent · ${plural((inst.tools || []).length, "tool")}`;
-    return `<button class="node-card" type="button" data-deck="${esc(inst.id)}" aria-label="${esc(inst.name)}: details">
-      <span class="node-head"><span class="node-dot"></span><span class="node-name">${esc(inst.name)}</span><span class="node-load" title="Requests running / capacity">${act}/${max}</span></span>
+    const tip = deck && inst.description ? ` title="${esc(inst.description)}"` : "";
+    return `<button class="node-card" type="button" data-deck="${esc(inst.id)}" aria-label="${esc(title)}: details"${tip}>
+      <span class="node-head"><span class="node-dot"></span><span class="node-name">${esc(title)}</span><span class="node-load" title="Requests running / capacity">${act}/${max}</span></span>
       <span class="node-sub">${sub}</span>
       <span class="chips">${chips}</span>
       <span class="load"><i style="width:${pct}%"></i></span>
@@ -1196,7 +1210,7 @@ function timeAgo(iso) {
     if (S.drawer.sig === sig) return;
     S.drawer.sig = sig;
     if (!inst) {
-      setDrawer("Flight Deck", deckOf(id) || shortId(id), emptyHTML(ICON.radar, "Not connected", "The hub no longer knows this connection."));
+      setDrawer("Flight Deck", instTitle(id), emptyHTML(ICON.radar, "Not connected", "The hub no longer knows this connection."));
       return;
     }
     const deck = inst.kind === "deck";
@@ -1214,6 +1228,10 @@ function timeAgo(iso) {
     let html = `<div class="d-hero"><span class="pill ${on ? "t-done" : "t-idle"}">${on ? "Online" : "Offline"}</span>
       <span>${deck ? "Flight Deck" : "Captain Claw agent"}${inst.version ? " " + esc(inst.version) : ""}</span>
       <span class="stat">Busy<span class="mono">${act} of ${max}</span></span></div>`;
+    if (deck) {
+      html += `<div class="d-about">${inst.description ? `<p>${esc(inst.description)}</p>` : `<p class="none">No description yet.</p>`}
+        <a class="d-manage" href="#/decks?edit=${encodeURIComponent(inst.name)}">Edit name and description</a></div>`;
+    }
     html += `<dl class="facts">
         <div class="fact"><dt>${on ? "Connected" : "Went offline"}</dt><dd><span>${esc(dateTime(on ? inst.connected_at : inst.disconnected_at))}</span></dd></div>
         <div class="fact"><dt>Last heartbeat</dt><dd><span data-ago="${esc(inst.last_heartbeat)}">${esc(timeAgo(inst.last_heartbeat) || "—")}</span></dd></div>
@@ -1237,7 +1255,7 @@ function timeAgo(iso) {
     html += `<section class="d-sec"><h3>Recent requests <span class="n">${mine.length}</span></h3>`;
     html += mine.length ? `<div>${mine.map(rowHTML).join("")}</div>` : emptyHTML(ICON.inbox, "None yet", "");
     html += `</section>`;
-    setDrawer(deck ? "Flight Deck" : "Agent connection", inst.name, html);
+    setDrawer(deck ? (inst.label ? `Flight Deck · ${inst.name}` : "Flight Deck") : "Agent connection", (deck && inst.label) || inst.name, html);
   }
 
   async function copyText(text, btn) {
@@ -1269,13 +1287,23 @@ function timeAgo(iso) {
   /* ---- Routing, clock, kiosk, sign-in ---- */
 
   function route() {
-    const page = location.hash.replace(/^#\/?/, "").split(/[/?]/)[0];
-    show(page === "requests" ? "requests" : page === "swarm" ? "swarm" : "network");
+    const hash = location.hash.replace(/^#\/?/, "");
+    const page = hash.split(/[/?]/)[0];
+    show(page === "requests" || page === "swarm" || page === "decks" ? page : "network");
+    if (page === "decks" && window.BotPortDecks) {
+      const edit = new URLSearchParams(hash.split("?")[1] || "").get("edit");
+      if (edit) {
+        if (S.drawer) closeDrawer();
+        BotPortDecks.show({ edit });
+        history.replaceState(null, "", "#/decks");
+      }
+    }
   }
 
   function show(name) {
     if (S.route === name) return;
     if (S.route === "swarm" && typeof window.teardownSwarmPage === "function") window.teardownSwarmPage();
+    if (S.route === "decks" && window.BotPortDecks) BotPortDecks.hide();
     S.route = name;
     document.querySelectorAll(".page").forEach((p) => {
       p.hidden = p.id !== "page-" + name;
@@ -1288,6 +1316,9 @@ function timeAgo(iso) {
     if (name === "swarm") {
       stopPolling();
       if (typeof window.initSwarmPage === "function") window.initSwarmPage();
+    } else if (name === "decks") {
+      stopPolling();
+      if (window.BotPortDecks) BotPortDecks.show();
     } else {
       startPolling();
       if (S.ov && name === "network") {
@@ -1448,7 +1479,7 @@ function timeAgo(iso) {
         openDrawer("concern", e.target.dataset.cid);
         return;
       }
-      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || !el.signin.hidden) return;
+      if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey || !el.signin.hidden || !$("#deck-modal").hidden) return;
       if (e.key === "k" || e.key === "K") setKiosk(!S.kiosk, true);
       if (e.key === "/" && S.route === "requests") {
         e.preventDefault();
@@ -1492,6 +1523,7 @@ function timeAgo(iso) {
       el.signin.hidden = true;
       reconnectWS();
       if (S.route === "swarm" && typeof window.initSwarmPage === "function") window.initSwarmPage();
+      else if (S.route === "decks" && window.BotPortDecks) BotPortDecks.show();
       else refresh();
     });
     window.addEventListener("botport:unauthorized", showSignIn);

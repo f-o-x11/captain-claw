@@ -19,13 +19,21 @@ function DeckRow({ deck }: { deck: BotportDeck }) {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="flex min-w-0 items-center gap-2">
           <Dot tone={on ? 'on' : 'off'} />
-          <span className="truncate text-sm font-medium text-zinc-100">{deck.name}</span>
+          <span className="truncate text-sm font-medium text-zinc-100">{deck.label || deck.name}</span>
+          {deck.label && (
+            <code className="shrink-0 rounded-md bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] text-cyan-700 dark:text-cyan-300">{deck.name}</code>
+          )}
         </span>
         {deck.version && <span className="text-[11px] text-zinc-500">{ver(deck.version)}</span>}
         <span className="ml-auto text-[11px] tabular-nums text-zinc-500">
           {on ? `${deck.active_concerns}/${deck.max_concurrent} busy` : 'disconnected'}
         </span>
       </div>
+      {deck.description && (
+        <p className="mt-1.5 line-clamp-2 whitespace-pre-line text-xs leading-relaxed text-zinc-400" title={deck.description}>
+          {deck.description}
+        </p>
+      )}
       {deck.agents.length > 0 ? (
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           {deck.agents.map((a) => {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Globe, X, MessagesSquare, ShieldCheck, ToggleRight, Loader2, Network, Lightbulb } from 'lucide-react'
 import { useNetworkShareStore } from '../../stores/networkShareStore'
-import { getBotportStatus, isFullStatus } from '../../services/botportLink'
+import { getBotportStatus, isFullStatus, type BotportShareAgent } from '../../services/botportLink'
 
 // "Share on network?" — what putting one of your agents on this deck's BotPort
 // network means, before it happens. Opened by networkShareAction (the agent
@@ -14,7 +14,7 @@ async function otherDecks(): Promise<string[] | null> {
   try {
     const st = await getBotportStatus()
     if (isFullStatus(st)) {
-      return st.network.decks.filter((d) => d.status === 'connected').map((d) => d.name)
+      return st.network.decks.filter((d) => d.status === 'connected').map((d) => d.label || d.name)
     }
     const names = new Set<string>()
     for (const r of st.remote_agents || []) {
@@ -54,6 +54,12 @@ function Point({ icon: Icon, tone, title, children }: {
 
 export function NetworkShareDialog() {
   const pending = useNetworkShareStore((s) => s.confirm)
+  if (!pending) return null
+  // Keyed per request: each one starts with a fresh dialog state.
+  return <ShareDialog key={`${pending.agent.kind}:${pending.agent.slug || pending.agent.name}`} pending={pending} />
+}
+
+function ShareDialog({ pending }: { pending: { agent: BotportShareAgent; displayName: string } }) {
   const deckName = useNetworkShareStore((s) => s.deckName)
   const close = useNetworkShareStore((s) => s.closeConfirm)
   const setShared = useNetworkShareStore((s) => s.setShared)
@@ -63,10 +69,6 @@ export function NetworkShareDialog() {
   const cancelRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    if (!pending) return
-    setBusy(false)
-    setError('')
-    setDecks(null)
     let alive = true
     void otherDecks().then((d) => { if (alive) setDecks(d) })
     const back = document.activeElement as HTMLElement | null
@@ -78,9 +80,8 @@ export function NetworkShareDialog() {
       window.removeEventListener('keydown', onKey)
       if (back && document.contains(back)) back.focus()
     }
-  }, [pending, close])
+  }, [close])
 
-  if (!pending) return null
   const name = pending.displayName
   const address = deckName ? `${name}@${deckName}` : name
 

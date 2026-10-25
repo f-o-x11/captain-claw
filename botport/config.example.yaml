@@ -33,9 +33,13 @@ server:
 
 auth:
   enabled: true
-  # One entry per Flight Deck (and per legacy agent). `instance` binds the
-  # name: a deck connecting with this key IS that deck (a deck's key must have
-  # one), and an agent using it is registered under that name.
+  # Flight Decks are easiest to add on the dashboard (Decks → Add Flight
+  # Deck): the hub keeps those keys in its database and takes them at once,
+  # without a restart, so this list may stay empty.
+  # Keys here work too (and need a restart when changed): one entry per Flight
+  # Deck (and per legacy agent). `instance` binds the name: a deck connecting
+  # with this key IS that deck (a deck's key must have one), and an agent
+  # using it is registered under that name.
   # Generate an entry with:  botport gen-key <deck-name>
   keys:
     # - instance: "vps1"

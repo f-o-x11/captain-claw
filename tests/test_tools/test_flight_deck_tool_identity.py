@@ -146,7 +146,11 @@ class _FD:
         if path == "/fd/fleet":
             return httpx.Response(200, json=[
                 {"name": "peer", "kind": "process", "host": "localhost",
-                 "port": 24300, "status": "running"}])
+                 "port": 24300, "status": "running"},
+                {"name": "Researcher@pi", "kind": "remote", "host": "", "port": 0, "status": "running",
+                 "description": "Finds things", "deck": "pi", "deck_label": "Kitchen Pi"},
+                {"name": "Coder@vps1", "kind": "remote", "host": "", "port": 0, "status": "running",
+                 "deck": "vps1"}])
         if path == "/fd/consult-peer":
             line = json.dumps({"done": True, "ok": True, "response": "hi"}) + "\n"
             return httpx.Response(200, content=line.encode())
@@ -171,6 +175,13 @@ def fd(monkeypatch):
 
     monkeypatch.setattr(httpx, "AsyncClient", _client)
     return server
+
+
+async def test_remote_agents_are_listed_with_their_decks_hub_name(cfg, fd):
+    res = await FlightDeckTool()._list_agents(FD)
+    assert res.success
+    assert "- **Researcher@pi** [remote · Flight Deck 'pi' (Kitchen Pi) via BotPort] — Finds things" in res.content
+    assert "- **Coder@vps1** [remote · Flight Deck 'vps1' via BotPort]" in res.content
 
 
 class TestEveryCallCarriesTheAgentsIdentity:

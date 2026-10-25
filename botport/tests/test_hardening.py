@@ -7,7 +7,7 @@ import gzip
 
 import pytest
 
-from botport.config import BotPortConfig
+from botport.config import AuthKeyEntry, BotPortConfig
 from botport.swarm.file_manager import FileManager, decode_file
 
 
@@ -104,7 +104,8 @@ def test_broken_config_is_an_error_not_defaults(tmp_path, monkeypatch):
 def test_config_problems_and_warnings():
     cfg = BotPortConfig()
     cfg.auth.enabled = True
-    assert any("keys is empty" in p for p in cfg.problems())
+    cfg.auth.keys = [AuthKeyEntry(instance="vps1", key="k1", secret="")]
+    assert any("needs both key and secret" in p for p in cfg.problems())
     cfg2 = BotPortConfig()
     assert any("DISABLED" in w for w in cfg2.warnings())
 
@@ -118,8 +119,11 @@ def test_cli_gen_key_and_check(tmp_path, capsys):
     assert cli.main(["gen-key", "bad name"]) == 1
 
     p = tmp_path / "c.yaml"
-    p.write_text("auth:\n  enabled: true\n  keys: []\n")
+    p.write_text("auth:\n  enabled: true\n  keys:\n    - {instance: vps1, key: k1, secret: ''}\n")
     assert cli.main(["check", "-c", str(p)]) == 1
+    # No keys in the file is fine: decks can be added on the dashboard.
+    p.write_text("auth:\n  enabled: true\n  keys: []\n")
+    assert cli.main(["check", "-c", str(p)]) == 0
 
 
 def _req_from(peer: str, xff: str):

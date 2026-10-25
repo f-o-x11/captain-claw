@@ -300,8 +300,6 @@ class BotPortConfig(BaseSettings):
             if f and not Path(f).expanduser().is_file():
                 out.append(f"TLS file not found: {f}")
         if self.auth.enabled:
-            if not self.auth.keys:
-                out.append("auth.enabled is true but auth.keys is empty — nobody could connect")
             seen_keys: set[str] = set()
             seen_names: set[str] = set()
             for i, k in enumerate(self.auth.keys):
@@ -326,6 +324,13 @@ class BotPortConfig(BaseSettings):
                 "auth is DISABLED and the hub listens on "
                 f"{self.server.host}: anyone who can reach port {self.server.port} can "
                 "register and drive the connected agents. Enable auth before exposing it."
+            )
+        if self.auth.enabled and not self.auth.keys:
+            out.append(
+                "auth.keys is empty: only Flight Decks added on the dashboard (Decks) can connect"
+                if self.server.dashboard_enabled else
+                "auth.keys is empty and the dashboard is off: no Flight Deck can connect "
+                "(add keys with `botport gen-key`, or enable the dashboard and add decks there)"
             )
         if self.auth.enabled:
             for k in self.auth.keys:

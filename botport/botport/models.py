@@ -114,6 +114,7 @@ class InstanceInfo:
     version: str = ""
     remote_addr: str = ""
     agents: list[DeckAgent] = field(default_factory=list)  # decks only
+    auth_key: str = ""         # the key it registered with (never sent anywhere)
 
     @property
     def is_deck(self) -> bool:

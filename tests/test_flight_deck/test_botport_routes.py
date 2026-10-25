@@ -60,7 +60,7 @@ async def deck(tmp_path: Path, monkeypatch):
     link = bl.BotPortLink()
     link.settings = bl.LinkSettings.from_dict({"enabled": True, "url": "hub:23180", "deck_name": "vps1"})
     link.state, link._ws = "connected", object()
-    link.network = {"decks": [{"name": "pi", "status": "connected", "agents": [
+    link.network = {"decks": [{"name": "pi", "label": "Kitchen Pi", "status": "connected", "agents": [
         {"name": "Researcher", "slug": "researcher", "description": "Finds things", "status": "running"}]}],
         "agents": []}
     calls: list[dict] = []
@@ -167,7 +167,8 @@ async def test_fleet_lists_remote_agents_only_on_request(deck):
     assert any(a["kind"] == "remote" for a in as_agent)
     remote = [a for a in full if a["kind"] == "remote"]
     assert remote == [{"name": "Researcher@pi", "slug": "researcher", "kind": "remote", "host": "",
-                       "port": 0, "status": "running", "description": "Finds things", "deck": "pi"}]
+                       "port": 0, "status": "running", "description": "Finds things", "deck": "pi",
+                       "deck_label": "Kitchen Pi"}]
 
 
 async def test_config_is_admin_only_and_secret_never_returned(deck):
