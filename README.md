@@ -559,8 +559,10 @@ Decompose complex tasks into a dependency graph and execute subtasks in parallel
 
 ### BotPort — Agent-to-Agent Network
 
-Connect multiple Captain Claw instances through a routing hub. Agents delegate tasks to specialists based on expertise tags, persona matching, or LLM-powered routing.
+Connect Flight Decks through a routing hub, so agents on one deck can work with agents on another (`Researcher@pi`): each deck dials out to the hub (decks behind NAT work), and a request runs on the receiving deck in a locked-down lane of its own.
 
+- **Sharing** — an admin chooses which agents a deck offers; users can share the agents they own from the agent's menu.
+- **Live network dashboard** — the hub, every deck and its agents, and each request drawn as it travels; a kiosk mode for a wall screen.
 - **BotPort Swarm** — DAG-based multi-agent orchestration across networked instances. Approval gates, retry with fallback, checkpointing, inter-agent file transfer (up to 50 MB), cron scheduling, and a visual dashboard.
 
 ### MCP Server (act as an MCP server)
@@ -764,7 +766,7 @@ Full reference: [USAGE.md](USAGE.md#configuration-reference) (23 config sections
 - **[USAGE.md](USAGE.md)** — Complete reference for all commands, tools, config, and features
 - **[README_DETAILED.md](README_DETAILED.md)** — Extended README with feature-by-feature breakdown
 - **[docs/team-deployment.md](docs/team-deployment.md)** — Running Flight Deck for a team: multi-user security, sharing, team keys, inbound MCP for Claude, Gmail sending
-- **[docs/botport-deployment.md](docs/botport-deployment.md)** — Connecting Flight Decks through BotPort: a hub in tmux on a Raspberry Pi, decks on VPSs, TLS / Tailscale / tunnels, exposure and safeguards, troubleshooting
+- **[docs/botport-deployment.md](docs/botport-deployment.md)** — Connecting Flight Decks through BotPort, step by step: the hub in tmux on a Raspberry Pi (or any Linux box), reaching it (Tailscale / tunnels / TLS), connecting decks, sharing agents (admins and users), the live dashboard and kiosk mode, safeguards, troubleshooting, upgrading
 - **[docs/glasses-hud.md](docs/glasses-hud.md)** — The Flight Deck HUD for Meta Ray-Ban Display smart glasses (`/hud`)
 - **[firmware/device/README.md](firmware/device/README.md)** — The M5Stack StickS3, StopWatch and PaperColor push-to-talk voice clients: setup, buttons, build and flash, over-the-air updates
 - **[release-notes/RELEASE_NOTES_0.8.1.md](release-notes/RELEASE_NOTES_0.8.1.md)** — Everything in 0.8.1 (the kiosk, the admin console, three devices), with the upgrade checklist and the new settings table
