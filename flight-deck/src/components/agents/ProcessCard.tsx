@@ -24,6 +24,7 @@ import { queueSave, registerHydrator } from '../../services/settingsSync'
 import { ShareModal } from '../common/ShareModal'
 import { SharedCountBadge } from './SharedCountBadge'
 import { NetworkBadge, useNetworkShare, type NetworkShareAction } from './NetworkShare'
+import { processShareKey } from '../../stores/networkShareStore'
 import { useSharedAgentStore } from '../../stores/sharedAgentStore'
 import { isManagedAgent } from '../../utils/managedAgents'
 import { ownerShareNote } from '../../utils/sharedAgent'
@@ -180,7 +181,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
   const isRunning = proc.status === 'running'
   const agentName = proc.name || proc.slug
   // On this deck's BotPort network (its owner may share it; see NetworkShare).
-  const network = useNetworkShare(proc.slug, agentName)
+  const network = useNetworkShare(processShareKey(proc.slug), agentName)
   const chatId = `proc-${proc.slug}`
 
   const memory = useAgentMemoryTransfer({
@@ -428,7 +429,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
                     <Pencil className="h-2.5 w-2.5" />
                   </button>
                   <SharedCountBadge agentRef={proc.agent_ref} />
-                  <NetworkBadge agentKey={proc.slug} />
+                  <NetworkBadge shareKey={processShareKey(proc.slug)} />
                 </>
               )}
             </div>
@@ -573,7 +574,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
                       <Pencil className="h-3 w-3" />
                     </button>
                     <SharedCountBadge agentRef={proc.agent_ref} />
-                    <NetworkBadge agentKey={proc.slug} />
+                    <NetworkBadge shareKey={processShareKey(proc.slug)} />
                   </>
                 )}
               </div>

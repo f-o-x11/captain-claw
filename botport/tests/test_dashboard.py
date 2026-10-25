@@ -55,13 +55,18 @@ async def test_overview_and_live_events_carry_the_route(make_hub):
 
         await b.send({"type": "result", "concern_id": cid, "ok": True, "response": "X is 42"})
         done = (await _events(dash, "concern_result", cid))[-1]
-        assert done["status"] == "closed" and done["from"] == "deck:vps1"
+        assert done["status"] == "closed" and done["from"] == "deck:vps1" and done["answered"] is True
 
     async with hub.session.get(hub.url("/api/overview")) as r:
         ov = await r.json()
     assert not ov["active"] and ov["recent"][0]["id"] == cid
     assert ov["recent"][0]["end_reason"] == "completed"
+    # The store's list carries no message bodies; the counts come from one query.
+    assert ov["recent"][0]["answered"] is True and ov["recent"][0]["messages"] >= 2
     assert cid not in hub.server.live_progress, "progress bookkeeping is dropped with the concern"
+    hub.server.live_progress["gone"] = {"text": "stale"}
+    await hub.server.maintenance_tick()
+    assert "gone" not in hub.server.live_progress, "maintenance sweeps what no running concern owns"
 
 
 async def test_a_failure_keeps_its_reason_for_the_dashboard(make_hub):

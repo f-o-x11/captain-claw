@@ -24,6 +24,7 @@ import { queueSave, registerHydrator } from '../../services/settingsSync'
 import { ShareModal } from '../common/ShareModal'
 import { SharedCountBadge } from './SharedCountBadge'
 import { NetworkBadge, useNetworkShare, type NetworkShareAction } from './NetworkShare'
+import { dockerShareKey } from '../../stores/networkShareStore'
 import { useSharedAgentStore } from '../../stores/sharedAgentStore'
 import { dockerSlug, isManagedAgent } from '../../utils/managedAgents'
 import { ownerShareNote } from '../../utils/sharedAgent'
@@ -174,7 +175,7 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
   const isRunning = container.status === 'running'
   const agentName = container.agent_name || container.name
   // On this deck's BotPort network (its owner may share it; see NetworkShare).
-  const network = useNetworkShare(agentName, agentName)
+  const network = useNetworkShare(dockerShareKey(agentName), agentName)
   const [showShare, setShowShare] = useState(false)
   // Sharing: only on decks that share agents, never a Flight Deck–managed
   // worker, and only once the agent has a stable ref (it has an access token).
@@ -447,7 +448,7 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
                     <Pencil className="h-2.5 w-2.5" />
                   </button>
                   <SharedCountBadge agentRef={container.agent_ref} />
-                  <NetworkBadge agentKey={agentName} />
+                  <NetworkBadge shareKey={dockerShareKey(agentName)} />
                 </>
               )}
             </div>
@@ -644,7 +645,7 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
                       <Pencil className="h-3 w-3" />
                     </button>
                     <SharedCountBadge agentRef={container.agent_ref} />
-                    <NetworkBadge agentKey={agentName} />
+                    <NetworkBadge shareKey={dockerShareKey(agentName)} />
                   </>
                 )}
               </div>

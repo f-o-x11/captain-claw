@@ -271,13 +271,15 @@ network, side by side:
 | **Tools remote requests may not use** | `shell, scripts, write, edit` | On top of the tools a remote request never gets (see [Safeguards](#what-a-remote-request-can-and-cannot-do)). |
 
 Each agent shared by its owner shows **shared by owner** in that list, with a
-**Stop** button to take it off the network.
+**Stop** button to take it off the network. (An admin offers other people's
+agents through this list; only an agent's owner shares it from its card.)
 
 **Users** — on their own agent's card: the actions menu (the small gear) →
 **Share on network…**, confirm. The card shows a **network** badge while the
 agent is on the network; **Stop sharing on network** takes it off. A share
 belongs to the agent's owner: if the agent changes hands it lapses until the
-new owner shares it, and removing the agent removes its share.
+new owner shares it, and removing the agent (or replacing it with a clone or
+a new container of the same name) removes its share.
 
 An agent must be **running** to take requests (other decks see a stopped one
 struck through). Every Save in the settings briefly reconnects the link, so
@@ -454,9 +456,10 @@ and `/api/overview` (what the dashboard draws), both with
 
 | Message | Fix |
 |---|---|
-| `Your Flight Deck's admin has turned off sharing by users` | The admin switched off *Let users share their own agents*. |
+| `Sharing by users is turned off on this Flight Deck` | The admin switched off *Let users share their own agents*; the admin's *Exposed agents* list still works. |
 | `This Flight Deck is not connected to a BotPort network` | Connect the deck first (step 6). |
-| `Only the agent's owner (or an admin) can share it on the network` | Ask its owner or an admin. |
+| `Only the agent's owner can share it on the network` | Ask its owner — or, as admin, tick it under *Exposed agents*. |
+| `Only the agent's owner (or an admin) can stop sharing it` | Ask its owner or an admin. |
 
 **The hub**:
 

@@ -220,6 +220,24 @@ class BotPortStore:
 
         return _row_to_concern(row, messages)
 
+    async def message_counts(self, concern_ids: list[str]) -> dict[str, dict[str, int]]:
+        """``{concern_id: {direction: count}}`` for these concerns, in one query
+        (``list_concerns`` does not load messages)."""
+        ids = list(dict.fromkeys(concern_ids))[:500]
+        if not ids:
+            return {}
+        db = await self._ensure_db()
+        out: dict[str, dict[str, int]] = {}
+        placeholders = ",".join("?" * len(ids))
+        async with db.execute(
+            f"SELECT concern_id, direction, COUNT(*) AS n FROM concern_messages "
+            f"WHERE concern_id IN ({placeholders}) GROUP BY concern_id, direction",
+            tuple(ids),
+        ) as cursor:
+            async for row in cursor:
+                out.setdefault(row["concern_id"], {})[row["direction"]] = int(row["n"])
+        return out
+
     async def list_concerns(
         self,
         status: str | None = None,

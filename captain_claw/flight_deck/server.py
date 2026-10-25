@@ -3100,7 +3100,7 @@ async def remove_container(container_id: str, force: bool = False, purge: bool =
     await asyncio.get_event_loop().run_in_executor(None, lambda: c.remove(force=force))
     await _set_owner_agent_instructions(owner_id, "docker", short_id, "")
     await _forget_shared_agent(agent_ref, owner_id)
-    await botport_forget_share(_slug((c.labels or {}).get("flight-deck.agent-name", name)))
+    await botport_forget_share("docker", _slug((c.labels or {}).get("flight-deck.agent-name", name)), owner_id)
     if purge:
         problem = await _purge_agent(name, short_id)
         if problem:
@@ -3181,6 +3181,8 @@ async def _remove_replaced_container(existing) -> None:
     owner_id = str((existing.labels or {}).get(OWNER_LABEL, "") or "")
     existing.remove()
     await _forget_shared_agent(agent_ref, owner_id)
+    await botport_forget_share(
+        "docker", _slug((existing.labels or {}).get("flight-deck.agent-name", existing.name)), owner_id)
 
 
 async def _forget_shared_agent(agent_ref: str, owner_id: str) -> None:
@@ -4856,7 +4858,9 @@ _AGENT_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _norm_agent_host(host: str) -> str:
-    return str(host or "").strip().strip("[]").rstrip(".").lower()
+    # No trailing-dot folding: "localhost." is a DNS name the connection would
+    # resolve, not loopback.
+    return str(host or "").strip().strip("[]").lower()
 
 
 def _container_hosts(c) -> set[str]:
@@ -8765,7 +8769,7 @@ async def remove_process(slug: str, force: bool = False, purge: bool = False, re
     # …and its instructions, so a later agent of the same name doesn't inherit them.
     await _set_owner_agent_instructions(owner_id, "process", slug, "")
     await _forget_shared_agent(agent_ref, owner_id)
-    await botport_forget_share(slug)
+    await botport_forget_share("process", slug, owner_id)
     if purge:
         problem = await _purge_agent(slug, f"proc-{slug}")
         if problem:
@@ -8955,6 +8959,7 @@ async def clone_process(slug: str, req: CloneRequest, request: Request, user: di
     if replaced is not None:  # the clone is a new agent: the replaced one's shares go
         await _forget_shared_agent(agent_sharing.process_ref(new_slug, replaced),
                                    str(replaced.get("owner") or ""))
+        await botport_forget_share("process", new_slug, str(replaced.get("owner") or ""))
     # Its owner's profile, not whatever an earlier agent of this slug left.
     await tenant_profile.write_on_spawn(new_agent_dir, str(entry.get("owner") or ""), "process")
     # …and no shared context (packs): a clone is a new agent.

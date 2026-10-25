@@ -46,7 +46,7 @@ log = get_logger(__name__)
 SETTING_KEY = "fd:botport-link"
 DECK_ID_KEY = "fd:botport-deck-id"
 # Agents their owners shared on the network themselves:
-# {"agents": {key: {"owner": user_id, "by": user_id, "at": iso}}}, key = slug (or name), lower case.
+# {"agents": {share_key: {"owner": user_id, "by": user_id, "at": iso}}} (see share_key).
 SHARES_KEY = "fd:botport-shares"
 PROTOCOL = 2
 _MAX_FRAME = 16 * 1024 * 1024
@@ -221,6 +221,13 @@ def agent_key(agent: dict[str, Any]) -> str:
     return str(agent.get("slug") or agent.get("name") or "").strip().lower()
 
 
+def share_key(agent: dict[str, Any]) -> str:
+    """An owner's share names the agent by kind, slug and owner: a docker and
+    a process agent of one name stay apart, and a share lapses by itself when
+    the agent changes hands (its key no longer matches)."""
+    return f"{str(agent.get('kind') or '').lower()}:{agent_key(agent)}|{agent.get('owner') or ''}"
+
+
 def parse_shares(raw: str | None) -> dict[str, dict[str, str]]:
     """The stored user shares (``SHARES_KEY``); anything malformed is dropped."""
     try:
@@ -231,7 +238,7 @@ def parse_shares(raw: str | None) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     for key, rec in (agents or {}).items() if isinstance(agents, dict) else ():
         if isinstance(key, str) and key.strip() and isinstance(rec, dict):
-            out[key.strip().lower()[:128]] = {k: str(rec.get(k) or "")[:128] for k in ("owner", "by", "at")}
+            out[key.strip()[:300]] = {k: str(rec.get(k) or "")[:128] for k in ("owner", "by", "at")}
     return out
 
 
@@ -495,7 +502,7 @@ class BotPortLink:
                 "owner": str(a.get("owner") or ""),
                 "exposed": key in exposed,
                 "by_admin": not managed and self._admin_lists(a, multi_user),
-                "by_owner": key in self.user_shares and self._owner_shared(a, multi_user),
+                "by_owner": self._owner_shared(a, multi_user),
                 "shareable": not managed,
             })
         return out
@@ -517,12 +524,11 @@ class BotPortLink:
         return "*" in want and not (multi_user and not a.get("owner"))
 
     def _owner_shared(self, a: dict[str, Any], multi_user: bool) -> bool:
-        """Did this agent's current owner share it? (A share made by an earlier
-        owner lapses when the agent changes hands.)"""
-        rec = self.user_shares.get(agent_key(a))
-        if rec is None:
+        """Did this agent's current owner share it? (The key carries the owner,
+        so a share made by an earlier owner no longer matches.)"""
+        if share_key(a) not in self.user_shares:
             return False
-        return not multi_user or (bool(a.get("owner")) and rec.get("owner") == a.get("owner"))
+        return not multi_user or bool(a.get("owner"))
 
     def _note(self, direction: str, peer: str, agent: str, ok: bool | None, detail: str = "") -> None:
         self._recent.append({

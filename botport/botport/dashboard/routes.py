@@ -27,9 +27,16 @@ _STATIC_FILES = {
 }
 
 
-def _concern_view(c: Concern, live: dict[str, Any] | None = None) -> dict[str, Any]:
-    """A concern without its message bodies — what lists and the map need."""
+def _concern_view(c: Concern, live: dict[str, Any] | None = None,
+                  counts: dict[str, int] | None = None) -> dict[str, Any]:
+    """A concern without its message bodies — what lists and the map need.
+    ``counts`` (messages by direction) stands in for messages the store did
+    not load."""
     meta = c.metadata or {}
+    if counts is None:
+        counts = {}
+        for m in c.messages:
+            counts[m.direction] = counts.get(m.direction, 0) + 1
     return {
         "id": c.id,
         "status": c.status,
@@ -45,7 +52,8 @@ def _concern_view(c: Concern, live: dict[str, Any] | None = None) -> dict[str, A
         "expertise_tags": list(c.expertise_tags)[:8],
         "created_at": c.created_at,
         "updated_at": c.updated_at,
-        "messages": len(c.messages),
+        "messages": sum(counts.values()),
+        "answered": counts.get("response", 0) > 0,
         "persona_name": meta.get("persona_name", ""),
         "error": str(meta.get("error") or meta.get("fail_reason") or "")[:500],
         "end_reason": str(meta.get("close_reason") or meta.get("timeout_reason") or "")[:80],
@@ -132,13 +140,14 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
         active = server.concerns.get_active_concerns()
         active_ids = {c.id for c in active}
         recent = [c for c in await server.store.list_concerns(limit=limit) if c.id not in active_ids]
+        counts = await server.store.message_counts([c.id for c in recent])
         return web.json_response({
             "now": datetime.now(timezone.utc).isoformat(),
             "hub": server.status_snapshot(),
             "stats": await server.concerns.get_stats(),
             "instances": [_instance_view(i) for i in server.connections.list_instances()],
             "active": [_concern_view(c, server.live_progress.get(c.id)) for c in active],
-            "recent": [_concern_view(c) for c in recent],
+            "recent": [_concern_view(c, counts=counts.get(c.id, {})) for c in recent],
         })
 
     async def dashboard_ws(request: web.Request) -> web.StreamResponse:

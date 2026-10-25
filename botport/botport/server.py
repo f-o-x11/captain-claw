@@ -1268,7 +1268,8 @@ class BotPortServer:
             "from": concern.from_instance, "from_name": concern.from_instance_name,
             "from_agent": concern.from_agent, "to": concern.assigned_instance or "",
             "to_name": concern.assigned_instance_name, "target_agent": concern.target_agent,
-            "mode": concern.mode, **extra,
+            "mode": concern.mode, "answered": any(m.direction == "response" for m in concern.messages),
+            **extra,
         }
 
     def _dashboard_event(self, event: dict[str, Any]) -> None:
@@ -1303,6 +1304,8 @@ class BotPortServer:
             self._last_progress.pop(cid, None)
         for cid in [c for c in self._pending_progress if c not in live]:
             self._pending_progress.pop(cid, None)
+        for cid in [c for c in self.live_progress if c not in live]:
+            self.live_progress.pop(cid, None)
 
     def status_snapshot(self) -> dict[str, Any]:
         decks = self.connections.list_decks(connected_only=False)

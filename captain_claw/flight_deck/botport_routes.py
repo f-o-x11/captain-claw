@@ -157,20 +157,29 @@ async def botport_local_agents(_admin: dict = Depends(link_admin)):
 # ── Sharing one's own agents ─────────────────────────────────────
 
 
+def _mine(agent: dict[str, Any], user: dict) -> bool:
+    """With sign-in off every agent is the (only) user's."""
+    return not _fd_auth_enabled() or (bool(agent["owner"]) and agent["owner"] == str(user.get("id") or ""))
+
+
 async def _shares_view(user: dict) -> dict[str, Any]:
     link = bl.get_link()
     s = link.settings
     admin = user.get("role") == "admin"
-    # Admins see every agent here (they may revoke anyone's share); others their own.
+    # Admins see every agent here (they may stop anyone's share); others their own.
     agents = await link.local_agents(owner=None if admin else str(user.get("id") or ""))
     return {
         "enabled": bool(s.enabled),
         "state": link.state,
         "deck_name": s.deck_name,
         "user_sharing": bool(s.user_sharing),
-        "can_share": bool(s.enabled) and (bool(s.user_sharing) or admin),
+        # Sharing one's own agents is on here (an admin offers others' agents
+        # through the Exposed agents list instead).
+        "can_share": bool(s.enabled) and bool(s.user_sharing),
+        "admin": admin,
         "agents": [
-            {k: a[k] for k in ("name", "slug", "kind", "status", "exposed", "by_admin", "by_owner", "shareable")}
+            {**{k: a[k] for k in ("name", "slug", "kind", "status", "exposed", "by_admin", "by_owner", "shareable")},
+             "mine": _mine(a, user)}
             for a in agents
         ],
     }
@@ -182,35 +191,50 @@ async def botport_my_shares(user: dict = Depends(get_current_user)):
     return await _shares_view(user)
 
 
+_EXPOSE_HINT = " — an admin offers an agent to the network under Admin console → BotPort → Exposed agents"
+
+
 @router.put("/shares/{slug}")
-async def botport_set_share(slug: str, body: ShareUpdate, request: Request,
+async def botport_set_share(slug: str, body: ShareUpdate, request: Request, kind: str = "",
                             user: dict = Depends(get_current_user)):
-    """Share one of your agents on the network, or stop sharing it. An admin
-    may do this for any agent (to revoke an owner's share, too)."""
+    """Share one of your agents on the network, or stop sharing it. Only its
+    owner shares it; its owner or an admin stops a share. ``slug`` is the
+    agent's slug (a name is accepted when no slug matches); ``kind``
+    (docker / process) tells two agents of one name apart."""
     _require_local_when_open(request)
     link = bl.get_link()
     admin = user.get("role") == "admin"
-    agents = await link.local_agents()
+    uid = str(user.get("id") or "")
     want = slug.strip().lower()
-    agent = next((a for a in agents if bl.agent_key(a) == want or a["name"].strip().lower() == want), None)
-    if agent is None:
+    kind = kind.strip().lower()
+    agents = [a for a in await link.local_agents() if not kind or str(a["kind"]).lower() == kind]
+    found = ([a for a in agents if bl.agent_key(a) == want]
+             or [a for a in agents if str(a["name"]).strip().lower() == want])
+    if not found:
         raise HTTPException(404, f"No agent '{slug}' on this Flight Deck")
-    if not admin and (not _fd_auth_enabled() or agent["owner"] != str(user.get("id") or "")):
-        raise HTTPException(403, "Only the agent's owner (or an admin) can share it on the network")
-    if not agent["shareable"]:
-        raise HTTPException(400, f"'{agent['name']}' is one of Flight Deck's own workers; it cannot be shared")
-    if body.shared and not link.settings.enabled:
-        raise HTTPException(409, "This Flight Deck is not connected to a BotPort network")
-    if body.shared and not link.settings.user_sharing and not admin:
-        raise HTTPException(403, "Your Flight Deck's admin has turned off sharing by users")
+    agent = next((a for a in found if a["owner"] and a["owner"] == uid), found[0])
+    mine = _mine(agent, user)
+    if body.shared:
+        if not mine:
+            raise HTTPException(403, "Only the agent's owner can share it on the network"
+                                + (_EXPOSE_HINT if admin else ""))
+        if not agent["shareable"]:
+            raise HTTPException(400, f"'{agent['name']}' is one of Flight Deck's own workers; it cannot be shared")
+        if not link.settings.enabled:
+            raise HTTPException(409, "This Flight Deck is not connected to a BotPort network")
+        if not link.settings.user_sharing:
+            raise HTTPException(403, "Sharing by users is turned off on this Flight Deck"
+                                + (_EXPOSE_HINT if admin else ""))
+    elif not (mine or admin):
+        raise HTTPException(403, "Only the agent's owner (or an admin) can stop sharing it")
 
-    key = bl.agent_key(agent)
+    key = bl.share_key(agent)
     async with _shares_lock:
         db = get_db()
         shares = bl.parse_shares(await db.get_system_setting(bl.SHARES_KEY))
         if body.shared:
             shares[key] = {
-                "owner": agent["owner"], "by": str(user.get("id") or ""),
+                "owner": agent["owner"], "by": uid,
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
         else:
@@ -220,12 +244,13 @@ async def botport_set_share(slug: str, body: ShareUpdate, request: Request,
     return await _shares_view(user)
 
 
-async def forget_share(key: str) -> None:
-    """An agent was removed: drop its owner's share, so a later agent of the
-    same name is not on the network until someone shares it. Best-effort."""
-    key = (key or "").strip().lower()
-    if not key:
+async def forget_share(kind: str, slug: str, owner: str) -> None:
+    """An agent was removed or replaced: drop its owner's share, so a later
+    agent of the same name is not on the network until someone shares it.
+    Only that agent's share (kind, slug, owner) goes. Best-effort."""
+    if not (slug or "").strip():
         return
+    key = bl.share_key({"kind": kind, "slug": slug, "owner": owner})
     try:
         async with _shares_lock:
             db = get_db()

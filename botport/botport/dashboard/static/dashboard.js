@@ -149,8 +149,13 @@ function timeAgo(iso) {
 
   function status(c) {
     const st = STATUS[c.status] || { label: c.status || "?", tone: "idle" };
-    if (c.status === "closed" && c.end_reason && c.end_reason !== "completed") return { label: "Ended", tone: "idle" };
+    if (c.status === "closed" && ended(c.end_reason, c.answered)) return { label: "Ended", tone: "idle" };
     return st;
+  }
+
+  // Closed without an answer (the asker gave up, or went away): not "Done".
+  function ended(reason, answered) {
+    return !!reason && reason !== "completed" && !answered;
   }
 
   function isLive(c) {
@@ -406,11 +411,11 @@ function timeAgo(iso) {
     S.byId = new Map(ov.instances.map((i) => [i.id, i]));
     el.signout.hidden = !(window.BotPortAuth && BotPortAuth.has());
     el.version.textContent = "v" + ov.hub.version;
+    noticeChanges(prev, ov);
     if (S.route === "network") {
       renderKpis(ov);
       renderMap(ov);
       renderRail(ov);
-      noticeChanges(prev, ov);
     } else if (S.route === "requests") {
       renderRequests();
     }
@@ -438,7 +443,7 @@ function timeAgo(iso) {
       case "concern_result":
         if (!S.seenDone.has(ev.concern_id)) {
           S.seenDone.add(ev.concern_id);
-          const kind = resultKind(ev.status, ev.reason);
+          const kind = resultKind(ev.status, ev.reason, ev.answered);
           animateResult(ev, kind);
           addTick(kind, ev);
         }
@@ -458,10 +463,10 @@ function timeAgo(iso) {
     trimSets();
   }
 
-  function resultKind(st, reason) {
+  function resultKind(st, reason, answered) {
     if (st === "failed") return "fail";
     if (st === "timeout") return "warn";
-    if (st === "closed" && reason && reason !== "completed") return "ended";
+    if (st === "closed" && ended(reason, answered)) return "ended";
     return "answer";
   }
 
@@ -486,10 +491,11 @@ function timeAgo(iso) {
       const done = ov.recent.find((x) => x.id === c.id);
       if (!done) continue;
       S.seenDone.add(c.id);
-      const kind = resultKind(done.status, done.end_reason);
+      const kind = resultKind(done.status, done.end_reason, done.answered);
       animateResult(done, kind);
       addTick(kind, done);
     }
+    trimSets();
   }
 
   function trimSets() {
@@ -511,7 +517,7 @@ function timeAgo(iso) {
       n.textContent = text;
     });
     if (S.drawer && S.drawer.kind === "concern" && S.drawer.id === cid) {
-      const d = $(".d-live span", el.drawer);
+      const d = $(".d-live-text", el.drawer);
       if (d) d.textContent = text;
     }
   }
@@ -550,7 +556,7 @@ function timeAgo(iso) {
 
   function seedTicks(ov) {
     for (const c of ov.active.slice().sort((a, b) => ms(b.created_at) - ms(a.created_at))) addTick("request", c, true);
-    for (const c of ov.recent.slice(0, 12)) addTick(resultKind(c.status, c.end_reason), c, true);
+    for (const c of ov.recent.slice(0, 12)) addTick(resultKind(c.status, c.end_reason, c.answered), c, true);
   }
 
   /* ---- KPIs ---- */
@@ -565,7 +571,7 @@ function timeAgo(iso) {
     const by = st.by_status || {};
     const failed = (by.failed || 0) + (by.timeout || 0);
     const answers = ov.recent
-      .filter((c) => c.status === "closed" && (!c.end_reason || c.end_reason === "completed"))
+      .filter((c) => c.status === "closed" && !ended(c.end_reason, c.answered))
       .map((c) => ms(c.updated_at) - ms(c.created_at))
       .filter((v) => v >= 0)
       .sort((a, b) => a - b);
@@ -968,7 +974,7 @@ function timeAgo(iso) {
     return `<div class="row" role="button" tabindex="0" data-cid="${esc(c.id)}" title="${esc(st.label)}">
       <span class="sicon t-${st.tone}">${RESULT_ICON[st.tone] || ICON.dash}</span>
       <span class="row-main">${routeHTML(c)}<span class="row-task" style="display:block">${esc(c.task)}</span></span>
-      <span class="row-meta"><span class="mono">${fmtDur(took(c))}</span><span>${esc(timeAgo(c.updated_at))}</span></span>
+      <span class="row-meta"><span class="mono"${isLive(c) ? ` data-since="${esc(c.created_at)}"` : ""}>${fmtDur(took(c))}</span><span data-ago="${esc(c.updated_at)}">${esc(timeAgo(c.updated_at))}</span></span>
     </div>`;
   }
 
@@ -1037,7 +1043,7 @@ function timeAgo(iso) {
       ${routeHTML(c)}
       <span class="task" title="${esc(c.task)}">${esc(c.task)}</span>
       <span class="mode">${esc(c.mode === "delegate" ? "delegated" : "consult")}</span>
-      <span class="when" title="${esc(dateTime(c.created_at))}">${esc(timeAgo(c.created_at))}</span>
+      <span class="when" title="${esc(dateTime(c.created_at))}" data-ago="${esc(c.created_at)}">${esc(timeAgo(c.created_at))}</span>
       <span class="num"${live ? ` data-since="${esc(c.created_at)}"` : ""}>${fmtDur(took(c))}</span>
     </div>`;
   }
@@ -1111,6 +1117,13 @@ function timeAgo(iso) {
       return;
     }
     S.drawer.data = c;
+    // Rebuild only when what it shows changed: focus and selection survive refreshes.
+    const sig = JSON.stringify({ ...c, live: null, updated_at: null });
+    if (S.drawer.sig === sig) {
+      if (c.live && c.live.text) updateLiveText(c.id, c.live.text);
+      return;
+    }
+    S.drawer.sig = sig;
     renderConcernDrawer(c);
   }
 
@@ -1129,7 +1142,7 @@ function timeAgo(iso) {
 
     let html = `<div class="d-hero"><span class="pill t-${st.tone}">${esc(st.label)}</span><span>${c.mode === "delegate" ? "Delegated task" : "Consultation"}</span>
       <span class="stat">${live ? "Running for" : "Took"}<span class="mono"${live ? ` data-since="${esc(c.created_at)}"` : ""}>${fmtDur(elapsed)}</span></span></div>`;
-    if (live) html += `<div class="d-live"><span class="spinner"></span><span>${esc(liveText)}</span></div>`;
+    if (live) html += `<div class="d-live"><span class="spinner"></span><span class="d-live-text">${esc(liveText)}</span></div>`;
     if ((c.status === "failed" || c.status === "timeout") && err) {
       html += `<div class="d-error"><b>What went wrong</b><span>${esc(err)}</span></div>`;
     }
@@ -1142,7 +1155,7 @@ function timeAgo(iso) {
       </div>`;
     html += `<dl class="facts">
         <div class="fact"><dt>Started</dt><dd><span>${esc(dateTime(c.created_at))}</span></dd></div>
-        <div class="fact"><dt>Last update</dt><dd><span>${esc(timeAgo(c.updated_at))}</span></dd></div>
+        <div class="fact"><dt>Last update</dt><dd><span data-ago="${esc(c.updated_at)}">${esc(timeAgo(c.updated_at))}</span></dd></div>
         ${meta.persona_name ? `<div class="fact"><dt>Persona</dt><dd><span>${esc(meta.persona_name)}</span></dd></div>` : ""}
         ${tags.length ? `<div class="fact"><dt>Expertise</dt><dd><span>${esc(tags.join(", "))}</span></dd></div>` : ""}
         <div class="fact wide"><dt>Request ID</dt><dd><span class="mono" data-copy-src>${esc(c.id)}</span><button class="copy" type="button" data-copy="${esc(c.id)}">Copy</button></dd></div>
@@ -1178,6 +1191,10 @@ function timeAgo(iso) {
   function renderDeckDrawer() {
     const id = S.drawer.id;
     const inst = S.byId.get(id);
+    const traffic = S.ov ? S.ov.active.concat(S.ov.recent).filter((c) => c.from === id || c.to === id) : [];
+    const sig = JSON.stringify([inst || null, traffic.map((c) => [c.id, c.status, c.updated_at])]);
+    if (S.drawer.sig === sig) return;
+    S.drawer.sig = sig;
     if (!inst) {
       setDrawer("Flight Deck", deckOf(id) || shortId(id), emptyHTML(ICON.radar, "Not connected", "The hub no longer knows this connection."));
       return;
@@ -1199,7 +1216,7 @@ function timeAgo(iso) {
       <span class="stat">Busy<span class="mono">${act} of ${max}</span></span></div>`;
     html += `<dl class="facts">
         <div class="fact"><dt>${on ? "Connected" : "Went offline"}</dt><dd><span>${esc(dateTime(on ? inst.connected_at : inst.disconnected_at))}</span></dd></div>
-        <div class="fact"><dt>Last heartbeat</dt><dd><span>${esc(timeAgo(inst.last_heartbeat) || "—")}</span></dd></div>
+        <div class="fact"><dt>Last heartbeat</dt><dd><span data-ago="${esc(inst.last_heartbeat)}">${esc(timeAgo(inst.last_heartbeat) || "—")}</span></dd></div>
         <div class="fact"><dt>Address</dt><dd><span class="mono">${esc(inst.remote_addr || "—")}</span></dd></div>
         <div class="fact"><dt>Protocol</dt><dd><span>${esc(String(inst.protocol || 1))}</span></dd></div>
         <div class="fact"><dt>Asked others</dt><dd><span>${asked} recently</span></dd></div>
@@ -1291,6 +1308,10 @@ function timeAgo(iso) {
     }
     document.querySelectorAll("[data-since]").forEach((n) => {
       n.textContent = fmtDur(now() - ms(n.dataset.since));
+    });
+    document.querySelectorAll("[data-ago]").forEach((n) => {
+      const t = timeAgo(n.dataset.ago);
+      if (t && n.textContent !== t) n.textContent = t;
     });
   }
 

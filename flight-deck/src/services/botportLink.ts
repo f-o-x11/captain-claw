@@ -190,7 +190,10 @@ export const getBotportAgents = () => fdFetch<{ agents: BotportLocalAgent[] }>('
 // ── Sharing one's own agents (every user) ──
 
 export type BotportShareAgent = Pick<BotportLocalAgent,
-  'name' | 'slug' | 'kind' | 'status' | 'exposed' | 'by_admin' | 'by_owner' | 'shareable'>
+  'name' | 'slug' | 'kind' | 'status' | 'exposed' | 'by_admin' | 'by_owner' | 'shareable'> & {
+  // Yours: only its owner shares an agent (an admin may still stop a share).
+  mine: boolean
+}
 
 /** Your agents (an admin: every agent) and whether each is on the network. */
 export interface BotportShares {
@@ -199,16 +202,18 @@ export interface BotportShares {
   deck_name: string
   // The admin lets users share their own agents.
   user_sharing: boolean
-  // You may share here now: the link is on and sharing is allowed (or you are the admin).
+  // You may share your own agents here now: the link is on and sharing by users is allowed.
   can_share: boolean
+  admin: boolean
   agents: BotportShareAgent[]
 }
 
 export const getBotportShares = () => fdFetch<BotportShares>('/fd/botport/shares')
 
-/** Share one of your agents on the network, or stop (an admin: any agent). */
-export const setBotportShare = (slug: string, shared: boolean) =>
-  fdFetch<BotportShares>(`/fd/botport/shares/${encodeURIComponent(slug)}`, {
+/** Share one of your agents on the network, or stop (an admin may stop any
+ *  share). `kind` (docker / process) tells two agents of one name apart. */
+export const setBotportShare = (slug: string, shared: boolean, kind = '') =>
+  fdFetch<BotportShares>(`/fd/botport/shares/${encodeURIComponent(slug)}${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`, {
     method: 'PUT', body: JSON.stringify({ shared }),
   })
 

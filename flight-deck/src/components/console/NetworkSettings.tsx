@@ -4,6 +4,7 @@ import {
   getBotportConfig, saveBotportConfig, getBotportAgents, probeBotport, botportEnvVar, setBotportShare,
   type BotportConfig, type BotportConfigPatch, type BotportLocalAgent, type BotportProbe,
 } from '../../services/botportLink'
+import { useNetworkShareStore } from '../../stores/networkShareStore'
 import { Switch } from '../admin/Switch'
 import { Card, SettingRow, Segmented, Notice, Button, Field, Pill, Dot, inputCls } from './parts'
 
@@ -54,6 +55,8 @@ export function NetworkSettings({ onSaved }: { onSaved: () => void }) {
     const next = await saveBotportConfig(patch)
     setConfig(next)
     onSaved()
+    // Agent cards show what is on the network: let them catch up.
+    void useNetworkShareStore.getState().fetch(true)
     // Which agents count as exposed follows the saved list (and users' shares).
     if (patch.expose || patch.user_sharing !== undefined) loadAgents()
     return next
@@ -402,8 +405,9 @@ function ExposeCard({ config, agents, save, reloadAgents }: {
     setRevoking(a.slug || a.name)
     setRevokeError('')
     try {
-      await setBotportShare(a.slug || a.name, false)
+      await setBotportShare(a.slug || a.name, false, a.kind)
       reloadAgents()
+      void useNetworkShareStore.getState().fetch(true)
     } catch (e) {
       setRevokeError(errText(e))
     } finally {

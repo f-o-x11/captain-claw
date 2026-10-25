@@ -171,9 +171,11 @@ async def test_loopback_still_carries_the_resolved_token(deck, upstream, method,
 
 
 def test_loopback_spellings_and_internal_callers(deck):
-    for host in ("localhost", "LOCALHOST", "localhost.", "127.0.0.1", "::1", "[::1]"):
+    for host in ("localhost", "LOCALHOST", "127.0.0.1", "::1", "[::1]"):
         assert server._resolve_agent_auth(ALICE_PORT, host=host) == "tok-alice", host
-    for host in ("evil.example", "", "0.0.0.0", "127.0.0.2", "localhost:1@evil.example", "box"):
+    # "localhost." and "127.0.0.1." are DNS names the request would resolve.
+    for host in ("evil.example", "", "0.0.0.0", "127.0.0.2", "localhost:1@evil.example", "box",
+                 "localhost.", "127.0.0.1."):
         assert server._resolve_agent_auth(ALICE_PORT, host=host) == "", host
     # Internal callers (botport_link, flows, bridges) pass no host: unchanged.
     assert server._resolve_agent_auth(ALICE_PORT) == "tok-alice"
@@ -362,3 +364,24 @@ async def test_a_glasses_channel_bound_elsewhere_gets_no_token(deck):
     assert await _resolve_channel_agent_auth(ch) == "tok-alice"
     ch.bound_host = None  # never bound by host: the agent's own (loopback) address
     assert await _resolve_channel_agent_auth(ch) == "tok-alice"
+
+
+async def test_a_run_callback_goes_with_a_token_only_to_the_agents_own_address(deck, monkeypatch):
+    """A background run reports back to the agent that started it. Its source
+    host comes from the request body: the token only goes to loopback."""
+    import websockets
+
+    from captain_claw.flight_deck.agent_notify import notify_source_agent
+
+    dialed: list[str] = []
+
+    def fake_connect(url, **kw):
+        dialed.append(url)
+        raise OSError("not dialing out in tests")
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+    for host in ("evil.example", "localhost"):
+        await notify_source_agent(source_host=host, source_port=ALICE_PORT, origin={}, kind="Basna",
+                                  title="t", run_ref="r", ok=True, summary="s")
+    assert dialed[0] == f"ws://evil.example:{ALICE_PORT}/ws"
+    assert dialed[1] == f"ws://localhost:{ALICE_PORT}/ws?token=tok-alice"
