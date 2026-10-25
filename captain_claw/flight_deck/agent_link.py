@@ -27,6 +27,8 @@ System → Flight Deck
   text  {"type":"stop"}                          stop the running message (the agent stops after its
                                                  current step); the queued ones carry on
   text  {"type":"ping","t":…}                    → {"type":"pong","t":…}
+  text  {"type":"ack","re":"…"}                 got that message's answer: it isn't sent again
+                                                 after a reconnect
 
 Flight Deck → system
   text  {"type":"bound","agent":name,"slug":slug,"linked":bool}
@@ -54,11 +56,13 @@ Flight Deck → system
   text  {"type":"delta_reset","re":…}            what came before a tool call wasn't the answer
 
 A turn's answer that lands while the socket is down comes on the reconnect
-(within 10 min), unless the system was heard from after it — so the same
-reply can arrive twice: tell them apart by ``re``.
+(within 10 min), unless the system was heard from after it or acked it — so
+the same reply can arrive twice: tell them apart by ``re``.
 
 A system that can't keep this socket open uses HTTP and a webhook instead
-(agent_link_http.py), with the same key.
+(agent_link_http.py), with the same key. One that won't take connections from
+agents gets the same conversation the other way round: Flight Deck connects
+out to it (an outbound link, agent_link_out.py).
 """
 
 from __future__ import annotations
@@ -74,7 +78,7 @@ import secrets
 import time
 from collections import OrderedDict, deque
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -229,7 +233,19 @@ def public_link(row: dict) -> dict:
         "connected": _channel_id(str(row.get("user_id", "")), row["id"]) in _live,
         "agent_may_send": bool(row.get("agent_may_send", 1)),
         "webhook_url": row.get("webhook_url", "") or "",
+        "direction": row.get("direction", "inbound") or "inbound",
+        "remote_url": row.get("remote_url", "") or "",
+        "outbound": _outbound_status(row),
     }
+
+
+def _outbound_status(row: dict) -> dict | None:
+    """How Flight Deck's own connection to an outbound link's system is doing."""
+    if row.get("direction") != "outbound":
+        return None
+    from captain_claw.flight_deck import agent_link_out
+
+    return agent_link_out.status(row["id"])
 
 
 def _channel_id(user_id: str, link_id: str) -> str:
@@ -551,6 +567,16 @@ class _LinkConn(BusClient):
     async def _resume_ready(self) -> bool:
         return True  # nothing on the system's side to wait for
 
+    def _turn_state(self, turn: dict, state: str) -> dict:
+        # (the worker may already be running the next message: name this one)
+        return {"type": "state", "state": state, "re": turn.get("re") or None}
+
+    def acked(self, re_id: str) -> None:
+        """The system says it got message *re_id*'s answer: no resending it."""
+        turn = self._kept_turn()
+        if turn and re_id and turn.get("re") == re_id and turn.get("answer"):
+            turn["heard"] = True
+
     # ── messages in ──
     async def submit(self, msg_id: str, text: str, files: list[dict] | None = None) -> None:
         """A message from the system: queued behind the running one (the
@@ -626,6 +652,13 @@ async def _wait_turn(channel_id: str, turn: dict) -> None:
             turn["ended"].set()
 
 
+def _unseen(channel_id: str, msg_id: str) -> None:
+    """A message that never reached the agent: the same id may be sent again."""
+    seen = _seen.get(channel_id)
+    if seen is not None:
+        seen.pop(msg_id, None)
+
+
 async def _conn_for(channel_id: str, link: dict, via: str) -> _LinkConn | None:
     """The connection a message runs on: the system's socket — for an HTTP
     message, the one connected now, else a socket-less one."""
@@ -683,16 +716,19 @@ async def _run_queue(channel_id: str) -> None:
             if (conn.ch is None or conn.on_bus not in conn.ch.callback_subscribers  # (a socket took over meanwhile)
                     or (link.get("agent_slug") and link["agent_slug"] != agent_now)):
                 if not await conn.bind(""):
+                    _unseen(channel_id, msg["id"])
                     await conn.send_json({"type": "state", "state": "ready"})
                     continue
             attached: dict = {}
             if msg["files"]:
                 attached, why = await conn.upload_files(msg["files"])
                 if why:
+                    _unseen(channel_id, msg["id"])
                     await conn.send_json({"type": "error", "text": why})
                     await conn.send_json({"type": "state", "state": "ready"})
                     continue
             if not await conn.send_to_agent(msg["text"], attached):
+                _unseen(channel_id, msg["id"])
                 continue  # the system was told why
             turn = _turns.get(channel_id)
             if turn is not None:
@@ -741,8 +777,20 @@ async def link_ws(ws: WebSocket) -> None:
         await ws.close(code=4401)
         return
     link, user = found
+    if link.get("direction") == "outbound":
+        await ws.close(code=4403)  # Flight Deck connects out to this system (agent_link_out.py)
+        return
     await ws.accept()
-    conn = _LinkConn(ws, user, link, stream=ws.query_params.get("stream", "") in ("1", "true", "on"))
+    await serve(_LinkConn(ws, user, link, stream=ws.query_params.get("stream", "") in ("1", "true", "on")))
+
+
+async def serve(conn: _LinkConn) -> Any:
+    """One socket's life on a link — the system's, into /link/ws, or the one
+    Flight Deck opened to it (agent_link_out.py; its ``ws`` reads like
+    Starlette's): it takes over the link's running turn, binds the agent, then
+    reads the system's frames until the socket closes. Returns the close code."""
+    ws = conn.ws
+    link = conn.link
     cid = conn.channel_id
     old = _live.get(cid)
     _live[cid] = conn  # one socket per link: a new one takes over
@@ -783,6 +831,8 @@ async def link_ws(ws: WebSocket) -> None:
                                           "text": why or "The message has no text, data or files."})
                     continue
                 await conn.submit(msg_id, text, files)
+            elif mtype == "ack":
+                conn.acked(message_id(obj.get("re")))
             elif mtype == "stop":
                 await conn.stop_agent()
             elif mtype == "ping":
@@ -802,6 +852,7 @@ async def link_ws(ws: WebSocket) -> None:
                  link["id"], link.get("name", ""), now - conn.opened_at, code,
                  now - conn.last_heard_at, ", mid-turn" if conn.pending else "")
         await conn.close()
+    return code
 
 
 # ── The owner's links: /fd/links ──────────────────────────────────────
@@ -813,6 +864,11 @@ class LinkBody(BaseModel):
     instructions: str | None = None
     agent_may_send: bool | None = None
     webhook_url: str | None = None
+    # An outbound link: Flight Deck connects out to remote_url with the key the
+    # system issued (remote_key; "" on a change keeps the one it has).
+    direction: Literal["inbound", "outbound"] | None = None
+    remote_url: str | None = None
+    remote_key: str | None = None
 
 
 async def _clean_fields(body: LinkBody, user_id: str) -> dict[str, str | int]:
@@ -843,6 +899,24 @@ async def _clean_fields(body: LinkBody, user_id: str) -> dict[str, str | int]:
             if problem:
                 raise HTTPException(400, f"Webhook: {problem}")
         fields["webhook_url"] = url
+    if body.direction is not None:
+        fields["direction"] = body.direction
+    if body.remote_url is not None:
+        url = body.remote_url.strip()[:500]
+        if url:
+            from captain_claw.flight_deck.agent_link_http import address_problem
+
+            problem = await address_problem(url, secure="wss", plain="ws")
+            if problem:
+                raise HTTPException(400, f"Address: {problem}")
+        fields["remote_url"] = url
+    if body.remote_key:
+        from captain_claw.flight_deck import fd_crypto
+
+        try:
+            fields["remote_key"] = fd_crypto.seal(body.remote_key.strip()[:4000])
+        except fd_crypto.CryptoUnavailable as exc:
+            raise HTTPException(503, f"The system's key can't be kept here: {exc}") from None
     return fields
 
 
@@ -871,14 +945,24 @@ async def create_link(body: LinkBody = Body(default=LinkBody()), user: dict = De
     from captain_claw.flight_deck.auth import get_db, hash_token
 
     fields = await _clean_fields(body, user["id"])
-    key = new_link_key()
-    secret, sealed = _sealed_webhook_secret() if fields.get("webhook_url") else ("", "")
+    outbound = fields.get("direction") == "outbound"
+    if outbound and not (fields.get("remote_url") and fields.get("remote_key")):
+        raise HTTPException(400, "A link Flight Deck connects out from needs the system's address and its key.")
+    key = new_link_key()  # (an outbound link's is never shown: the system doesn't connect in)
+    secret, sealed = _sealed_webhook_secret() if fields.get("webhook_url") and not outbound else ("", "")
     row = await get_db().create_agent_link(
         user["id"], name=str(fields.get("name") or "Agent link"), agent_slug=str(fields.get("agent_slug", "")),
         instructions=str(fields.get("instructions", "")), key_hash=hash_token(key), key_hint=key_hint(key),
-        agent_may_send=bool(fields.get("agent_may_send", 1)), webhook_url=str(fields.get("webhook_url", "")),
-        webhook_secret=sealed,
+        agent_may_send=bool(fields.get("agent_may_send", 1)),
+        webhook_url="" if outbound else str(fields.get("webhook_url", "")), webhook_secret=sealed,
+        direction="outbound" if outbound else "inbound", remote_url=str(fields.get("remote_url", "")),
+        remote_key=str(fields.get("remote_key", "")),
     )
+    if outbound:
+        from captain_claw.flight_deck import agent_link_out
+
+        agent_link_out.ensure(row["id"])
+        return public_link(row)
     return {**public_link(row), "key": key, **({"webhook_secret": secret} if secret else {})}
 
 
@@ -903,11 +987,21 @@ async def change_link(link_id: str, body: LinkBody = Body(default=LinkBody()),
     fields = await _clean_fields(body, user["id"])
     if "agent_slug" in fields and fields["agent_slug"] != row.get("agent_slug"):
         fields["agent_session_id"] = ""
+    outbound = fields.get("direction", row.get("direction")) == "outbound"
+    if outbound and not (fields.get("remote_url", row.get("remote_url")) and fields.get("remote_key", row.get("remote_key"))):
+        raise HTTPException(400, "A link Flight Deck connects out from needs the system's address and its key.")
     secret = ""
-    if "webhook_url" in fields and fields["webhook_url"] != (row.get("webhook_url") or ""):
+    if outbound:
+        fields.pop("webhook_url", None)  # (it has the socket)
+    elif "webhook_url" in fields and fields["webhook_url"] != (row.get("webhook_url") or ""):
         secret, fields["webhook_secret"] = _sealed_webhook_secret() if fields["webhook_url"] else ("", "")
     if fields:
         await get_db().update_agent_link(link_id, user["id"], **fields)
+    redial = any(k in fields and fields[k] != row.get(k) for k in ("direction", "remote_url", "remote_key"))
+    if redial or (outbound and row.get("direction") != "outbound"):
+        from captain_claw.flight_deck import agent_link_out
+
+        await agent_link_out.restart(link_id)  # (stops it when the link no longer connects out)
     return {**public_link(await _own_link(link_id, user)), **({"webhook_secret": secret} if secret else {})}
 
 
@@ -929,7 +1023,8 @@ async def new_key(link_id: str, user: dict = Depends(get_current_user)):
     """A new key; the old one stops working and its connection is closed."""
     from captain_claw.flight_deck.auth import get_db, hash_token
 
-    await _own_link(link_id, user)
+    if (await _own_link(link_id, user)).get("direction") == "outbound":
+        raise HTTPException(400, "Flight Deck connects out to this system: change the key it gave you under Edit.")
     key = new_link_key()
     await get_db().set_agent_link_key(link_id, user["id"], hash_token(key), key_hint(key))
     await _drop_link(user["id"], link_id, "the link has a new key")
@@ -942,5 +1037,8 @@ async def delete_link(link_id: str, user: dict = Depends(get_current_user)):
 
     await _own_link(link_id, user)
     await get_db().delete_agent_link(link_id, user["id"])
+    from captain_claw.flight_deck import agent_link_out
+
+    await agent_link_out.stop(link_id)
     await _drop_link(user["id"], link_id, "the link was removed")
     return {"ok": True}
