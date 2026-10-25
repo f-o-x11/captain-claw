@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A kept session: open in one tap (the kiosk's green state dot, ring on the card). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="@color/ok" />
+    <stroke android:width="2dp" android:color="@color/card" />
+</shape>

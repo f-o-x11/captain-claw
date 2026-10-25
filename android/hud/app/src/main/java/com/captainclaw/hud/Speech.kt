@@ -10,7 +10,7 @@ import org.json.JSONObject
 import java.util.Locale
 
 /**
- * Android TextToSpeech behind the HUD's "Read aloud": Android WebView has no
+ * Android TextToSpeech behind a deck page's speech (the HUD's "Read aloud"): Android WebView has no
  * `window.speechSynthesis`, so [SHIM] (injected for the deck origin only)
  * defines one that posts to the app's bridge object, and this speaks it.
  *

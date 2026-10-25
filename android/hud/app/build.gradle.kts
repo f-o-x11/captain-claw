@@ -1,4 +1,4 @@
-// Captain Claw HUD — a thin WebView shell around a Flight Deck's /hud/.
+// Captain Claw for Android — a thin WebView shell around a Flight Deck's kiosk.
 // AGP 9 compiles Kotlin itself (no separate Kotlin plugin).
 
 plugins {
@@ -15,8 +15,8 @@ android {
         applicationId = "com.captainclaw.hud"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {

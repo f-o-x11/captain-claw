@@ -4,7 +4,7 @@ import { useAuthStore } from './authStore'
 import type { ViewMode } from '../types'
 import { USERS_TAB_KEY, type UsersTab } from '../components/admin/deckConfig'
 import { ADMIN_TAB_KEY } from '../services/sharedIntegrations'
-import { isDesktopApp } from '../services/desktopShell'
+import { isAppShell } from '../services/desktopShell'
 import { hasTierSets } from '../services/tierConfig'
 import { listProcesses, listContainers } from '../services/docker'
 import { isManagedAgent } from '../utils/managedAgents'
@@ -107,7 +107,7 @@ export function leaveConsole(view?: ViewMode) {
   if (view) useUIStore.getState().setView(view)
 }
 
-// ── The desktop app: the Admin console or the users' kiosk, nothing else ──
+// ── The apps (desktop, Android): the Admin console or the users' kiosk, nothing else ──
 
 // Set once per desktop-app window: a reload is not a new launch.
 const LAUNCHED_KEY = 'fd:desktop-launched'
@@ -131,7 +131,7 @@ async function ownAgentCount(): Promise<number> {
 }
 
 /**
- * Where the desktop app opens for an admin. A launch (or a sign-in): the
+ * Where the app (desktop or Android) opens for an admin. A launch (or a sign-in): the
  * users' kiosk when there are agents to work with, else the Admin console —
  * on Models while no tier set exists. A reload keeps the view it had.
  */
@@ -178,7 +178,7 @@ export function syncConsoleFromUrl() {
     return
   }
   const ui = useUIStore.getState()
-  if (isDesktopApp()) return   // only the console or the users' kiosk: Back never means 'full'
+  if (isAppShell()) return   // only the console or the users' kiosk: Back never means 'full'
   if (!useConsoleStore.getState().requested && ui.layoutMode !== 'console') return
   useConsoleStore.setState({ requested: false })
   ui.setLayoutMode('full')
@@ -211,7 +211,7 @@ useUIStore.subscribe((s, prev) => {
     go('connections', tab ? { connection: tab } : {})
   } else if (s.view === 'library') {
     go('models')
-  } else if (!isDesktopApp()) {
+  } else if (!isAppShell()) {
     leaveConsole(s.view)
     return
   }

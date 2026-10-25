@@ -13,6 +13,52 @@
         android:layout_height="match_parent"
         android:background="@color/bg" />
 
+    <!-- A window the page opened for a sign-in (MainActivity.openPopup): over
+         the kiosk, with a way out. -->
+    <LinearLayout
+        android:id="@+id/popup_panel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/bg"
+        android:clickable="true"
+        android:focusable="true"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:background="@color/surface"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/popup_close"
+                android:layout_width="52dp"
+                android:layout_height="52dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/close"
+                android:src="@drawable/ic_close" />
+
+            <TextView
+                android:id="@+id/popup_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="16dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:singleLine="true"
+                android:textColor="@color/text"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <FrameLayout
+            android:id="@+id/popup_holder"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+    </LinearLayout>
+
     <!-- Shown when the deck can't be loaded. -->
     <LinearLayout
         android:id="@+id/error_panel"
@@ -48,6 +94,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="@string/settings_title" />
+            android:text="@string/switch_deck" />
     </LinearLayout>
 </FrameLayout>

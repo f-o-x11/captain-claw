@@ -38,6 +38,57 @@ export function isDesktopApp(): boolean {
   return SIMULATED || !!bridge()?.isDesktop
 }
 
+// The Captain Claw Android app (android/hud): a WebView shell around a deck's
+// kiosk that appends ` CaptainClawHUD/<version>` to its user agent. The token
+// is older than the kiosk — the app first showed the HUD (hud/device.ts reads
+// it too).
+const ANDROID_APP = /\bCaptainClawHUD\/\S+/.test(navigator.userAgent || '')
+
+/** The Captain Claw Android app. */
+export function isAndroidApp(): boolean {
+  return ANDROID_APP
+}
+
+/** Running inside one of the Captain Claw apps — the desktop app (or a tab
+ * simulating it) or the Android app — rather than a browser tab. Either app is
+ * the Admin console or the users' kiosk, nothing else: anyone but an admin
+ * gets the kiosk, and an admin starts in it when they have agents. */
+export function isAppShell(): boolean {
+  return isDesktopApp() || ANDROID_APP
+}
+
+// The Android app's native side (MainActivity), injected for the deck's origin
+// only. Absent everywhere else.
+function androidBridge(): { postMessage(message: string): void } | null {
+  if (!ANDROID_APP) return null
+  const b = (window as Window & { CaptainClawHUD?: { postMessage?: unknown } }).CaptainClawHUD
+  return b && typeof b.postMessage === 'function' ? (b as { postMessage(message: string): void }) : null
+}
+
+function tellAndroidApp(message: Record<string, unknown>): void {
+  try { androidBridge()?.postMessage(JSON.stringify(message)) } catch { /* bridge gone */ }
+}
+
+/** The Android app has a start screen: its saved decks and accounts. */
+export function hasAndroidAppSettings(): boolean {
+  return androidBridge() !== null
+}
+
+/** Back to the Android app's start screen, to switch deck or account. */
+export function openAndroidAppSettings(): void {
+  tellAndroidApp({ t: 'settings' })
+}
+
+/** Who signed in: the Android app lists the account (a sign-in on this page included). */
+export function reportAndroidSession(user: { email: string; display_name?: string; role?: string } | null): void {
+  if (user?.email) tellAndroidApp({ t: 'session', email: user.email, name: user.display_name || '', role: user.role || '' })
+}
+
+/** Signed out, or the session ended: the Android app forgets it and shows its start screen. */
+export function reportAndroidSignedOut(): void {
+  tellAndroidApp({ t: 'signed-out' })
+}
+
 /** The real desktop app (its preload bridge), never a tab simulating it: only
  * the shell sends a sign-in to the system browser — a browser tab keeps its
  * popup, which holds the ticket's cookie. */

@@ -52,7 +52,7 @@ import { PaymentsPage, paymentIdFromPath, purchaseIdFromPath } from './pages/Pay
 import { PublicBeingPage } from './pages/PublicBeingPage'
 import { useUIStore, startInConsoleUnlessChosen, beginLayoutHydrate } from './stores/uiStore'
 import { useConsoleStore, syncConsoleFromUrl, dropConsoleRequest, selectConsoleAdmin, openConsole, startDesktop, consoleHome, pageFromPath } from './stores/consoleStore'
-import { isDesktopApp } from './services/desktopShell'
+import { isAppShell, reportAndroidSession, reportAndroidSignedOut } from './services/desktopShell'
 import { useAgentStore } from './stores/agentStore'
 import { useAuthStore, selectKioskLocked, awaitAuthStatus, refreshAccessToken, reloadAfterSessionEnd, DEFAULT_INSTANCE_NAME } from './stores/authStore'
 import { useChatStore } from './stores/chatStore'
@@ -177,7 +177,7 @@ function AppContent() {
   const kioskView = useAuthStore((s) => s.kioskView)
   const consoleRequested = useConsoleStore((s) => s.requested)
   const adminSignedIn = useAuthStore((s) => s.adminStartPending)
-  const inConsole = consoleAdmin && (isDesktopApp() || consoleRequested
+  const inConsole = consoleAdmin && (isAppShell() || consoleRequested
     || ((layoutMode === 'console' || adminSignedIn) && !PAYMENTS_LINK))
   useEffect(() => {
     window.addEventListener('popstate', syncConsoleFromUrl)
@@ -445,7 +445,7 @@ function AppContent() {
 
   // The desktop app decides between the kiosk and the console after a sign-in
   // (startDesktop): nothing to show until it has.
-  if (adminSignedIn && consoleAdmin && isDesktopApp()) return <div className="h-screen bg-zinc-950" />
+  if (adminSignedIn && consoleAdmin && isAppShell()) return <div className="h-screen bg-zinc-950" />
 
   // ── Admin console ── (every form factor; admins are never kiosk-locked)
   if (inConsole) return <ConsoleLayout />
@@ -621,8 +621,8 @@ async function landAdminAfterSignIn() {
   const auth = useAuthStore.getState()
   if (!auth.adminStartPending) return
   try {
-    if (!selectConsoleAdmin(auth) || (PAYMENTS_LINK && !isDesktopApp())) return
-    if (isDesktopApp()) {
+    if (!selectConsoleAdmin(auth) || (PAYMENTS_LINK && !isAppShell())) return
+    if (isAppShell()) {
       await startDesktop({ signedIn: true })
       return
     }
@@ -671,12 +671,12 @@ function App() {
           beginLayoutHydrate()
           await hydrateAllStores()
           // The desktop app: the users' kiosk or the Admin console (startDesktop).
-          if (isDesktopApp() && selectConsoleAdmin(useAuthStore.getState())) await startDesktop()
+          if (isAppShell() && selectConsoleAdmin(useAuthStore.getState())) await startDesktop()
         }
       } else {
         reportPublicOrigin()   // auth-off deck: no login to wait for
         startInConsoleUnlessChosen()   // its user is its admin
-        if (isDesktopApp()) await startDesktop()
+        if (isAppShell()) await startDesktop()
       }
       setAuthChecked(true)
     }
@@ -701,7 +701,9 @@ function App() {
       // Tell Flight Deck the address this deck is reached at, so a public link
       // an agent makes points here rather than at the agent's internal FD URL.
       reportPublicOrigin()
+      reportAndroidSession(useAuthStore.getState().user)
     } else if (!isAuthenticated && prevAuth.current) {
+      reportAndroidSignedOut()
       reloadAfterSessionEnd()
     }
     prevAuth.current = isAuthenticated

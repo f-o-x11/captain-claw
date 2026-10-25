@@ -5,20 +5,89 @@
         <item name="android:colorBackground">@color/bg</item>
         <item name="android:colorAccent">@color/accent</item>
         <item name="android:colorPrimary">@color/bg</item>
+        <item name="android:colorControlActivated">@color/accent</item>
+        <item name="android:colorControlNormal">@color/text_faint</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/text_dim</item>
+        <item name="android:textColorHint">@color/text_ghost</item>
+        <item name="android:textColorHighlight">@color/accent_line</item>
+        <item name="android:alertDialogTheme">@style/Theme.Hud.Dialog</item>
+        <item name="android:popupMenuStyle">@style/Kiosk.PopupMenu</item>
+    </style>
+
+    <style name="Theme.Hud.Dialog" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/accent_soft</item>
+        <item name="android:colorBackground">@color/surface</item>
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/text_dim</item>
     </style>
 
-    <style name="Hud.Button" parent="android:Widget.Material.Button">
-        <item name="android:minHeight">52dp</item>
-        <item name="android:textAllCaps">false</item>
-        <item name="android:textSize">17sp</item>
-        <item name="android:textColor">@color/text</item>
-        <item name="android:backgroundTint">@color/surface</item>
+    <style name="Kiosk.PopupMenu" parent="android:Widget.Material.PopupMenu">
+        <item name="android:popupBackground">@drawable/bg_panel</item>
     </style>
 
-    <style name="Hud.Button.Primary">
-        <item name="android:textColor">@color/accent_ink</item>
-        <item name="android:backgroundTint">@color/accent</item>
+    <!-- The kiosk's look for the start screen's text, fields and buttons. -->
+    <style name="Kiosk" />
+
+    <!-- "AGENTS (3)": text-xs uppercase tracking-wider zinc-500. -->
+    <style name="Kiosk.SectionLabel">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/text_faint</item>
     </style>
+
+    <style name="Kiosk.FieldLabel">
+        <item name="android:textSize">14sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/text_soft</item>
+    </style>
+
+    <style name="Kiosk.Field">
+        <item name="android:minHeight">52dp</item>
+        <item name="android:background">@drawable/bg_field</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:paddingStart">14dp</item>
+        <item name="android:paddingEnd">6dp</item>
+    </style>
+
+    <style name="Kiosk.FieldInput">
+        <item name="android:background">@null</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:textSize">17sp</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textColorHint">@color/text_ghost</item>
+        <item name="android:importantForAutofill">no</item>
+    </style>
+
+    <style name="Kiosk.Button" parent="android:Widget.Material.Button.Borderless">
+        <item name="android:minHeight">52dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:background">@drawable/bg_button_quiet</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:paddingStart">16dp</item>
+        <item name="android:paddingEnd">16dp</item>
+    </style>
+
+    <style name="Kiosk.Button.Primary">
+        <item name="android:textColor">@color/accent_ink</item>
+        <item name="android:background">@drawable/bg_button_primary</item>
+    </style>
+
+    <style name="Kiosk.Button.Text">
+        <item name="android:background">?android:attr/selectableItemBackground</item>
+        <item name="android:textColor">@color/accent_soft</item>
+        <item name="android:textSize">15sp</item>
+    </style>
+
+    <!-- The names the kiosk screen's error panel uses. -->
+    <style name="Hud.Button" parent="Kiosk.Button" />
+    <style name="Hud.Button.Primary" parent="Kiosk.Button.Primary" />
 </resources>
