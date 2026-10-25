@@ -8,10 +8,14 @@ other deck proxies it to its own agent.
 ```bash
 pip install .            # light: aiohttp, aiosqlite, pydantic, pyyaml
 pip install '.[llm]'     # + litellm, for LLM routing of unaddressed requests
-botport gen-key vps1     # an auth.keys entry + the values for that Flight Deck
 botport check -c ~/.botport/config.yaml
 botport -c ~/.botport/config.yaml
 ```
+
+Add Flight Decks on the dashboard (**Decks → Add Flight Deck**): each gets its
+own key and a join code to paste into that deck, and connects without a hub
+restart. `botport gen-key vps1` still prints an `auth.keys` entry for the
+config file, if you prefer that.
 
 * Guide (Raspberry Pi + tmux, VPS decks, TLS / Tailscale / tunnels):
   [../docs/botport-deployment.md](../docs/botport-deployment.md)

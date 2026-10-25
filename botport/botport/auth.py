@@ -79,6 +79,14 @@ class FailureLimiter:
     def record_success(self, addr: str) -> None:
         self._fails.pop(addr, None)
 
+    def forget_key(self, key: str) -> None:
+        """Clear the failures and blocks counted against ``key`` (from any
+        address) — after the hub itself changed that key."""
+        suffix = f"|{key}"
+        for d in (self._fails, self._blocked_until):
+            for bucket in [b for b in d if b.endswith(suffix)]:
+                d.pop(bucket, None)
+
     def prune(self) -> None:
         now = time.monotonic()
         for addr in [a for a, ts in self._fails.items() if not ts or now - ts[-1] > 60.0]:

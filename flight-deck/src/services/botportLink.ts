@@ -58,6 +58,9 @@ export interface BotportDeckAgent {
 /** Another Flight Deck on the hub (the roster never lists this deck). */
 export interface BotportDeck {
   name: string
+  // What the hub's operator calls it, and what it is for (may be empty).
+  label?: string
+  description?: string
   status: 'connected' | 'disconnected'
   version: string
   connected_at: string   // ISO, from the hub
@@ -117,6 +120,35 @@ export function isFullStatus(s: BotportStatusBasic | BotportStatus): s is Botpor
 }
 
 export const getBotportStatus = () => fdFetch<BotportStatusBasic | BotportStatus>('/fd/botport/status')
+
+// ── Join code ──
+
+export interface BotportJoin {
+  url: string
+  deck_name: string
+  key: string
+  secret: string
+}
+
+/** A join code from the hub's dashboard (Decks → Add Flight Deck): everything
+ * the connection needs, in one paste. "bpj1." + base64url JSON {u, n, k, s}.
+ * null when it isn't one. */
+export function parseJoinCode(text: string): BotportJoin | null {
+  const t = text.trim().replace(/\s+/g, '')
+  if (!t.startsWith('bpj1.')) return null
+  try {
+    let b = t.slice(5).replace(/-/g, '+').replace(/_/g, '/')
+    while (b.length % 4) b += '='
+    const bytes = Uint8Array.from(atob(b), (c) => c.charCodeAt(0))
+    const o: unknown = JSON.parse(new TextDecoder().decode(bytes))
+    if (!o || typeof o !== 'object') return null
+    const r = o as Record<string, unknown>
+    const join = { url: String(r.u ?? '').trim(), deck_name: String(r.n ?? '').trim(), key: String(r.k ?? '').trim(), secret: String(r.s ?? '').trim() }
+    return join.url && join.deck_name && join.key && join.secret ? join : null
+  } catch {
+    return null
+  }
+}
 
 // ── Settings (admin) ──
 

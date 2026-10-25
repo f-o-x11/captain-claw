@@ -16,7 +16,6 @@ import asyncio
 import logging
 import logging.handlers
 import os
-import re
 import signal
 import ssl
 import sys
@@ -32,6 +31,7 @@ from botport.auth import FailureLimiter, match_credentials
 from botport.concern_manager import ConcernManager
 from botport.config import BotPortConfig, set_config
 from botport.connection_manager import CLOSE_SUPERSEDED, ConnectionManager
+from botport.decks import DECK_NAME_RE, DeckRegistry
 from botport.models import Concern, _utcnow_iso
 from botport.protocol import (
     ActivityMessage,
@@ -74,7 +74,6 @@ log = logging.getLogger(__name__)
 PROTOCOL_VERSION = 2
 
 # Deck names travel in "Agent@deck" addresses and URLs.
-DECK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 # Close codes (4000-4999 are application-defined).
 CLOSE_AUTH_FAILED = 4401
@@ -99,6 +98,8 @@ class BotPortServer:
         self.concerns.on_expired = self._on_concern_expired
         self.file_manager = FileManager(_workspace_root(config))
         self.auth_limiter = FailureLimiter()
+        # Deck keys made on the dashboard, and every deck's label/description.
+        self.decks = DeckRegistry(self.store)
         self._swarm_store_initialized = False
         self.swarm_engine: Any = None
         self.swarm_scheduler: Any = None
@@ -134,9 +135,11 @@ class BotPortServer:
 
         # Dashboard.
         if self.config.server.dashboard_enabled:
+            from botport.dashboard.deck_routes import setup_deck_routes
             from botport.dashboard.routes import setup_dashboard_routes
             from botport.dashboard.swarm_routes import setup_swarm_routes
             setup_dashboard_routes(app, self)
+            setup_deck_routes(app, self)
             setup_swarm_routes(app, self)
 
         return app
@@ -271,26 +274,35 @@ class BotPortServer:
         self, ws: web.WebSocketResponse, msg: RegisterMessage, addr: str,
     ) -> str | None:
         """Handle registration. Returns instance_id or None."""
-        entry = None
+        entry = from_file = from_dashboard = None
+        await self.decks.ensure_loaded()
         if self.config.auth.enabled:
             # Failures count per address AND key: guessing one key's secret
             # gets that key blocked from that address, while another deck
             # behind the same NAT (its own key) is unaffected. Unknown keys
             # share one bucket per address.
-            known = any(k.key.strip() == (msg.key or "").strip() for k in self.config.auth.keys)
-            bucket = f"{addr}|{(msg.key or '').strip() if known else '?'}"
+            key = (msg.key or "").strip()
+            known = any(k.key.strip() == key for k in self.config.auth.keys) or self.decks.knows_key(key)
+            bucket = f"{addr}|{key if known else '?'}"
             if self.auth_limiter.blocked(bucket):
                 await self._reject(ws, "Too many failed registrations from this address; try again later",
                                    retry=True, code=CLOSE_AUTH_FAILED)
                 return None
-            entry = match_credentials(msg.key, msg.secret)
+            # Keys from botport.yaml, then keys made on the dashboard (both
+            # always compared, so timing does not say which kind matched).
+            from_file = match_credentials(msg.key, msg.secret)
+            from_dashboard = self.decks.match(msg.key, msg.secret)
+            entry = from_file or from_dashboard
             if entry is None:
                 self.counters["auth_failures"] += 1
                 self.auth_limiter.record_failure(bucket)
                 log.warning("Auth failed for %s %r from %s", msg.kind or "agent", msg.instance_name, addr)
-                await self._reject(ws, "Authentication failed", retry=False, code=CLOSE_AUTH_FAILED)
+                note = self.decks.note_for(key, msg.secret)
+                await self._reject(ws, "Authentication failed" + (f": {note}" if note else ""),
+                                   retry=False, code=CLOSE_AUTH_FAILED)
                 return None
             self.auth_limiter.record_success(bucket)
+            self.decks.accepted(key)
 
         bound = entry.instance.strip() if entry else ""
         if msg.kind == "deck":
@@ -300,8 +312,17 @@ class BotPortServer:
                     retry=False, code=CLOSE_REJECTED,
                 )
                 return None
-            return await self._register_deck(ws, msg, addr, bound)
-        return await self._register_agent(ws, msg, addr, bound)
+            instance_id = await self._register_deck(ws, msg, addr, bound)
+        else:
+            instance_id = await self._register_agent(ws, msg, addr, bound)
+        info = self.connections.get_instance(instance_id) if instance_id else None
+        if info is not None and entry is not None:
+            # Which key let it in: removing or rotating that key drops it.
+            info.auth_key = entry.key.strip()
+            if from_dashboard is not None and from_file is None and self.decks.match(msg.key, msg.secret) is None:
+                # The key changed on the dashboard while this was registering.
+                await ws.close(code=CLOSE_AUTH_FAILED, message=b"key changed on the hub")
+        return instance_id
 
     async def _register_agent(
         self, ws: web.WebSocketResponse, msg: RegisterMessage, addr: str, bound_name: str = "",
@@ -387,9 +408,43 @@ class BotPortServer:
             "reconnected" if resumed else "registered", name, len(info.agents), info.version or "?", addr,
         )
 
-        self._dashboard_event({"type": "instance_connected", "instance": info.to_dict()})
+        self._dashboard_event({"type": "instance_connected",
+                               "instance": {**info.to_dict(), **self.decks.meta(info.name)}})
         self._schedule_network()
         return instance_id
+
+    # ── Decks managed from the dashboard ─────────────────────────
+
+    async def drop_key(self, key: str, reason: str) -> list[str]:
+        """Close every connection that registered with ``key`` (just removed
+        or rotated): it may not stay on with credentials that no longer work.
+        Returns the names of the decks/agents dropped."""
+        key = (key or "").strip()
+        dropped: list[str] = []
+        if not key:
+            return dropped
+        # A rotated deck reconnects with a new secret soon: failures with the
+        # old one must not leave its address blocked.
+        self.auth_limiter.forget_key(key)
+        for info in self.connections.list_instances():
+            if info.status != "connected" or getattr(info, "auth_key", "") != key:
+                continue
+            ws = self.connections.get_ws(info.id)
+            if ws is None or ws.closed:
+                continue
+            dropped.append(info.name)
+            log.info("Disconnecting %s: %s", info.name, reason)
+            try:
+                await ws.close(code=CLOSE_AUTH_FAILED, message=reason[:120].encode())
+            except Exception:
+                pass
+        return dropped
+
+    def deck_changed(self, name: str) -> None:
+        """A deck's label, description or key changed: tell the dashboards
+        and send every deck the roster again."""
+        self._dashboard_event({"type": "deck_updated", "name": name})
+        self._schedule_network()
 
     def _counted_for(self, instance_id: str) -> int:
         return sum(1 for c in self.concerns.get_concerns_for_instance(instance_id) if c.counted_active)
@@ -523,6 +578,7 @@ class BotPortServer:
             if info.is_deck:
                 decks.append({
                     "name": info.name,
+                    **self.decks.meta(info.name),
                     "status": info.status,
                     "version": info.version,
                     "connected_at": info.connected_at,
@@ -1529,6 +1585,9 @@ async def _run_server(config: BotPortConfig) -> int:
     server = BotPortServer(config)
     # The database must be usable before anything connects.
     await server.store._ensure_db()
+    await server.decks.ensure_loaded()
+    for w in server.decks.conflicts():
+        log.warning("%s", w)
 
     app = server.create_app()
     runner = web.AppRunner(app, access_log=None, handle_signals=False)
@@ -1600,7 +1659,9 @@ async def _run_server(config: BotPortConfig) -> int:
     llm_info = f"LLM routing: {config.llm.model}" if config.llm.enabled else "LLM routing: disabled"
     print(f"  Routing: explicit -> tags -> {'LLM' if config.llm.enabled else 'skip'} -> fallback  ({llm_info})")
     if config.auth.enabled:
-        print(f"  Auth: enabled ({len(config.auth.keys)} keys)")
+        added = sum(1 for r in server.decks.records() if r.has_key)
+        print(f"  Auth: enabled ({len(config.auth.keys)} key(s) in the config file, "
+              f"{added} deck(s) added on the dashboard)")
     else:
         print("  Auth: DISABLED (open) — enable it before exposing this port")
     print(f"  Data: {config.data_dir}" + (f"   Config: {config.source}" if config.source else ""))

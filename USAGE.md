@@ -3704,7 +3704,6 @@ Agent ──flight_deck tool──▶ Flight Deck A ══ws(s)══▶ BotPort
 ```bash
 python3 -m venv ~/botport-venv && ~/botport-venv/bin/pip install ./botport
 mkdir -p ~/.botport && cp botport/config.example.yaml ~/.botport/config.yaml && chmod 600 ~/.botport/config.yaml
-~/botport-venv/bin/botport gen-key vps1            # one per deck: paste each entry under auth.keys
 ~/botport-venv/bin/botport check -c ~/.botport/config.yaml
 scripts/botport-tmux.sh start                      # or: botport -c ~/.botport/config.yaml
 ```
@@ -3713,13 +3712,19 @@ BotPort listens on port `23180` by default and refuses to start (rather than
 move to another port) if that port is taken. `/healthz` answers without
 credentials.
 
-**2. Connect each Flight Deck:** Admin console → **BotPort** — hub URL
-(`wss://…/ws`, or `ws://127.0.0.1:23180/ws` on the hub's own machine), deck
-name, key and secret, then pick the exposed agents. Or set
+**2. Add each Flight Deck on the hub:** its dashboard → **Decks → Add Flight
+Deck** — a display name, the deck's network name and a description. The hub
+makes the deck's key and shows a **join code** once; the deck can connect at
+once, without a hub restart. (`botport gen-key <name>` still prints an
+`auth.keys` entry for the config file instead.)
+
+**3. Connect it:** on that deck, Admin console → **BotPort** → paste the join
+code into **Join code** and **Save** (or fill in the hub URL, deck name, key
+and secret by hand), then pick the exposed agents. Or set
 `FD_BOTPORT_URL`, `FD_BOTPORT_DECK_NAME`, `FD_BOTPORT_KEY`, `FD_BOTPORT_SECRET`,
 `FD_BOTPORT_EXPOSE` (see the guide for the full list).
 
-**3. Use it:** "ask Researcher@pi to …" — the agent calls `flight_deck`
+**4. Use it:** "ask Researcher@pi to …" — the agent calls `flight_deck`
 (`consult` for a quick answer with live progress, `delegate` for work whose
 result comes back as a message).
 
@@ -3794,10 +3799,7 @@ server:
 
 auth:
   enabled: true
-  keys:                               # botport gen-key <name> prints an entry
-    - instance: "vps1"                # binds the deck name to this key
-      key: "vps1-1a2b3c4d"
-      secret: "…"
+  keys: []                            # decks added on the dashboard need none; botport gen-key <name> prints an entry
 
 concerns:
   idle_timeout_seconds: 600           # no progress for this long → the request fails (both sides told)
@@ -3826,7 +3828,9 @@ BotPort includes a web dashboard (enabled by default) that shows:
 
 Access at `http://<hub>:23180/` — it asks once for `server.admin_token`. It
 lists Flight Decks with the agents they expose, legacy agents with their
-personas, and concerns. `/api/status` gives the same as JSON (decks, load,
+personas, and concerns. Its **Decks** page adds Flight Decks (key + join code),
+gives each a display name and description that every deck sees, and rotates
+or removes keys, all without a restart. `/api/status` gives the same as JSON (decks, load,
 queued results, counters); `/ws/dashboard` streams live events.
 
 ### Capability Advertisement

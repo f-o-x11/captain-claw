@@ -27,6 +27,8 @@ export function networkShareAction(st: BotportShareAgent | undefined, ctx: {
   deckName: string
   displayName: string
   setShared: (agent: BotportShareAgent, shared: boolean) => Promise<void>
+  /** Opens the "Share on network?" dialog (NetworkShareDialog). */
+  ask: (agent: BotportShareAgent, displayName: string) => void
   onError: (message: string) => void
 }): NetworkShareAction & { hint: string } {
   const none = { ...HIDDEN, hint: '' }
@@ -47,15 +49,7 @@ export function networkShareAction(st: BotportShareAgent | undefined, ctx: {
   return {
     show: true, disabled: false, label: 'Share on network…',
     hint: `Let agents on other Flight Decks ask it for help${as}`,
-    onClick: () => {
-      if (!confirm(
-        `Share '${ctx.displayName}' on the BotPort network${as}?\n\n`
-        + 'Agents on other Flight Decks can then ask it for help. Their requests run in a lane of their own: '
-        + 'they never see your chats, memory or private data, cannot send email and cannot use the tools '
-        + 'your admin blocks. You can stop sharing at any time.',
-      )) return
-      ctx.setShared(st, true).catch(fail)
-    },
+    onClick: () => ctx.ask(st, ctx.displayName),
   }
 }
 
@@ -69,7 +63,8 @@ export function useNetworkShare(shareKey: string, displayName: string): NetworkS
   const deckName = useNetworkShareStore((s) => s.deckName)
   const st = useNetworkShareStore((s) => s.agents[shareKey])
   const setShared = useNetworkShareStore((s) => s.setShared)
-  return networkShareAction(st, { canShare, admin, deckName, displayName, setShared, onError: (m) => alert(m) })
+  const ask = useNetworkShareStore((s) => s.askShare)
+  return networkShareAction(st, { canShare, admin, deckName, displayName, setShared, ask, onError: (m) => alert(m) })
 }
 
 /** "network" next to an agent's name while it is on the network. */
