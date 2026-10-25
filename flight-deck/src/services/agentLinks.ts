@@ -1,7 +1,8 @@
 // REST client for agent links — systems a person connected to one of their
 // agents (captain_claw/flight_deck/agent_link.py). The system itself talks
 // over the /link/ws WebSocket with the link's key, or over HTTP and a webhook
-// (agent_link_http.py); this is the owner's side: /fd/links to list, create,
+// (agent_link_http.py) — or Flight Deck connects out to it (an outbound link,
+// agent_link_out.py); this is the owner's side: /fd/links to list, create,
 // change and delete links, a new key, a new webhook signing secret.
 //
 // A key is in an answer only when it was just made (create, new key); it is
@@ -53,6 +54,19 @@ export interface AgentLink {
   connected: boolean
   agent_may_send: boolean // the agent may message it on its own (the linked_system tool)
   webhook_url: string // "" = none
+  direction: LinkDirection
+  remote_url: string // an outbound link's system address ("" for inbound)
+  outbound: OutboundStatus | null // how Flight Deck's connection to it is doing
+}
+
+// "inbound": the system connects to Flight Deck; "outbound": Flight Deck connects to it.
+export type LinkDirection = 'inbound' | 'outbound'
+
+export interface OutboundStatus {
+  state: 'connecting' | 'connected' | 'waiting' | 'stopped'
+  error: string
+  since: string | null
+  retry_at?: string
 }
 
 // What an answer carries once: a new key (create, new key) or a webhook's
@@ -68,6 +82,9 @@ export interface AgentLinkFields {
   instructions?: string
   agent_may_send?: boolean
   webhook_url?: string
+  direction?: LinkDirection
+  remote_url?: string
+  remote_key?: string // the key the system issued; "" on a change keeps the one kept
 }
 
 // An agent the link can talk to (GET /fd/fleet, owner-scoped).

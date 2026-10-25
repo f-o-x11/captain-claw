@@ -131,6 +131,10 @@ class BusClient:
     async def _close_output(self) -> None:
         """The socket is gone: stop sending to it."""
 
+    def _turn_state(self, turn: dict, state: str) -> dict:
+        """The state frame a reconnect gets for a kept *turn* (its own, not the running one's)."""
+        return {"type": "state", "state": state}
+
     # ── wire ──
     async def send_json(self, obj: dict) -> None:
         if self.closed:
@@ -295,9 +299,9 @@ class BusClient:
         if answer and not turn["heard"] and turn["via"] != self.serial:
             await self._show_reply(answer["text"], answer["proactive"], turn)
             if not turn["open"]:
-                await self.send_json({"type": "state", "state": "ready"})
+                await self.send_json(self._turn_state(turn, "ready"))
         elif turn["open"] and not answer:
-            await self.send_json({"type": "state", "state": "thinking"})
+            await self.send_json(self._turn_state(turn, "thinking"))
 
     def heard(self) -> None:
         """Something came from the client: the answer sent to it a moment

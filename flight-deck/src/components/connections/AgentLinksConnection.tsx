@@ -5,15 +5,17 @@ import {
 import {
   changeLink, createLink, deleteLink, linkableAgents, linkHttpBase, linkSocketUrl, listLinks, newLinkKey,
   newWebhookSecret, LINK_INSTRUCTIONS_MAX, type AgentLink, type AgentLinkSecrets, type LinkableAgent,
+  type LinkDirection,
 } from '../../services/agentLinks'
 
 // Systems: agent links (captain_claw/flight_deck/agent_link.py). Another
 // system — a CRM, a shop, a monitoring tool — holds a WebSocket to one of the
 // person's agents with a key of its own (or talks HTTP, with a webhook for
 // what comes back: agent_link_http.py), sends it messages and files, and
-// gets the answers back; the agent can message it on its own too. The list
-// polls while this card is open, so a system connecting or dropping off
-// shows up here.
+// gets the answers back; the agent can message it on its own too. A system
+// that won't take connections gets one from Flight Deck instead (an outbound
+// link: its address and the key it issued). The list polls while this card
+// is open, so a system connecting or dropping off shows up here.
 
 const pill = 'inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border'
 const POLL_MS = 10_000
@@ -24,9 +26,15 @@ interface Draft {
   instructions: string
   agent_may_send: boolean
   webhook_url: string
+  direction: LinkDirection
+  remote_url: string
+  remote_key: string // "" while editing keeps the key kept
 }
 
-const EMPTY: Draft = { name: '', agent_slug: '', instructions: '', agent_may_send: true, webhook_url: '' }
+const EMPTY: Draft = {
+  name: '', agent_slug: '', instructions: '', agent_may_send: true, webhook_url: '',
+  direction: 'inbound', remote_url: '', remote_key: '',
+}
 
 // A secret shown once: the link's new key, its webhook's new signing secret.
 interface Fresh extends AgentLinkSecrets {
@@ -47,7 +55,7 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-function LinkForm({ draft, onChange, agents, busy, submitLabel, onSubmit, onCancel }: {
+function LinkForm({ draft, onChange, agents, busy, submitLabel, onSubmit, onCancel, editing = false }: {
   draft: Draft
   onChange: (d: Draft) => void
   agents: LinkableAgent[]
@@ -55,6 +63,7 @@ function LinkForm({ draft, onChange, agents, busy, submitLabel, onSubmit, onCanc
   submitLabel: string
   onSubmit: () => void
   onCancel: () => void
+  editing?: boolean
 }) {
   const id = useId()
   const known = agents.some((a) => a.slug === draft.agent_slug)
@@ -64,6 +73,61 @@ function LinkForm({ draft, onChange, agents, busy, submitLabel, onSubmit, onCanc
   }
   return (
     <form onSubmit={submit} className="rounded-md border border-zinc-800 bg-zinc-950/60 p-3 space-y-3">
+      <fieldset className="space-y-1.5">
+        <legend className="text-xs text-zinc-400">Who connects</legend>
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {([
+            ['inbound', 'The system connects to Flight Deck'],
+            ['outbound', 'Flight Deck connects to the system'],
+          ] as const).map(([value, label]) => (
+            <label key={value} className="flex items-center gap-1.5 text-xs text-zinc-300">
+              <input
+                type="radio"
+                name={`${id}-direction`}
+                value={value}
+                checked={draft.direction === value}
+                onChange={() => onChange({ ...draft, direction: value })}
+                className="h-3.5 w-3.5 accent-violet-500"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        {draft.direction === 'outbound' && (
+          <span className="block text-[11px] text-zinc-500">
+            For a system that won't take connections from agents (an orchestrator): Flight Deck dials its address with
+            the key it gave you, keeps the connection open and dials again after a drop — no public address needed here.
+          </span>
+        )}
+      </fieldset>
+      {draft.direction === 'outbound' && (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label htmlFor={`${id}-remote-url`} className="block space-y-1">
+            <span className="text-xs text-zinc-400">Its address</span>
+            <input
+              id={`${id}-remote-url`}
+              value={draft.remote_url}
+              onChange={(e) => onChange({ ...draft, remote_url: e.target.value })}
+              placeholder="wss://orchestrator.example/agent"
+              maxLength={500}
+              inputMode="url"
+              className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 focus:border-violet-500/50 focus:outline-none"
+            />
+          </label>
+          <label htmlFor={`${id}-remote-key`} className="block space-y-1">
+            <span className="text-xs text-zinc-400">The key it gave you</span>
+            <input
+              id={`${id}-remote-key`}
+              type="password"
+              autoComplete="off"
+              value={draft.remote_key}
+              onChange={(e) => onChange({ ...draft, remote_key: e.target.value })}
+              placeholder={editing ? 'Leave empty to keep the key it has' : 'Sent as Authorization: Bearer …'}
+              className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 focus:border-violet-500/50 focus:outline-none"
+            />
+          </label>
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         <label htmlFor={`${id}-name`} className="block space-y-1">
           <span className="text-xs text-zinc-400">Name</span>
@@ -123,7 +187,7 @@ function LinkForm({ draft, onChange, agents, busy, submitLabel, onSubmit, onCanc
           <span className="block text-[11px] text-zinc-500">e.g. a scheduled job's result, sent with files, without the system asking first.</span>
         </span>
       </label>
-      <label htmlFor={`${id}-webhook`} className="block space-y-1">
+      {draft.direction === 'inbound' && <label htmlFor={`${id}-webhook`} className="block space-y-1">
         <span className="text-xs text-zinc-400">Webhook (optional)</span>
         <input
           id={`${id}-webhook`}
@@ -138,7 +202,7 @@ function LinkForm({ draft, onChange, agents, busy, submitLabel, onSubmit, onCanc
           For a system that can't keep a connection open: Flight Deck posts the answers to its HTTP messages and the
           agent's own messages here, signed with a secret you get once.
         </span>
-      </label>
+      </label>}
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="submit"
@@ -222,17 +286,23 @@ export default function AgentLinksConnection({ active = true, onStatus }: {
     await refresh()
   }
 
+  // What a form sends: an outbound link's address and key, else its webhook.
+  const fieldsOf = (d: Draft) => {
+    const { remote_url, remote_key, webhook_url, ...rest } = d
+    return d.direction === 'outbound'
+      ? { ...rest, name: d.name.trim(), remote_url: remote_url.trim(), ...(remote_key.trim() ? { remote_key: remote_key.trim() } : {}) }
+      : { ...rest, name: d.name.trim(), webhook_url: webhook_url.trim() }
+  }
+
   const create = () => run('create', async () => {
-    const made = await createLink({ ...draft, name: draft.name.trim(), webhook_url: draft.webhook_url.trim() })
+    const made = await createLink(fieldsOf(draft))
     setFresh({ name: made.name, key: made.key, webhook_secret: made.webhook_secret })
     setDraft(EMPTY)
     setAdding(false)
   })
 
   const save = (link: AgentLink) => run(`save:${link.id}`, async () => {
-    const changed = await changeLink(link.id, {
-      ...editDraft, name: editDraft.name.trim(), webhook_url: editDraft.webhook_url.trim(),
-    })
+    const changed = await changeLink(link.id, fieldsOf(editDraft))
     if (changed.webhook_secret) setFresh({ name: changed.name, webhook_secret: changed.webhook_secret })
     setEditing(null)
   })
@@ -266,6 +336,7 @@ export default function AgentLinksConnection({ active = true, onStatus }: {
     setEditDraft({
       name: link.name, agent_slug: link.agent_slug, instructions: link.instructions,
       agent_may_send: link.agent_may_send, webhook_url: link.webhook_url,
+      direction: link.direction, remote_url: link.remote_url, remote_key: '',
     })
   }
 
@@ -277,6 +348,17 @@ export default function AgentLinksConnection({ active = true, onStatus }: {
   }
 
   const agentName = (slug: string) => agents.find((a) => a.slug === slug)?.name || slug
+
+  const statusLine = (link: AgentLink): string => {
+    const out = link.outbound
+    if (link.connected) return link.direction === 'outbound' ? 'Connected — Flight Deck dialled it' : 'Connected now'
+    if (out?.state === 'connecting') return 'Connecting…'
+    if (out?.state === 'waiting') {
+      return `Can't connect: ${out.error || 'no answer'}${out.retry_at ? ` — trying again at ${new Date(out.retry_at).toLocaleTimeString()}` : ''}`
+    }
+    if (link.direction === 'outbound') return 'Not connected'
+    return link.last_used_at ? `Last connected ${when(link.last_used_at)}` : 'Never connected'
+  }
   const stopped = (slug: string) => {
     const agent = agents.find((a) => a.slug === slug)
     return !!agent && agent.status !== 'running'
@@ -371,6 +453,11 @@ export default function AgentLinksConnection({ active = true, onStatus }: {
             <code className="text-zinc-400">GET {http}/link/events?after=…</code> for answers and the agent's messages —
             or give the link a webhook and they're posted to it.
           </p>
+          <p className="text-[11px] leading-relaxed text-zinc-500">
+            A system that won't take connections from agents (an orchestrator) gets one from Flight Deck instead: choose
+            "Flight Deck connects to the system" and give its address and the key it issued. The conversation is the same;
+            Flight Deck says <code className="text-zinc-400">hello</code> first.
+          </p>
         </div>
 
         {fresh && (fresh.key || fresh.webhook_secret) && (
@@ -419,6 +506,7 @@ export default function AgentLinksConnection({ active = true, onStatus }: {
               submitLabel="Save"
               onSubmit={() => save(link)}
               onCancel={() => setEditing(null)}
+              editing
             />
           ) : (
             <div key={link.id} className="rounded-md border border-zinc-800 bg-zinc-950/40 px-3 py-2.5">
@@ -429,17 +517,20 @@ export default function AgentLinksConnection({ active = true, onStatus }: {
                 />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-zinc-200">{link.name || '(unnamed)'}</div>
-                  <div className={`text-[11px] ${link.connected ? 'text-emerald-600 dark:text-emerald-500' : 'text-zinc-500'}`}>
-                    {link.connected ? 'Connected now' : link.last_used_at ? `Last connected ${when(link.last_used_at)}` : 'Never connected'}
+                  <div className={`text-[11px] ${link.connected ? 'text-emerald-600 dark:text-emerald-500'
+                    : link.outbound?.state === 'waiting' ? 'text-amber-600 dark:text-amber-500' : 'text-zinc-500'}`}>
+                    {statusLine(link)}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-0.5">
                   <button type="button" onClick={() => edit(link)} disabled={!!busy} className="rounded p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50" title="Edit" aria-label={`Edit ${link.name}`}>
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
-                  <button type="button" onClick={() => rotate(link)} disabled={!!busy} className="rounded p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50" title="New key" aria-label={`New key for ${link.name}`}>
-                    {busy === `key:${link.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
-                  </button>
+                  {link.direction === 'inbound' && (
+                    <button type="button" onClick={() => rotate(link)} disabled={!!busy} className="rounded p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50" title="New key" aria-label={`New key for ${link.name}`}>
+                      {busy === `key:${link.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <KeyRound className="h-3.5 w-3.5" />}
+                    </button>
+                  )}
                   <button type="button" onClick={() => remove(link)} disabled={!!busy} className="rounded p-1.5 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 disabled:opacity-50" title="Remove" aria-label={`Remove ${link.name}`}>
                     {busy === `delete:${link.id}` ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                   </button>
@@ -452,7 +543,9 @@ export default function AgentLinksConnection({ active = true, onStatus }: {
                     <span className="text-amber-600 dark:text-amber-500"> · stopped — its messages fail until it runs</span>
                   )}
                 </span>
-                <span>Key …{link.key_hint}</span>
+                {link.direction === 'outbound'
+                  ? <span>Flight Deck connects to <span className="text-zinc-400">{hostOf(link.remote_url)}</span></span>
+                  : <span>Key …{link.key_hint}</span>}
                 <span>{link.agent_may_send ? 'The agent can message it' : 'Answers only'}</span>
                 {link.webhook_url && (
                   <span>

@@ -31,8 +31,10 @@ plus ``"link"``, signed — ``X-Captain-Signature: sha256=<hex HMAC-SHA256 of
 ``X-Captain-Event`` (its type) and ``X-Captain-Delivery`` (its seq); a failed
 POST is tried again three times (2, 10, 30 s), then the event waits for
 /link/events. Webhooks go to public https addresses only, unless
-``FD_LINK_WEBHOOKS_PRIVATE=1`` (an on-premises deck) also allows http and
-private ones; redirects aren't followed.
+``FD_LINK_PRIVATE_ADDRESSES=1`` (an on-premises deck; the older name
+``FD_LINK_WEBHOOKS_PRIVATE`` works too) also allows http and private ones;
+redirects aren't followed. The same rule holds for the systems Flight Deck
+connects out to (agent_link_out.py), with wss / ws.
 """
 
 from __future__ import annotations
@@ -122,23 +124,26 @@ def new_webhook_secret() -> str:
     return "whsec_" + secrets.token_urlsafe(32)
 
 
-def private_webhooks_allowed() -> bool:
-    return os.environ.get("FD_LINK_WEBHOOKS_PRIVATE", "").strip().lower() in ("1", "true", "yes", "on")
+def private_addresses_allowed() -> bool:
+    """An on-premises deck may reach plain (http / ws) and private addresses."""
+    return any(os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+               for name in ("FD_LINK_PRIVATE_ADDRESSES", "FD_LINK_WEBHOOKS_PRIVATE"))
 
 
-async def webhook_url_problem(url: str) -> str:
-    """"" when Flight Deck may post to *url*, else why not: a public https
-    address (http and private ones too with FD_LINK_WEBHOOKS_PRIVATE)."""
+async def address_problem(url: str, *, secure: str = "https", plain: str = "http") -> str:
+    """"" when Flight Deck may reach *url*, else why not: a public address
+    with the *secure* scheme (*plain* and private addresses too with
+    FD_LINK_PRIVATE_ADDRESSES)."""
     try:
         parts = urllib.parse.urlsplit(url.strip())
         port = parts.port
     except ValueError:
         return "That isn't a web address."
-    private_ok = private_webhooks_allowed()
-    if parts.scheme not in ("https", "http") or not parts.hostname:
-        return "Use an https:// address."
-    if parts.scheme == "http" and not private_ok:
-        return "Use an https:// address."
+    private_ok = private_addresses_allowed()
+    if parts.scheme not in (secure, plain) or not parts.hostname:
+        return f"Use a{'n' if secure[0] in 'aeiouh' else ''} {secure}:// address."
+    if parts.scheme == plain and not private_ok:
+        return f"Use a{'n' if secure[0] in 'aeiouh' else ''} {secure}:// address."
     if parts.username or parts.password:
         return "Leave the user name and password out of the address."
     if private_ok:
@@ -151,8 +156,13 @@ async def webhook_url_problem(url: str) -> str:
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if not ip.is_global:
-            return f"{host} is a private address ({ip}); Flight Deck posts only to public ones."
+            return f"{host} is a private address ({ip}); Flight Deck reaches only public ones."
     return ""
+
+
+async def webhook_url_problem(url: str) -> str:
+    """"" when Flight Deck may post to *url*, else why not."""
+    return await address_problem(url)
 
 
 # ── Delivering events ─────────────────────────────────────────────────

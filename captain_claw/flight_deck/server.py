@@ -947,6 +947,16 @@ async def lifespan(app: FastAPI):
     _app_rt = _get_app_runtime()
     await _app_rt.start()
     app.state.app_runtime = _app_rt
+    # ── Outbound agent links: Flight Deck connects out to the systems that
+    # won't take connections from agents (agent_link_out.py).
+    try:
+        from captain_claw.flight_deck import agent_link_out as _link_out
+
+        _n_out = await _link_out.start_all()
+        if _n_out:
+            print(f"Flight Deck: connecting out for {_n_out} agent link(s)")
+    except Exception as _out_exc:
+        print(f"Flight Deck: outbound agent links not started: {_out_exc}")
     # ── FD scheduler (proactive push: agent prompts on a timer → WhatsApp /
     # channel). Disable with FD_SCHEDULER_DISABLED=true. ──
     if os.environ.get("FD_SCHEDULER_DISABLED", "").lower() not in ("true", "1", "yes"):
@@ -1162,6 +1172,12 @@ async def lifespan(app: FastAPI):
     except Exception as _exc:
         print(f"Flight Deck: BotPort link not started: {_exc}")
     yield
+    try:
+        from captain_claw.flight_deck import agent_link_out as _link_out
+
+        await _link_out.stop_all()
+    except Exception:
+        pass
     try:
         from captain_claw.flight_deck.botport_link import get_link as _get_botport_link
 

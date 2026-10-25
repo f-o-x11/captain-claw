@@ -323,6 +323,32 @@ async def test_an_answer_landing_while_the_system_is_away_comes_on_the_reconnect
 
 
 @pytest.mark.asyncio
+async def test_a_kept_answer_sent_again_names_its_own_message(deck):
+    old = await deck.connect()
+    await deck.send(old, "m1", "first")
+    await deck.leave(old)
+    await deck.answer("one")
+    new = await deck.connect()
+    new.re = "m2"  # the worker already went on with the next message
+    await new.resume()
+    assert _after_bound(new) == [{"type": "reply", "text": "one", "re": "m1"},
+                                 {"type": "state", "state": "ready", "re": "m1"}]
+
+
+@pytest.mark.asyncio
+async def test_an_acked_answer_is_not_sent_again(deck):
+    old = await deck.connect()
+    await deck.send(old, "m1", "first")
+    await deck.answer("one")
+    old.acked("m1")
+    await deck.leave(old)
+    new = await deck.connect()
+    await new.resume()
+    assert _after_bound(new) == []
+    old.acked("nope")  # someone else's id changes nothing
+
+
+@pytest.mark.asyncio
 async def test_a_message_waits_for_the_system_to_come_back(deck):
     old = await deck.connect()
     await deck.send(old, "m1", "first")
@@ -392,6 +418,23 @@ async def test_a_removed_link_is_closed_and_forgets_what_was_waiting(deck):
     await deck.answer("one")
     await asyncio.sleep(0.05)
     assert [f["content"] for f in deck.agent.frames] == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_a_message_that_never_reached_the_agent_can_be_sent_again(deck, monkeypatch):
+    monkeypatch.setattr(al, "_link_agent", lambda user_id, slug: None)
+    conn = al._LinkConn(_WS(), {"id": "u1"}, dict(LINK))
+    al._live[conn.channel_id] = conn
+    await deck.send(conn, "m1", "first")
+    assert conn.ws.sent[-1] == {"type": "state", "state": "ready", "re": "m1"}  # it failed
+    monkeypatch.setattr(al, "_link_agent", lambda user_id, slug: {"name": "A", "slug": "a", "port": 1})
+    await deck.send(conn, "m1", "first")
+    assert {"type": "accepted", "id": "m1", "queued": 0} in conn.ws.sent[-3:]
+    assert [f["content"] for f in deck.agent.frames] == ["first"]  # this time it ran
+    await deck.answer("one")
+    await deck.send(conn, "m1", "first")  # now it did reach the agent: a duplicate
+    assert {"type": "accepted", "id": "m1", "duplicate": True} in conn.ws.sent
+    assert len(deck.agent.frames) == 1
 
 
 @pytest.mark.asyncio

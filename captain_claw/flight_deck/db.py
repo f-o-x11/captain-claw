@@ -842,6 +842,11 @@ class FlightDeckDB:
                 agent_may_send   INTEGER NOT NULL DEFAULT 1,
                 webhook_url      TEXT NOT NULL DEFAULT '',
                 webhook_secret   TEXT NOT NULL DEFAULT '',
+                -- 'outbound': Flight Deck connects out to remote_url with the
+                -- system's key (remote_key, sealed) — agent_link_out.py.
+                direction        TEXT NOT NULL DEFAULT 'inbound',
+                remote_url       TEXT NOT NULL DEFAULT '',
+                remote_key       TEXT NOT NULL DEFAULT '',
                 created_at       TEXT NOT NULL,
                 updated_at       TEXT NOT NULL,
                 last_used_at     TEXT
@@ -1054,6 +1059,9 @@ class FlightDeckDB:
             ("agent_links", "agent_may_send", "INTEGER NOT NULL DEFAULT 1"),
             ("agent_links", "webhook_url", "TEXT NOT NULL DEFAULT ''"),
             ("agent_links", "webhook_secret", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_links", "direction", "TEXT NOT NULL DEFAULT 'inbound'"),
+            ("agent_links", "remote_url", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_links", "remote_key", "TEXT NOT NULL DEFAULT ''"),
         ]:
             try:
                 await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
@@ -1433,26 +1441,29 @@ class FlightDeckDB:
     # its hash is kept.
 
     _AGENT_LINK_FIELDS = ("name", "agent_slug", "instructions", "agent_session_id",
-                          "agent_may_send", "webhook_url", "webhook_secret")
+                          "agent_may_send", "webhook_url", "webhook_secret",
+                          "direction", "remote_url", "remote_key")
     LINK_EVENTS_KEPT_DAYS = 7
     LINK_EVENTS_KEPT = 500  # per link
 
     async def create_agent_link(self, user_id: str, *, name: str, agent_slug: str,
                                 instructions: str, key_hash: str, key_hint: str,
                                 agent_may_send: bool = True, webhook_url: str = "",
-                                webhook_secret: str = "") -> dict:
+                                webhook_secret: str = "", direction: str = "inbound",
+                                remote_url: str = "", remote_key: str = "") -> dict:
         assert self._db is not None
         now = _utcnow()
         row = {"id": _uuid(), "user_id": user_id, "name": name, "agent_slug": agent_slug,
                "instructions": instructions, "key_hash": key_hash, "key_hint": key_hint,
                "agent_session_id": "", "agent_may_send": int(agent_may_send), "webhook_url": webhook_url,
-               "webhook_secret": webhook_secret, "created_at": now, "updated_at": now, "last_used_at": None}
+               "webhook_secret": webhook_secret, "direction": direction, "remote_url": remote_url,
+               "remote_key": remote_key, "created_at": now, "updated_at": now, "last_used_at": None}
         await self._db.execute(
             "INSERT INTO agent_links (id, user_id, name, agent_slug, instructions, key_hash, key_hint,"
-            " agent_session_id, agent_may_send, webhook_url, webhook_secret, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)",
+            " agent_session_id, agent_may_send, webhook_url, webhook_secret, direction, remote_url,"
+            " remote_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)",
             (row["id"], user_id, name, agent_slug, instructions, key_hash, key_hint,
-             int(agent_may_send), webhook_url, webhook_secret, now, now),
+             int(agent_may_send), webhook_url, webhook_secret, direction, remote_url, remote_key, now, now),
         )
         await self._db.commit()
         return row
@@ -1474,6 +1485,12 @@ class FlightDeckDB:
         rows = await self._db.execute_fetchall(
             "SELECT * FROM agent_links WHERE user_id = ? ORDER BY created_at DESC", (user_id,),
         )
+        return [dict(r) for r in rows]
+
+    async def list_outbound_links(self) -> list[dict]:
+        """Every link Flight Deck connects out from (all owners), for start-up."""
+        assert self._db is not None
+        rows = await self._db.execute_fetchall("SELECT * FROM agent_links WHERE direction = 'outbound'")
         return [dict(r) for r in rows]
 
     async def update_agent_link(self, link_id: str, user_id: str, **fields: str | int) -> bool:
