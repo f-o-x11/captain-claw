@@ -647,6 +647,35 @@ How it works:
 The result is one labelled section per URL (`[URL]/[Status]/[Mode: fast|deep]`)
 plus a header summary (`Fetched 8/10 URLs (2 via deep browser, 0 failed)`).
 
+#### Pictures for reports
+
+`web_fetch` and `web_fetch_batch` keep the pictures a page shows that could
+matter to the research — ones with a real description (a caption, alt text that
+says what they show, a title) inside the page's content, not logos, icons,
+avatars, share buttons, ads or "related" teasers — and end each page's result
+with an `[Images …]` list: saved path, size, caption/alt, section, nearby text
+and the original URL. `web_fetch` on an image URL saves that picture.
+
+- **Where:** `saved/media/<session>/web-images/` (a `.json` sidecar per picture
+  and an `index.md`); a Flight Deck run's workers share
+  `vfs:<project>/sources/images/` so the reporter sees every teammate's.
+- **Checked and fitted:** downloads go through the public-only client (a page
+  can't point the agent at a private address), must really be an image, are
+  refused when icon-sized or banner-shaped, and WebP/AVIF/TIFF or oversized
+  photos are re-encoded to JPEG/PNG ≤ 1600 px — so python-docx can use them.
+- **In reports:** `.md` links the original URL (the write/edit tools swap a
+  saved path for it); `.html` gets every `<img>` embedded inline as base64 by
+  the write/edit tools (saved copies, local image files, and remote URLs, which
+  are fetched and saved on write), so the file stands alone; `.docx` uses
+  `doc.add_picture(<saved path>)`. Reading an HTML report back shows its pictures
+  as short `[inline image …]` placeholders, which edit/write put back — the
+  base64 never floods the context, and the read/edit size limits ignore it.
+- **Not for:** a shared agent's members (they get the original URLs only), and
+  a code agent's repo files (`<img src="logo.png">` stays a file reference).
+- **Tunable** under `tools.web_fetch`: `save_images` (default on),
+  `images_per_page` (4), `images_per_batch` (16). The Flight Deck File library
+  skips `web-images/` folders (no vision summary per picture).
+
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `urls` | array | yes | URLs to fetch (processed in parallel) |

@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from captain_claw import research_images
 from captain_claw.logging import get_logger
 from captain_claw.tools.registry import Tool, ToolResult
 from captain_claw.vfs import is_vfs_path, resolve_vfs_path
@@ -56,7 +57,7 @@ class EditTool(Tool):
         "much faster and cheaper. Each item is {action?, old_string?, new_string?, "
         "start_line?, end_line?}; action defaults to replace_string."
     )
-    timeout_seconds = 15.0
+    timeout_seconds = 40.0  # local edit; an HTML report may fetch pictures it now names
     parameters = {
         "type": "object",
         "properties": {
@@ -171,11 +172,12 @@ class EditTool(Tool):
             if not file_path.is_file():
                 return ToolResult(success=False, error=f"Not a file: {path}")
 
-            # Size check
+            # Size check — an HTML report's inline pictures don't count: they
+            # are edited as short placeholders (research_images).
             from captain_claw.config import get_config
             max_bytes = get_config().tools.edit.max_file_bytes
             file_size = file_path.stat().st_size
-            if file_size > max_bytes:
+            if file_size > max_bytes and research_images.collapsed_size(file_path) > max_bytes:
                 return ToolResult(success=False, error=f"File too large: {file_size} bytes (max {max_bytes})")
 
             # Handle undo specially (doesn't need to read the file first)
@@ -201,6 +203,10 @@ class EditTool(Tool):
             if "\x00" in sample:
                 return ToolResult(success=False, error=f"File appears to be binary: {path}")
 
+            # Inline base64 pictures are edited as the placeholders `read`
+            # shows; _commit puts them back.
+            content, inline_images = research_images.collapse_inline_images(content)
+
             # Detect line ending style
             line_ending = "\r\n" if "\r\n" in content else "\n"
 
@@ -219,10 +225,13 @@ class EditTool(Tool):
             backup_path = None if member else self._create_backup(file_path, kwargs)
             shown = self._member_display(file_path) if member else str(file_path)
 
+            commit_ctx = {"inline_images": inline_images, "member": member, "kwargs": kwargs}
+
             # Batch mode: apply every edit in one read/write cycle.
             if batch_mode:
-                return self._apply_batch(
+                return await self._apply_batch(
                     file_path, content, line_ending, edits, backup_path, shown=shown,
+                    commit_ctx=commit_ctx,
                 )
 
             # Dispatch to action handler
@@ -232,13 +241,15 @@ class EditTool(Tool):
                 return ToolResult(success=False, error=result.error)
 
             # Atomic write
-            self._atomic_write(file_path, result.content)
+            images_note = await self._commit(file_path, result.content, commit_ctx)
 
             # Build response
             summary = result.summary
             if backup_path:
                 summary += f"\nBackup: {backup_path}"
             summary += f"\nFile: {shown}"
+            if images_note:
+                summary += f"\n{images_note}"
 
             return ToolResult(success=True, content=summary)
 
@@ -437,7 +448,33 @@ class EditTool(Tool):
 
     # ── Batch application ───────────────────────────────────────────
 
-    def _apply_batch(
+    async def _commit(self, file_path: Path, content: str, ctx: dict[str, Any] | None) -> str:
+        """Write edited *content*: inline pictures put back from their
+        placeholders, then (an HTML report) new ``<img>`` pictures embedded as
+        base64 or (a Markdown report) saved pictures linked by their original
+        URL. Returns a note on what was done with them ('' for none)."""
+        ctx = ctx or {}
+        member = bool(ctx.get("member"))
+        kwargs = ctx.get("kwargs") or {}
+        stores = None if member else research_images.lookup_stores(kwargs)
+        content, _, missing = research_images.restore_inline_images(
+            content, ctx.get("inline_images") or {}, stores)
+        report = research_images.ReportImages()
+        report.failed.extend((f"[inline image {sha}]", "picture not found") for sha in missing)
+        suffix = file_path.suffix.lower()
+        if not member and not research_images.code_mode():
+            if suffix in research_images.HTML_SUFFIXES:
+                content, embedded = await research_images.embed_html_images(
+                    content, kwargs, file_path=file_path)
+                report.embedded, report.embedded_bytes = embedded.embedded, embedded.embedded_bytes
+                report.failed.extend(embedded.failed)
+            elif suffix in research_images.MD_SUFFIXES:
+                content, linked = research_images.link_markdown_images(content, kwargs, file_path)
+                report.linked = linked.linked
+        self._atomic_write(file_path, content)
+        return report.note()
+
+    async def _apply_batch(
         self,
         file_path: Path,
         content: str,
@@ -446,6 +483,7 @@ class EditTool(Tool):
         backup_path: str | None,
         *,
         shown: str | None = None,
+        commit_ctx: dict[str, Any] | None = None,
     ) -> ToolResult:
         """Apply many edits to one file in a single read/write cycle.
 
@@ -488,8 +526,9 @@ class EditTool(Tool):
                 first_line = res.summary.splitlines()[0] if res.summary else "ok"
                 outcomes.append((i, True, first_line))
 
+        images_note = ""
         if any_ok:
-            self._atomic_write(file_path, cur)
+            images_note = await self._commit(file_path, cur, commit_ctx)
 
         ok_n = sum(1 for _, ok, _ in outcomes if ok)
         fail_n = len(outcomes) - ok_n
@@ -499,6 +538,8 @@ class EditTool(Tool):
         if backup_path:
             lines.append(f"Backup: {backup_path}")
         lines.append(f"File: {shown if shown is not None else file_path}")
+        if images_note:
+            lines.append(images_note)
         summary = "\n".join(lines)
 
         # Success when at least one edit applied; failures are surfaced in the

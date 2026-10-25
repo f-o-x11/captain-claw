@@ -11,6 +11,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 import httpx
 
+from captain_claw import research_images
 from captain_claw.config import get_config
 from captain_claw.google_ids import google_drive_can_open, google_drive_redirect
 from captain_claw.logging import get_logger
@@ -229,9 +230,20 @@ def _make_http_client() -> httpx.AsyncClient:
     )
 
 
-def _extract_readable_text(html: str, base_url: str | None = None) -> str:
-    """Extract human-readable text from raw HTML."""
+def _extract_readable_text(html: str, base_url: str | None = None,
+                           images: list | None = None) -> str:
+    """Extract human-readable text from raw HTML.
+
+    With *images*, the page's relevant-looking pictures (research_images) are
+    appended to it — found on the same parse, before anything is stripped.
+    """
     soup = BeautifulSoup(html, "html.parser")
+
+    if images is not None:
+        try:
+            images.extend(research_images.find_page_images(soup, base_url))
+        except Exception as e:  # noqa: BLE001 — pictures are extra, never break a fetch
+            log.debug("page image scan failed", url=base_url, error=str(e))
 
     for tag in soup(["script", "style", "noscript", "template", "svg", "canvas"]):
         tag.decompose()
@@ -263,6 +275,68 @@ def _extract_readable_text(html: str, base_url: str | None = None) -> str:
     if title and not text.startswith(title):
         return f"{title}\n\n{text}" if text else title
     return text
+
+
+# ── Pictures for reports (research_images) ────────────────────────────
+# A fetched page's relevant-looking pictures are saved and listed at the end of
+# the result, so a report can show them; a shared-agent member gets the list
+# of original URLs only (nothing is written to the agent's folders for them).
+_IMAGE_BUDGET_S = 12.0        # one page's downloads (web_fetch)
+_BATCH_IMAGE_BUDGET_S = 15.0  # all pages' downloads together (web_fetch_batch)
+
+
+def _images_on() -> bool:
+    try:
+        return bool(getattr(get_config().tools.web_fetch, "save_images", True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _images_per_page() -> int:
+    try:
+        return max(0, int(getattr(get_config().tools.web_fetch, "images_per_page", 4)))
+    except Exception:  # noqa: BLE001
+        return 4
+
+
+async def _page_images_block(page_url: str, images: list, kwargs: dict[str, Any], *,
+                             limit: int, budget_s: float, member: bool,
+                             client: Any = None) -> str:
+    """The ``[Images …]`` block a fetch result ends with ('' when none)."""
+    if not images or limit <= 0:
+        return ""
+    if member:
+        return research_images.format_unsaved(images, limit)
+    try:
+        store = research_images.ImageStore.for_tool(kwargs)
+        saved = await research_images.save_page_images(
+            images, page_url, store, limit=limit, budget_s=budget_s, client=client)
+    except Exception as e:  # noqa: BLE001 — pictures are extra, never break a fetch
+        log.warning("page images not saved", url=page_url, error=str(e))
+        return ""
+    return research_images.format_saved(saved)
+
+
+def _earlier_images_block(page_url: str, kwargs: dict[str, Any]) -> str:
+    """Pictures already saved from *page_url* (a page the run fetched before)."""
+    try:
+        return research_images.format_saved(
+            research_images.ImageStore.for_tool(kwargs).for_page(page_url), earlier=True)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _with_block(content: str, block: str) -> str:
+    return f"{content}\n\n{block}" if block else content
+
+
+async def _save_image_bytes(data: bytes, url: str, kwargs: dict[str, Any]) -> Any:
+    """Keep a picture web_fetch was pointed at directly (None if it isn't one)."""
+    fitted = await asyncio.to_thread(research_images.normalize_image, data, check_size=False)
+    if fitted is None:
+        return None
+    store = research_images.ImageStore.for_tool(kwargs)
+    return await asyncio.to_thread(store.save, *fitted, url=url)
 
 
 _LOAD_MORE_PATTERNS = [
@@ -426,8 +500,12 @@ class WebFetchTool(Tool):
         "Fetch a URL and return clean readable text (no HTML). "
         "This is the default tool for reading web pages. Always extracts text. "
         "Uses a headless browser by default (deep_fetch=true) for JS-rendered pages; "
-        "pass deep_fetch=false for a faster plain HTTP fetch on simple/static pages."
+        "pass deep_fetch=false for a faster plain HTTP fetch on simple/static pages. "
+        "Pictures on the page that could matter (described by alt text, a caption or "
+        "the text around them) are saved for reports and listed at the end; fetching "
+        "an image URL saves that picture."
     )
+    timeout_seconds = 50.0  # a deep fetch (≤ ~25 s) plus its pictures (≤ 12 s)
     parameters = {
         "type": "object",
         "properties": {
@@ -497,6 +575,10 @@ class WebFetchTool(Tool):
                 return ToolResult(success=False, error=gdrive_block)
 
         body_truncated = False
+        want_images = _images_on()
+        # An image URL is a picture to keep for a report, not a page to read.
+        if want_images and not member and research_images.looks_like_image_url(url):
+            return await self._fetch_image(url, kwargs)
         # In-turn context governor: a page the run already fetched comes back
         # as its saved copy's pointer + a short preview, and a new page is
         # fetched whole, saved to the run's sources/, and returned as head +
@@ -508,7 +590,11 @@ class WebFetchTool(Tool):
         if governed:
             found = _spill.find_fetched(url)
             if found:
-                return ToolResult(success=True, content=_spill.dedupe_view(url, found, _agent))
+                view = _spill.dedupe_view(url, found, _agent)
+                if want_images:
+                    view = _with_block(view, _earlier_images_block(url, kwargs))
+                return ToolResult(success=True, content=view)
+        images: list | None = [] if want_images else None
         try:
             cfg = get_config()
             configured_max = int(getattr(cfg.tools.web_fetch, "max_chars", 200000))
@@ -540,24 +626,36 @@ class WebFetchTool(Tool):
                 log.info("Fetching URL (text mode)", url=url)
                 response = await self.client.get(url)
                 response.raise_for_status()
+                ctype = str(getattr(response, "headers", {}).get("content-type") or "").lower()
+                if want_images and ctype.startswith("image/"):
+                    entry = await _save_image_bytes(response.content, url, kwargs)
+                    if entry is not None:
+                        return ToolResult(success=True,
+                                          content=research_images.format_direct(entry))
+                    return ToolResult(success=False, error=(
+                        f"{url} is a picture ({ctype}) that could not be read or saved."))
                 raw_html = response.text
                 status_code = response.status_code
                 mode = "text"
 
-            content = _extract_readable_text(raw_html, base_url=url)
+            content = _extract_readable_text(raw_html, base_url=url, images=images)
+            block = await _page_images_block(
+                url, images or [], kwargs, limit=_images_per_page(),
+                budget_s=_IMAGE_BUDGET_S, member=member)
 
             if governed:
-                return ToolResult(success=True, content=_governed_page_output(
+                return ToolResult(success=True, content=_with_block(_governed_page_output(
                     url, status_code, mode, len(raw_html), content[:_spill.SPILL_SOURCE_MAX],
-                    max_chars, _agent))
+                    max_chars, _agent), block))
 
             # R10: in a corpus run, save the FULL text and return a head + pointer.
             saved = None if member else _save_source_to_corpus(url, content)
             if saved:
                 return ToolResult(
                     success=True,
-                    content=_corpus_output(url, status_code, mode, len(raw_html), content, saved,
-                                           head_chars=effective_max_chars),
+                    content=_with_block(_corpus_output(
+                        url, status_code, mode, len(raw_html), content, saved,
+                        head_chars=effective_max_chars), block),
                 )
 
             if len(content) > effective_max_chars:
@@ -576,7 +674,7 @@ class WebFetchTool(Tool):
 
             return ToolResult(
                 success=True,
-                content=output,
+                content=_with_block(output, block),
             )
 
         except httpx.HTTPError as e:
@@ -591,6 +689,20 @@ class WebFetchTool(Tool):
                 success=False,
                 error=str(e),
             )
+
+    async def _fetch_image(self, url: str, kwargs: dict[str, Any]) -> ToolResult:
+        """Save the picture at *url* for a report (public addresses only)."""
+        store = research_images.ImageStore.for_tool(kwargs)
+        client = research_images.make_client()
+        try:
+            entry = await research_images.save_remote(store, client, url, check_size=False)
+        finally:
+            await client.aclose()
+        if entry is None:
+            return ToolResult(success=False, error=(
+                f"Could not save the picture at {url}: it is unreachable (or on a private "
+                "address), not an image, or larger than 12 MB."))
+        return ToolResult(success=True, content=research_images.format_direct(entry))
 
     async def close(self):
         """Close the HTTP client."""
@@ -761,7 +873,8 @@ def _looks_thin(content: str, status: int, min_chars: int, raw_html_len: int) ->
 
 
 class _Outcome:
-    __slots__ = ("url", "ok", "mode", "status", "content", "error", "needs_deep", "salvaged")
+    __slots__ = ("url", "ok", "mode", "status", "content", "error", "needs_deep", "salvaged",
+                 "images")
 
     def __init__(self, url: str):
         self.url = url
@@ -772,6 +885,7 @@ class _Outcome:
         self.error = ""
         self.needs_deep = False
         self.salvaged = False
+        self.images: list = []
 
 
 class WebFetchBatchTool(Tool):
@@ -783,7 +897,8 @@ class WebFetchBatchTool(Tool):
         "Use this instead of repeated web_fetch calls when you have several URLs to "
         "read — e.g. the results of a web_search. Each URL self-corrects: a fast HTTP "
         "fetch first, escalating to a headless browser only when the page is thin or "
-        "JS-rendered. Pass a 'urls' list; returns one labelled section per URL."
+        "JS-rendered. Pass a 'urls' list; returns one labelled section per URL, each "
+        "ending with the pictures saved from that page for reports (if any)."
     )
     timeout_seconds = 120.0  # parallel batch; deep-mode escalation can be slow
     parameters = {
@@ -890,7 +1005,8 @@ class WebFetchBatchTool(Tool):
                     try:
                         resp = await self.client.get(u, timeout=fast_timeout)
                         oc.status = resp.status_code
-                        text = _extract_readable_text(resp.text, base_url=u)
+                        oc.images = []
+                        text = _extract_readable_text(resp.text, base_url=u, images=oc.images)
                         if _looks_thin(text, resp.status_code, min_useful, len(resp.text)):
                             oc.needs_deep = True
                             oc.content = text  # keep partial in case deep is unavailable
@@ -926,13 +1042,48 @@ class WebFetchBatchTool(Tool):
                 oc.mode = "fast"
                 oc.salvaged = True
 
+        blocks = await self._image_blocks(targets, outcomes, saved_hits, kwargs,
+                                          member=_speaker.principal_for(_agent) is not None)
         if governed:
             return self._aggregate_governed(targets, outcomes, saved_hits, overflow,
-                                            deep_unavailable, max_chars, _agent)
-        return self._aggregate(targets, outcomes, per_url_cap, total_cap, overflow, deep_unavailable)
+                                            deep_unavailable, max_chars, _agent, blocks)
+        return self._aggregate(targets, outcomes, per_url_cap, total_cap, overflow,
+                               deep_unavailable, blocks)
+
+    async def _image_blocks(self, targets, outcomes, saved_hits, kwargs, *,
+                            member: bool) -> dict[str, str]:
+        """Each page's ``[Images …]`` block: its pictures saved (all pages at
+        once, within one budget), at most ``images_per_batch`` in the batch."""
+        if not _images_on():
+            return {}
+        blocks: dict[str, str] = {}
+        if not member:
+            for u in saved_hits:
+                blocks[u] = _earlier_images_block(u, kwargs)
+        pages = [u for u in targets if outcomes[u].ok and outcomes[u].images
+                 and u not in saved_hits]
+        if not pages:
+            return blocks
+        try:
+            total = max(0, int(getattr(get_config().tools.web_fetch, "images_per_batch", 16)))
+        except Exception:  # noqa: BLE001
+            total = 16
+        per_page = min(_images_per_page(), max(1, total // len(pages))) if total else 0
+        client = None if member else research_images.make_client()
+        try:
+            found = await asyncio.gather(*[
+                _page_images_block(u, outcomes[u].images, kwargs, limit=per_page,
+                                   budget_s=_BATCH_IMAGE_BUDGET_S, member=member, client=client)
+                for u in pages
+            ])
+        finally:
+            if client is not None:
+                await client.aclose()
+        blocks.update(zip(pages, found))
+        return blocks
 
     def _aggregate_governed(self, targets, outcomes, saved_hits, overflow, deep_unavailable,
-                            requested, agent) -> ToolResult:
+                            requested, agent, blocks=None) -> ToolResult:
         """Governed batch output: every page saved in full (the run's shared
         sources/ when there is one), each shown as its share of one inline
         result — head + pointer — so the batch never floods the context."""
@@ -981,7 +1132,9 @@ class WebFetchBatchTool(Tool):
             notes.append(f"{len(overflow)} URL(s) exceeded the per-call cap and were NOT fetched. "
                          f"Call web_fetch_batch again with: {overflow}")
         out = header + ("\n" + "\n".join(f"- {n}" for n in notes) if notes else "")
-        out += "\n\n" + "\n\n---\n\n".join(sections)
+        blocks = blocks or {}
+        out += "\n\n" + "\n\n---\n\n".join(
+            _with_block(s, blocks.get(u, "")) for u, s in zip(targets, sections))
         return ToolResult(success=True, content=out)
 
     async def _deep_phase(self, deep_urls: list[str], outcomes: dict, deep_conc: int) -> bool:
@@ -1010,7 +1163,9 @@ class WebFetchBatchTool(Tool):
                         )
                         page = await context.new_page()
                         html = await _deep_fetch_page(page, u)
-                        oc.content = _extract_readable_text(html, base_url=u)
+                        images: list = []
+                        oc.content = _extract_readable_text(html, base_url=u, images=images)
+                        oc.images = images
                         oc.ok = True
                         oc.mode = "deep"
                         oc.status = 200
@@ -1039,7 +1194,8 @@ class WebFetchBatchTool(Tool):
             except Exception:
                 pass
 
-    def _aggregate(self, targets, outcomes, per_url_cap, total_cap, overflow, deep_unavailable) -> ToolResult:
+    def _aggregate(self, targets, outcomes, per_url_cap, total_cap, overflow, deep_unavailable,
+                   blocks=None) -> ToolResult:
         ok_count = sum(1 for u in targets if outcomes[u].ok)
         deep_count = sum(1 for u in targets if outcomes[u].mode == "deep")
         fail_count = len(targets) - ok_count
@@ -1092,7 +1248,9 @@ class WebFetchBatchTool(Tool):
         out = header
         if notes:
             out += "\n" + "\n".join(f"- {n}" for n in notes)
-        out += "\n\n" + "\n\n---\n\n".join(sections)
+        blocks = blocks or {}
+        out += "\n\n" + "\n\n---\n\n".join(
+            _with_block(s, blocks.get(u, "")) for u, s in zip(targets, sections))
         return ToolResult(success=True, content=out)
 
     async def close(self):

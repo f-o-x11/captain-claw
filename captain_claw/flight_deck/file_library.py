@@ -96,10 +96,12 @@ KINDS: list[tuple[str, str]] = [
     ("media", "Audio & video"), ("archive", "Archives"), ("config", "Config & logs"),
 ]
 
-# Never descended into while walking a workspace (the agent's own list, and
-# the stills video_vision cuts out of a video while it watches one).
+# Never descended into while walking a workspace (the agent's own list, the
+# stills video_vision cuts out of a video while it watches one, and the
+# pictures web_fetch keeps for reports — material, one vision call each).
 _SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__",
-              "dist", "build", ".datastore", ".history", ".reports", "video_frames"}
+              "dist", "build", ".datastore", ".history", ".reports", "video_frames",
+              "web-images"}
 # Files per agent a walk lists at most — a runaway workspace can't stall a scan.
 _MAX_FILES_PER_AGENT = 3000
 # Files a single scan summarises at most; the next scan picks up the rest.

@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from captain_claw import saved_attribution, write_guard
+from captain_claw import research_images, saved_attribution, write_guard
 from captain_claw.logging import get_logger
 from captain_claw.tools.registry import Tool, ToolResult
 from captain_claw.vfs import is_vfs_path, project_is_readonly, resolve_vfs_path, split_scheme
@@ -44,7 +44,8 @@ class WriteTool(Tool):
 
     name = "write"
     description = "Create or overwrite a file with content."
-    timeout_seconds = 10.0  # local file write — 10 s is ample
+    # Local file write; an HTML report may fetch the remote pictures it names.
+    timeout_seconds = 40.0
     parameters = {
         "type": "object",
         "properties": {
@@ -162,6 +163,43 @@ class WriteTool(Tool):
         except ValueError:
             fallback = (saved_root / "tmp" / session_id / safe_parts[-1]).resolve()
             return fallback
+
+    @staticmethod
+    async def _report_images(content: str, file_path: Path, suffix: str,
+                             kwargs: dict[str, Any]) -> tuple[str, str]:
+        """``(content, note)`` with a report's pictures handled (see research_images).
+
+        Placeholders a `read` showed are put back from the file being replaced
+        (any text file); embedding and linking are for reports only — never for
+        a code agent's repo files or a shared-agent member's writes.
+        """
+        from captain_claw import speaker as _speaker
+
+        if "[inline image " not in content and suffix not in (
+                research_images.HTML_SUFFIXES | research_images.MD_SUFFIXES):
+            return content, ""
+        member = _speaker.member_bound()
+        previous = ""
+        if file_path.is_file() and "[inline image " in content:
+            try:
+                previous = file_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                previous = ""
+        if member or research_images.code_mode():
+            _, mapping = research_images.collapse_inline_images(previous)
+            content, _, _ = research_images.restore_inline_images(content, mapping)
+            return content, ""
+        if suffix in research_images.HTML_SUFFIXES:
+            content, report = await research_images.embed_html_images(
+                content, kwargs, file_path=file_path, previous=previous)
+            return content, report.note()
+        stores = research_images.lookup_stores(kwargs)
+        _, mapping = research_images.collapse_inline_images(previous)
+        content, _, _ = research_images.restore_inline_images(content, mapping, stores)
+        if suffix in research_images.MD_SUFFIXES:
+            content, report = research_images.link_markdown_images(content, kwargs, file_path)
+            return content, report.note()
+        return content, ""
 
     async def execute(self, path: str, content: str, append: bool = False,
                       overwrite: bool = False, **kwargs: Any) -> ToolResult:
@@ -380,7 +418,13 @@ class WriteTool(Tool):
             if not append and file_path.exists():
                 try:
                     _prev_size = file_path.stat().st_size
-                    _prev_lines = file_path.read_text(encoding="utf-8", errors="replace").count("\n") + 1
+                    _prev_text = file_path.read_text(encoding="utf-8", errors="replace")
+                    _prev_lines = _prev_text.count("\n") + 1
+                    if file_path.suffix.lower() in research_images.HTML_SUFFIXES:
+                        # Inline pictures don't count: a rewrite carries them
+                        # as the placeholders `read` showed.
+                        _prev_size = len(research_images.collapse_inline_images(
+                            _prev_text)[0].encode("utf-8"))
                     new_size = len(content.encode("utf-8"))
                     # Only fire on substantive shrinks (50%+ reduction) and
                     # only when the previous file was meaningful (>= 1 KB).
@@ -476,6 +520,11 @@ class WriteTool(Tool):
             suffix = file_path.suffix.lower()
             if suffix in ('.html', '.htm', '.svg', '.xml', '.xhtml'):
                 content = html.unescape(content)
+
+            # Pictures in a report (research_images): an HTML report gets them
+            # inline as base64 so it stands alone; a Markdown report links each
+            # saved picture by its original URL.
+            content, _images_note = await self._report_images(content, file_path, suffix, kwargs)
 
             # Write file
             mode = "a" if append else "w"
@@ -594,6 +643,8 @@ class WriteTool(Tool):
                 )
             if _repair_note:
                 _hint = f"Wrote the declared name{_repair_note}. {_hint}"
+            if _images_note:
+                result_msg = f"{result_msg}\n{_images_note}"
             return ToolResult(
                 success=True,
                 content=result_msg,

@@ -277,6 +277,11 @@ class WebFetchToolConfig(BaseModel):
     batch_min_useful_chars: int = 500      # below this ⇒ retry the URL in deep mode
     batch_fast_timeout: float = 15.0       # seconds, plain-HTTP phase per URL
 
+    # ── Pictures for reports (captain_claw/research_images.py) ──
+    save_images: bool = True       # keep a page's relevant-looking pictures + list them
+    images_per_page: int = 4       # most kept from one page
+    images_per_batch: int = 16     # most kept across one web_fetch_batch call
+
 
 class WebSearchToolConfig(BaseModel):
     """Web search tool configuration.
