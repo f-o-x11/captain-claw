@@ -9,6 +9,7 @@ user's VFS root; ``..`` traversal is rejected.
 from __future__ import annotations
 
 import mimetypes
+import os
 import shutil
 from pathlib import Path
 
@@ -761,17 +762,15 @@ async def read_file(project: str, path: str, owner: str = "",
             "binary": False, "truncated": False, "text": text}
 
 
-@router.get("/download")
-async def download_file(project: str, path: str, owner: str = "",
-                        user: dict = Depends(get_current_user)):
-    """Stream a file as a download.
+async def _served_file(user_id: str, project: str, path: str, owner: str) -> tuple[Path, str]:
+    """The file a download or view of (project, path) serves, and its name.
 
     For a Google Drive mount the panel *previews* the converted markdown, but a
     download must be the ORIGINAL file (the real .docx/.pdf/.xls), not the
     placeholder marker on disk. Fetch the real bytes on demand and serve them
     under the original name; cloned and ordinary files serve straight from disk.
     """
-    oid = await _eff_owner(user["id"], project, owner, write=False)
+    oid = await _eff_owner(user_id, project, owner, write=False)
     target = _resolve(oid, project, path)
     if not target.is_file():
         raise HTTPException(404, "file not found")
@@ -796,9 +795,161 @@ async def download_file(project: str, path: str, owner: str = "",
         raise
     except Exception as exc:
         log.debug("Drive download materialize skipped: %s", exc)
+    return serve, download_name
 
+
+@router.get("/download")
+async def download_file(project: str, path: str, owner: str = "",
+                        user: dict = Depends(get_current_user)):
+    """Stream a file as a download (a Drive file as its original, see _served_file)."""
+    serve, download_name = await _served_file(user["id"], project, path, owner)
     media = mimetypes.guess_type(download_name)[0] or "application/octet-stream"
     return FileResponse(serve, filename=download_name, media_type=media)
+
+
+@router.get("/view")
+async def view_file(project: str, path: str, owner: str = "",
+                    user: dict = Depends(get_current_user)):
+    """The file inline, for the kiosk's previews and viewer (and a PDF in its
+    own tab). Like the File library's view route: never sniffed, and a type a
+    browser runs as a document (HTML, SVG, XML) is sandboxed onto an opaque
+    origin, so a page an agent saved can't reach Flight Deck's own."""
+    from captain_claw.web import active_content
+
+    serve, name = await _served_file(user["id"], project, path, owner)
+    media = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if active_content.active_view_type(media):
+        headers["Content-Security-Policy"] = active_content.ACTIVE_VIEW_CSP
+    return FileResponse(serve, filename=name, media_type=media, headers=headers,
+                        content_disposition_type="inline")
+
+
+@router.get("/thumb")
+async def thumb_file(project: str, path: str, owner: str = "",
+                     user: dict = Depends(get_current_user)):
+    """A PNG of a PDF's first page — the File library's renderer and cache."""
+    from captain_claw.flight_deck import file_library
+
+    serve, name = await _served_file(user["id"], project, path, owner)
+    if not name.lower().endswith(".pdf"):
+        raise HTTPException(404, "no thumbnail for this kind of file")
+    st = serve.stat()
+    key = (f"vfs\0{user['id']}\0{owner}\0{project}\0{path}", int(st.st_mtime_ns), st.st_size)
+    return await file_library.pdf_thumb_response(key, serve)
+
+
+# ── search ───────────────────────────────────────────────────────────
+#
+# Files by name across every folder the caller can open — their own, their
+# linked and Drive folders, and the ones shared with them — or, with no
+# words, the newest files. A walk on each request, so it is bounded: hidden
+# entries, heavy dirs (_STATS_SKIP) and symlinks are skipped (a symlink may
+# point out of the folder; the read routes refuse those anyway), and the walk
+# stops after _SEARCH_SCAN_CAP files.
+
+_SEARCH_SCAN_CAP = 40000
+_SEARCH_MAX_RESULTS = 300
+
+
+def _walk_files(root: Path, cap: int) -> tuple[list[tuple[str, int, float]], int]:
+    """([(rel_posix, size, mtime)], files looked at) under *root*, at most *cap*."""
+    import os
+
+    out: list[tuple[str, int, float]] = []
+    seen = 0
+    stack: list[tuple[Path, str]] = [(root, "")]
+    while stack and seen < cap:
+        here, rel = stack.pop()
+        try:
+            with os.scandir(here) as it:
+                for e in it:
+                    if e.name.startswith(".") or e.name == META_FILENAME:
+                        continue
+                    try:
+                        if e.is_symlink():
+                            continue
+                        if e.is_dir(follow_symlinks=False):
+                            if e.name not in _STATS_SKIP:
+                                stack.append((Path(e.path), f"{rel}{e.name}/"))
+                            continue
+                        if not e.is_file(follow_symlinks=False):
+                            continue
+                        st = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    seen += 1
+                    out.append((f"{rel}{e.name}", st.st_size, st.st_mtime))
+                    if seen >= cap:
+                        break
+        except OSError:
+            continue
+    return out, seen
+
+
+async def _search_targets(user_id: str, project: str, owner: str) -> list[dict]:
+    """The folders a search walks: ``{project, owner, root}`` (owner '' = own)."""
+    if project:
+        oid = await _eff_owner(user_id, project, owner, write=False)
+        return [{"project": project, "owner": "" if oid == user_id else oid,
+                 "root": _project_root(oid, project)}]
+    root = _user_root(user_id)
+    out: list[dict] = []
+    if root.is_dir():
+        for d in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if d.is_dir() and not d.is_symlink() and not d.name.startswith("."):
+                out.append({"project": d.name, "owner": "", "root": d})
+    for name in sorted(read_links_at(root)):
+        tgt = safe_link_target(root, name)
+        if tgt is not None and tgt.is_dir():
+            out.append({"project": name, "owner": "", "root": tgt})
+    for s in await get_db().list_shares_for_grantee(user_id, "vfs"):
+        proj = safe_name(s["resource_id"], fallback="")
+        pdir = _user_root(s["owner_id"]) / proj
+        if proj and pdir.is_dir():
+            out.append({"project": s["resource_id"], "owner": s["owner_id"], "root": pdir})
+    return out
+
+
+@router.get("/search")
+async def search_files(q: str = "", project: str = "", owner: str = "", limit: int = 100,
+                       user: dict = Depends(get_current_user)):
+    """Files whose folder and path hold every word of *q* (any case), newest
+    first; with no words, simply the newest files. *project* (and *owner*, for a shared
+    folder) keeps the search to one folder."""
+    import asyncio
+
+    terms = [t for t in q.casefold().split() if t]
+    limit = max(1, min(int(limit or 100), _SEARCH_MAX_RESULTS))
+    targets = await _search_targets(user["id"], project.strip(), owner.strip())
+
+    def run() -> tuple[list[dict], bool]:
+        hits: list[dict] = []
+        budget = _SEARCH_SCAN_CAP
+        for t in targets:
+            if budget <= 0:
+                return hits, True
+            files, seen = _walk_files(t["root"], budget)
+            budget -= seen
+            authors: dict[str, dict] | None = None
+            # The folder's own name counts: "invoices" finds what's in it.
+            where = f"{t['project']}/".casefold()
+            for rel, size, mtime in files:
+                if terms and not all(w in where + rel.casefold() for w in terms):
+                    continue
+                if authors is None:
+                    authors = read_authors(t["root"])
+                hit = {"project": t["project"], "owner": t["owner"], "path": rel,
+                       "name": rel.rsplit("/", 1)[-1], "size": size, "mtime": mtime}
+                a = authors.get(rel)
+                if a:
+                    hit["author"] = a.get("agent", "")
+                hits.append(hit)
+        return hits, budget <= 0
+
+    hits, truncated = await asyncio.to_thread(run)
+    hits.sort(key=lambda h: h["mtime"], reverse=True)
+    return {"files": hits[:limit], "total": len(hits), "truncated": truncated}
 
 
 @router.get("/download-zip")
@@ -1032,8 +1183,22 @@ async def rename_entry(body: RenameBody, user: dict = Depends(get_current_user))
     _refuse_reserved(body.to)  # renaming one AWAY from a reserved name is fine
     src = _resolve(oid, body.project, body.path)
     dst = _resolve(oid, body.project, body.to)
+    root = _project_root(oid, body.project).resolve()
+    if src == root or dst == root:
+        raise HTTPException(400, "a folder's own root can't be renamed here")
     if not src.exists():
         raise HTTPException(404, "source not found")
+    # Onto something already there would replace it (a file) or move into it
+    # (a folder): refused. A change of case alone names the same entry.
+    if dst.exists():
+        try:
+            same = os.path.samefile(src, dst)
+        except OSError:
+            same = False
+        if not same:
+            raise HTTPException(409, f"“{dst.name}” already exists there")
+    if src.is_dir() and path_within(dst, src):
+        raise HTTPException(400, "a folder can't move into itself")
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
     _dm().on_rename(oid, body.project, body.path, body.to)

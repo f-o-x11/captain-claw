@@ -435,7 +435,7 @@ function buildSteps({ name, phone, authEnabled, sharingEnabled, info }: {
       : [
           <><B>Left: your agents.</B> Click one to chat. Green means running, amber working, blue a new reply.</>,
           <><B>Middle: the conversation.</B> Ask, attach files, and follow its work as it goes.</>,
-          <><B>Library and Data</B> (bottom left) gather what the agents you create here save: documents, spreadsheets, tables.</>,
+          <><B>Library, Data and Folders</B> (bottom left) gather what the agents you create here save: documents, spreadsheets, tables, and the folders they share.</>,
         ],
     shot: SHOTS.overview,
   })
@@ -474,7 +474,7 @@ function buildSteps({ name, phone, authEnabled, sharingEnabled, info }: {
         : <><B>Line up several tasks</B> in the queue beside the chat (the list icon at the top shows it). On <B>Auto</B>, the agent works through them one after another.</>,
       <><B>Change topic</B> with <B>{phone ? 'New' : 'New topic'}</B>: the agent starts with a fresh context, and everything said so far stays above the divider. It keeps its memory and files.</>,
       <><B>Topics</B> (next to it) lists earlier topics: tap one to jump back to it, or resume it so the agent picks that context up again.</>,
-      <><B>What it makes</B> lands in the <B>Library</B> (files) and <B>Data</B> (tables), {phone ? 'at the top of your agent list (and behind the folder icon at the top of the chat)' : 'bottom left'}. Open, preview or download it there.</>,
+      <><B>What it makes</B> lands in the <B>Library</B> (files), <B>Data</B> (tables) and <B>Folders</B> (what agents share), {phone ? 'at the top of your agent list (and behind the folder icon at the top of the chat)' : 'bottom left'}. Open, preview or download it there.</>,
     ],
     note: 'It keeps working while you chat with another agent: a blue dot tells you a reply is waiting.',
     shot: SHOTS.chat,

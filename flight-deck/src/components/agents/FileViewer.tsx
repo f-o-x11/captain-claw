@@ -25,6 +25,8 @@ interface FileViewerProps {
   urls?: { view: string; download: string }
   /** No Edit/Save (and `startInEdit` is ignored) — a member's panel. */
   readOnly?: boolean
+  /** Saves an edit somewhere other than the agent (a shared folder's file). */
+  onSave?: (content: string) => Promise<void>
   onClose: () => void
   /** Open straight into edit mode (e.g. the file-list Edit button) */
   startInEdit?: boolean
@@ -35,7 +37,7 @@ interface FileViewerProps {
   hasNext?: boolean
 }
 
-export function FileViewer({ file, host = '', port = 0, auth = '', urls, readOnly, startInEdit, onClose, onPrev, onNext, hasPrev, hasNext }: FileViewerProps) {
+export function FileViewer({ file, host = '', port = 0, auth = '', urls, readOnly, onSave, startInEdit, onClose, onPrev, onNext, hasPrev, hasNext }: FileViewerProps) {
   const [content, setContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -119,7 +121,8 @@ export function FileViewer({ file, host = '', port = 0, auth = '', urls, readOnl
     setSaving(true)
     setSaveError('')
     try {
-      await saveFileContent(host, port, auth, file.physical, draft)
+      if (onSave) await onSave(draft)
+      else await saveFileContent(host, port, auth, file.physical, draft)
       setContent(draft)        // preview now reflects the saved content
       setEditing(false)
       setSavedTick(true)
@@ -129,7 +132,7 @@ export function FileViewer({ file, host = '', port = 0, auth = '', urls, readOnl
     } finally {
       setSaving(false)
     }
-  }, [saving, readOnly, host, port, auth, file.physical, draft])
+  }, [saving, readOnly, onSave, host, port, auth, file.physical, draft])
 
   // Keyboard: while editing, Esc cancels and ⌘/Ctrl+S saves (arrows type, not
   // navigate). Otherwise Esc closes and arrows move between files. Esc is

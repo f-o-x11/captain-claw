@@ -32,7 +32,12 @@ function uniqueMountName(segments: string[], taken: Set<string>): string {
   return `${base}-${i}`
 }
 
-export function DriveConnect({ onClose, onDone }: { onClose: () => void; onDone: (name: string) => void }) {
+export function DriveConnect({ onClose, onDone, onConnectGoogle }: {
+  onClose: () => void
+  onDone: (name: string) => void
+  /** Opens Connections → Google: offered when Drive says the account isn't connected. */
+  onConnectGoogle?: () => void
+}) {
   const s = useVFSStore()
   const [stack, setStack] = useState<Frame[]>([{ id: 'root', name: 'My Drive', driveId: '' }])
   const [folders, setFolders] = useState<DriveFolder[]>([])
@@ -147,6 +152,14 @@ export function DriveConnect({ onClose, onDone }: { onClose: () => void; onDone:
           {!loading && err && (
             <div className="m-2 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
               {err}
+              {onConnectGoogle && /connect your google account/i.test(err) && (
+                <button
+                  onClick={onConnectGoogle}
+                  className="mt-2 flex items-center gap-1.5 rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-500"
+                >
+                  <Cloud className="h-3.5 w-3.5" /> Connect Google
+                </button>
+              )}
             </div>
           )}
           {!loading && !err && folders.length === 0 && sharedDrives.length === 0 && (

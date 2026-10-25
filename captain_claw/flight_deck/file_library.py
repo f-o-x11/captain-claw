@@ -1619,7 +1619,13 @@ async def library_thumb(file_id: str, user: dict = Depends(get_current_user)):
     if path is None:
         raise HTTPException(404, "file not found")
     st = path.stat()
-    key = (file_id, int(st.st_mtime_ns), st.st_size)
+    return await pdf_thumb_response((file_id, int(st.st_mtime_ns), st.st_size), path)
+
+
+async def pdf_thumb_response(key: tuple[str, int, int], path: Path) -> Response:
+    """The PNG of *path*'s first page — cached under *key* (an id for the file
+    plus its version), drawn once however many ask. The shared folders' thumb
+    route (vfs_routes) uses it too."""
     with _thumbs_lock:
         png = _thumbs.get(key)
         failed = _thumb_failed.get(key)
