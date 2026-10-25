@@ -91,8 +91,10 @@ export interface BotportStatusBasic {
   enabled: boolean
   state: BotportLinkState
   deck_name: string
-  // Only for non-admins: the remote agents they may consult.
+  // Only for non-admins: the remote agents they may consult, and the decks
+  // online (with the display names the hub gives them).
   remote_agents?: string[]
+  decks?: { name: string; label: string }[]
 }
 
 /** What an admin sees. Times are unix seconds. */

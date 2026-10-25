@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Captain Claw 0.8.2</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Flight Decks that work together over BotPort, a kiosk for the whole team, and devices you talk to.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;600;700&family=Sora:wght@600;700&display=swap">
+<style>:root{color-scheme:dark}html,body{background:#05070f;margin:0}</style>
+<style>
+  /* Layout: full-bleed dark bands, a centred 1180px column each; product shots as layered,
+     scaled compositions that keep their proportions at any width. */
+  .cc082 {
+    --cc-ink: #05070f;
+    --cc-band: #070a14;
+    --cc-panel: #0c1222;
+    --cc-line: rgba(148, 163, 184, 0.16);
+    --cc-text: #eef2fa;
+    --cc-muted: #9aa6bd;
+    --cc-faint: #64708a;
+    --cc-cyan: #22d3ee;
+    --cc-violet: #a78bfa;
+    --cc-grad: linear-gradient(100deg, #67e8f9 0%, #818cf8 52%, #d8b4fe 100%);
+    --cc-display: "Sora", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --cc-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --cc-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    color-scheme: dark;
+    background: var(--cc-ink);
+    color: var(--cc-text);
+    font: 400 17px/1.6 var(--cc-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  .cc082 *, .cc082 *::before, .cc082 *::after { box-sizing: border-box; }
+  .cc082 :is(h1, h2, h3, p, ul, ol, dl, dd, figure, pre) { margin: 0; }
+  .cc082 :is(ul, ol) { padding: 0; list-style: none; }
+  .cc082 img, .cc082 video { display: block; max-width: 100%; height: auto; }
+  .cc082 a { color: inherit; }
+  .cc082 :focus-visible { outline: 2px solid var(--cc-cyan); outline-offset: 3px; border-radius: 6px; }
+
+  .cc082 .cc-wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .cc082 .cc-band { position: relative; padding-block: clamp(64px, 9vw, 120px); background: var(--cc-ink); }
+  .cc082 .cc-alt { background: var(--cc-band); border-block: 1px solid var(--cc-line); }
+
+  .cc082 h1, .cc082 h2 { font-family: var(--cc-display); font-weight: 700; letter-spacing: -0.035em; text-wrap: balance; }
+  .cc082 h1 { font-size: clamp(40px, 4.6vw, 68px); line-height: 1.0; }
+  .cc082 h1 span, .cc082 h1 em { display: block; }
+  .cc082 h2 { font-size: clamp(34px, 4.6vw, 58px); line-height: 1.04; }
+  .cc082 h3 { font: 600 19px/1.3 var(--cc-display); letter-spacing: -0.01em; }
+  .cc082 :is(h1, h2) em { font-style: normal; background: var(--cc-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .cc082 .cc-lede { margin-top: 20px; max-width: 62ch; font-size: clamp(17px, 1.6vw, 20px); color: var(--cc-muted); text-wrap: pretty; }
+  .cc082 .cc-lede b { color: var(--cc-text); font-weight: 600; }
+  .cc082 .cc-kicker { margin-bottom: 14px; font: 600 13px/1 var(--cc-mono); letter-spacing: 0.08em; text-transform: uppercase; color: #67e8f9; }
+  .cc082 .cc-head { display: grid; justify-items: center; text-align: center; margin-bottom: clamp(36px, 5vw, 64px); }
+  .cc082 .cc-head .cc-lede { margin-inline: auto; }
+
+  /* Hero */
+  .cc082 .cc-hero {
+    padding-block: clamp(56px, 8vw, 110px) clamp(64px, 8vw, 120px);
+    background:
+      radial-gradient(900px 600px at 0% -10%, rgba(34, 211, 238, 0.16), transparent 60%),
+      radial-gradient(900px 700px at 100% 110%, rgba(167, 139, 250, 0.18), transparent 60%),
+      var(--cc-ink);
+    overflow: hidden;
+  }
+  .cc082 .cc-hero-grid { display: grid; grid-template-columns: minmax(0, 5.4fr) minmax(0, 6.6fr); gap: clamp(28px, 4vw, 56px); align-items: center; }
+  .cc082 .cc-eyebrow {
+    display: inline-flex; align-items: center; gap: 10px; margin-bottom: 26px;
+    padding: 6px 14px 6px 6px; border: 1px solid rgba(34, 211, 238, 0.35); border-radius: 999px;
+    background: rgba(34, 211, 238, 0.08); font: 600 14px/1 var(--cc-body); color: #a5f3fc;
+  }
+  .cc082 .cc-eyebrow span { padding: 5px 9px; border-radius: 999px; background: var(--cc-grad); color: #04101c; font: 700 11px/1 var(--cc-mono); letter-spacing: 0.08em; text-transform: uppercase; }
+  .cc082 .cc-ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+  .cc082 .cc-btn {
+    display: inline-flex; align-items: center; min-height: 48px; padding: 0 22px; border-radius: 14px;
+    background: var(--cc-grad); color: #04101c; font: 650 16px/1 var(--cc-body); text-decoration: none;
+    box-shadow: 0 14px 34px -14px rgba(34, 211, 238, 0.7); transition: transform 0.2s, filter 0.2s;
+  }
+  .cc082 .cc-btn:hover { transform: translateY(-1px); filter: brightness(1.08); }
+  .cc082 .cc-ghost { background: rgba(255, 255, 255, 0.05); color: var(--cc-text); border: 1px solid var(--cc-line); box-shadow: none; }
+
+  /* Stages: children placed in % of the stage, so the composition scales as one. */
+  .cc082 .cc-stage { position: relative; }
+  .cc082 .cc-stage > * { position: absolute; left: var(--l); top: var(--t); width: var(--w); transform: rotate(var(--r, 0deg)); }
+  .cc082 .cc-hero-stage { aspect-ratio: 1000 / 800; }
+  .cc082 .cc-kiosk-stage { aspect-ratio: 1000 / 930; }
+  .cc082 .cc-dev-stage { aspect-ratio: 1000 / 375; max-width: 1060px; margin: 0 auto; }
+
+  .cc082 .cc-browser {
+    overflow: hidden; border-radius: 14px; background: #0a0e19;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 40px 100px -30px rgba(0, 0, 0, 0.9), 0 0 70px -24px rgba(34, 211, 238, 0.3);
+  }
+  .cc082 .cc-flat { position: relative; margin-top: clamp(32px, 4vw, 48px); }
+  .cc082 .cc-bar { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; background: linear-gradient(180deg, #121827, #0c111d); border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+  .cc082 .cc-bar i { width: 10px; height: 10px; border-radius: 50%; background: #2a3142; }
+  .cc082 .cc-bar i:nth-child(1) { background: #f87171; }
+  .cc082 .cc-bar i:nth-child(2) { background: #fbbf24; }
+  .cc082 .cc-bar i:nth-child(3) { background: #34d399; }
+  .cc082 .cc-bar span { margin: 0 auto; padding: 3px 12px; border-radius: 7px; background: rgba(255, 255, 255, 0.05); font: 500 12px/1.4 var(--cc-mono); color: #8b96ad; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cc082 .cc-video { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: #05070f; }
+
+  .cc082 .cc-phone { padding: 1%; border-radius: 13% / 6%; background: linear-gradient(145deg, #3a3e48, #15171c 40%, #0b0c10); box-shadow: 0 30px 70px -18px rgba(0, 0, 0, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+  .cc082 .cc-phone img { border-radius: 11% / 5.2%; }
+  .cc082 .cc-watch {
+    padding: 1.3%; border-radius: 50%;
+    background: radial-gradient(circle at 30% 25%, #5c616c 0%, #2b2e35 32%, #121317 62%, #08090b 100%);
+    box-shadow: 0 34px 70px -22px rgba(0, 0, 0, 0.95), inset 0 0 0 2px rgba(255, 255, 255, 0.10);
+  }
+  .cc082 .cc-watch img { border-radius: 50%; }
+  .cc082 .cc-watch::before { content: ""; position: absolute; right: -2.6%; top: 30%; width: 4.2%; height: 14%; border-radius: 6px; background: linear-gradient(90deg, #b88a00, #fcd34d 55%, #f5b800); }
+  .cc082 .cc-watch::after { content: ""; position: absolute; right: -1.6%; top: 58%; width: 3%; height: 9%; border-radius: 5px; background: linear-gradient(90deg, #1b1d22, #4a4e58 60%, #2a2d33); }
+  .cc082 .cc-paper { padding: 1% 1% 1.8%; border-radius: 9% / 6%; background: linear-gradient(160deg, #e6e7ea, #cfd1d5 60%, #bfc1c6); box-shadow: 0 34px 70px -22px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.8); }
+  .cc082 .cc-paper img { border-radius: 3px; box-shadow: 0 0 0 2px #b9babe; }
+  .cc082 .cc-leds { position: absolute; bottom: 2.2%; left: 50%; display: flex; gap: 8%; width: 14%; justify-content: center; transform: translateX(-50%); }
+  .cc082 .cc-leds i { width: 7px; height: 7px; border-radius: 50%; background: #34d399; box-shadow: 0 0 8px #34d399; }
+  .cc082 .cc-leds i + i { background: #60a5fa; box-shadow: 0 0 8px #60a5fa; }
+  .cc082 .cc-card { overflow: hidden; border-radius: 14px; border: 1px solid var(--cc-line); box-shadow: 0 34px 80px -26px rgba(0, 0, 0, 0.95); }
+
+  /* BotPort */
+  .cc082 .cc-route { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; margin: 0 auto clamp(32px, 4vw, 48px); font: 500 15px/1 var(--cc-mono); }
+  .cc082 .cc-node { padding: 12px 16px; border-radius: 12px; border: 1px solid var(--cc-line); background: var(--cc-panel); color: var(--cc-text); }
+  .cc082 .cc-node i { font-style: normal; color: #67e8f9; }
+  .cc082 .cc-hub { background: var(--cc-grad); color: #04101c; border: 0; font-weight: 700; }
+  .cc082 .cc-hop { position: relative; width: 74px; height: 2px; background: repeating-linear-gradient(90deg, rgba(34, 211, 238, 0.7) 0 5px, transparent 5px 10px); }
+  .cc082 .cc-hop b { position: absolute; left: 50%; top: -20px; transform: translateX(-50%); font: 500 11px/1 var(--cc-mono); color: var(--cc-faint); }
+  .cc082 .cc-features { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+  .cc082 .cc-features li { padding: 22px; border: 1px solid var(--cc-line); border-radius: 16px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)); }
+  .cc082 .cc-features p { margin-top: 8px; font-size: 15px; color: var(--cc-muted); }
+
+  /* Steps */
+  .cc082 .cc-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(20px, 3vw, 36px); align-items: start; counter-reset: none; }
+  .cc082 .cc-steps li { display: grid; gap: 12px; min-width: 0; }
+  .cc082 .cc-steps p { color: var(--cc-muted); font-size: 15px; }
+  .cc082 .cc-steps img { border-radius: 14px; border: 1px solid var(--cc-line); box-shadow: 0 26px 60px -24px rgba(0, 0, 0, 0.9); }
+  .cc082 .cc-n { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: var(--cc-grad); color: #04101c; font: 700 20px/1 var(--cc-display); }
+
+  /* Wall */
+  .cc082 #wall { background: radial-gradient(700px 320px at 50% 100%, rgba(34, 211, 238, 0.16), transparent 70%), var(--cc-ink); }
+  .cc082 .cc-tv { max-width: 1060px; margin: 0 auto; padding: 1.1%; border-radius: 12px; background: #050608; box-shadow: 0 50px 120px -30px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.07), 0 0 140px -30px rgba(34, 211, 238, 0.35); }
+  .cc082 .cc-tv img { border-radius: 3px; }
+
+  /* Kiosk */
+  .cc082 .cc-split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(28px, 4vw, 64px); align-items: center; }
+  .cc082 .cc-split h2 { font-size: clamp(32px, 3.6vw, 48px); }
+  .cc082 .cc-list { display: grid; gap: 10px; margin-top: 24px; }
+  .cc082 .cc-list li { position: relative; padding-left: 26px; color: var(--cc-muted); }
+  .cc082 .cc-list li::before { content: ""; position: absolute; left: 4px; top: 0.6em; width: 8px; height: 8px; border-radius: 50%; background: var(--cc-grad); }
+
+  /* Devices */
+  .cc082 .cc-specs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-top: clamp(28px, 4vw, 48px); }
+  .cc082 .cc-specs div { padding-top: 14px; border-top: 1px solid var(--cc-line); }
+  .cc082 .cc-specs dt { font: 600 15px/1.3 var(--cc-display); }
+  .cc082 .cc-specs dd { margin-top: 6px; font-size: 14px; color: var(--cc-muted); }
+
+  /* Upgrade */
+  .cc082 .cc-cmds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .cc082 .cc-cmd { min-width: 0; border: 1px solid var(--cc-line); border-radius: 16px; background: var(--cc-panel); overflow: hidden; }
+  .cc082 .cc-cmd-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--cc-line); font: 600 14px/1 var(--cc-body); color: var(--cc-muted); }
+  .cc082 .cc-copy-btn { min-height: 32px; padding: 0 12px; border: 1px solid var(--cc-line); border-radius: 9px; background: rgba(255, 255, 255, 0.04); color: var(--cc-text); font: 600 13px/1 var(--cc-body); cursor: pointer; }
+  .cc082 .cc-copy-btn:hover { border-color: rgba(34, 211, 238, 0.5); }
+  .cc082 pre { padding: 16px; overflow-x: auto; font: 500 14px/1.7 var(--cc-mono); color: #cbd5e1; }
+  .cc082 .cc-more { margin-top: 22px; text-align: center; color: var(--cc-muted); }
+  .cc082 .cc-more a { color: #67e8f9; }
+  .cc082 .cc-more code { font: 500 0.9em var(--cc-mono); color: var(--cc-text); }
+
+  @media (max-width: 900px) {
+    .cc082 .cc-hero-grid, .cc082 .cc-split { grid-template-columns: minmax(0, 1fr); }
+    .cc082 .cc-features, .cc082 .cc-specs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cc082 .cc-steps { grid-template-columns: minmax(0, 1fr); max-width: 520px; margin: 0 auto; }
+  }
+  @media (max-width: 560px) {
+    .cc082 .cc-features, .cc082 .cc-specs, .cc082 .cc-cmds { grid-template-columns: minmax(0, 1fr); }
+    .cc082 .cc-route { flex-direction: column; gap: 0; }
+    .cc082 .cc-hop { width: 2px; height: 34px; background: repeating-linear-gradient(180deg, rgba(34, 211, 238, 0.7) 0 5px, transparent 5px 10px); }
+    .cc082 .cc-hop b { left: 12px; top: 50%; transform: translateY(-50%); }
+    .cc082 .cc-dev-stage { aspect-ratio: 1 / 1.1; }
+    .cc082 .cc-dev-stage > :nth-child(1) { --l: 1% !important; --t: 6% !important; --w: 44% !important; }
+    .cc082 .cc-dev-stage > :nth-child(2) { --l: 49% !important; --t: 2% !important; --w: 50% !important; }
+    .cc082 .cc-dev-stage > :nth-child(3) { --l: 9% !important; --t: 50% !important; --w: 34% !important; }
+    .cc082 .cc-dev-stage > :nth-child(4) { --l: 56% !important; --t: 52% !important; --w: 34% !important; }
+    .cc082 pre { font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .cc082 .cc-bar { height: 22px; }
+    .cc082 .cc-bar i { width: 7px; height: 7px; }
+    .cc082 .cc-bar span { font-size: 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cc082 .cc-btn { transition: none; }
+  }
+</style>
+
+</head>
+<body>
+<div class="cc082">
+
+  <!-- Hero -->
+  <section class="cc-hero" aria-labelledby="cc-hero-title">
+    <div class="cc-wrap cc-hero-grid">
+      <div class="cc-copy">
+        <p class="cc-eyebrow"><span>New</span> Captain Claw 0.8.2</p>
+        <h1 id="cc-hero-title"><span>Your agents.</span> <em><span>Every deck.</span> <span>Every device.</span></em></h1>
+        <p class="cc-lede">Flight Decks now work together over <b>BotPort</b>, your team lives in a <b>kiosk</b>, and you talk to it all from a <b>watch</b> on your wrist or a <b>paper screen</b> on your desk. Self-hosted, MIT licensed, any model or fully local.</p>
+        <div class="cc-ctas">
+          <a class="cc-btn" href="https://github.com/kstevica/captain-claw/blob/main/release-notes/RELEASE_NOTES_0.8.2.md">What's new in 0.8.2</a>
+          <a class="cc-btn cc-ghost" href="https://github.com/kstevica/captain-claw/blob/main/docs/botport-deployment.md">Set up BotPort</a>
+        </div>
+      </div>
+      <div class="cc-stage cc-hero-stage">
+        <figure class="cc-browser" style="--l:5%;--t:0%;--w:95%">
+          <div class="cc-bar"><i></i><i></i><i></i><span>hub.example.com</span></div>
+          <video class="cc-video" autoplay muted loop playsinline preload="metadata" poster="assets/botport-live-poster.jpg" width="1280" height="720" aria-label="The BotPort hub's live map: five Flight Decks around the hub, requests and answers flying between them">
+            <source src="assets/botport-live.mp4" type="video/mp4">
+          </video>
+        </figure>
+        <figure class="cc-phone" style="--l:0%;--t:40%;--w:22%;--r:-4deg">
+          <img src="assets/phone-share.webp" width="600" height="1298" alt="The kiosk on a phone, asking whether to share Inbox Assistant on the network">
+        </figure>
+        <figure class="cc-paper" style="--l:80%;--t:47%;--w:19%;--r:5deg">
+          <img src="assets/paper-dashboard.webp" width="400" height="600" alt="PaperColor e-paper dashboard: time, room temperature and humidity, battery, voice notes waiting">
+          <span class="cc-leds"><i></i><i></i></span>
+        </figure>
+        <figure class="cc-watch" style="--l:55%;--t:57%;--w:27%">
+          <img src="assets/watch-reply.webp" width="466" height="466" alt="StopWatch speaking an answer, the spoken sentence lit">
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- BotPort -->
+  <section class="cc-band" id="botport" aria-labelledby="cc-bp-title">
+    <div class="cc-wrap">
+      <header class="cc-head">
+        <p class="cc-kicker">BotPort · deck federation</p>
+        <h2 id="cc-bp-title">Flight Decks that <em>work together</em>.</h2>
+        <p class="cc-lede">Every Flight Deck used to be an island. Now any number of them join one network through BotPort, a small hub that is happy on a Raspberry Pi. Your planner on the VPS asks a researcher on the Pi at home, and the answer streams back with live progress, as if both sat on the same deck.</p>
+      </header>
+      <div class="cc-route" role="img" aria-label="Planner at vps1 asks Researcher at pi through the BotPort hub">
+        <span class="cc-node">Planner<i>@vps1</i></span>
+        <span class="cc-hop"><b>wss</b></span>
+        <span class="cc-node cc-hub">BotPort hub</span>
+        <span class="cc-hop"><b>ws</b></span>
+        <span class="cc-node">Researcher<i>@pi</i></span>
+      </div>
+      <ul class="cc-features">
+        <li><h3>Agent@deck</h3><p>Ask any shared agent on any deck by its address. Consult for a quick answer with live progress, or delegate and get the result in chat.</p></li>
+        <li><h3>Every deck dials out</h3><p>A Pi behind home NAT or a laptop joins as easily as a server. Only the hub has to be reachable: Tailscale, a tunnel, or its own TLS.</p></li>
+        <li><h3>Safe by construction</h3><p>A request from another deck runs in a lane of its own. It never sends email or triggers Flows, can't fan out further, and obeys your deny list.</p></li>
+        <li><h3>Built not to lose work</h3><p>Decks reconnect, answers wait for a requester that dropped, a worker that dropped gets time to come back, and resubmission is idempotent.</p></li>
+      </ul>
+      <figure class="cc-browser cc-flat">
+        <div class="cc-bar"><i></i><i></i><i></i><span>hub.example.com · Decks</span></div>
+        <img src="assets/decks-page.webp" width="2000" height="1125" loading="lazy" alt="The hub's Decks page: five Flight Decks with display names, descriptions, shared agents, load and their keys">
+      </figure>
+    </div>
+  </section>
+
+  <!-- Add a deck -->
+  <section class="cc-band cc-alt" id="add-deck" aria-labelledby="cc-add-title">
+    <div class="cc-wrap">
+      <header class="cc-head">
+        <p class="cc-kicker">The hub's Decks page</p>
+        <h2 id="cc-add-title">Add a Flight Deck in a minute. <em>No restart.</em></h2>
+      </header>
+      <ol class="cc-steps">
+        <li>
+          <span class="cc-n" aria-hidden="true">1</span>
+          <h3>Name it on the hub</h3>
+          <p>A display name, its address on the network, what it's for. The hub makes its key.</p>
+          <img src="assets/add-deck.webp" width="900" height="984" loading="lazy" alt="Add a Flight Deck dialog with a display name, deck name and description">
+        </li>
+        <li>
+          <span class="cc-n" aria-hidden="true">2</span>
+          <h3>Copy the join code</h3>
+          <p>Address, name, key and secret in one line, shown once. The hub keeps only a fingerprint of the secret.</p>
+          <img src="assets/join-code.webp" width="900" height="1048" loading="lazy" alt="The deck's one-time join code; the dialog says the deck is online">
+        </li>
+        <li>
+          <span class="cc-n" aria-hidden="true">3</span>
+          <h3>Paste it into the deck</h3>
+          <p>Admin console → BotPort → Join code → Save. It connects, and the hub's dialog turns green.</p>
+          <img src="assets/deck-join-box.webp" width="1200" height="241" loading="lazy" alt="Flight Deck's Join code box, filled in">
+          <img src="assets/deck-status.webp" width="1200" height="299" loading="lazy" alt="Flight Deck's BotPort status: connected">
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- Wall -->
+  <section class="cc-band" id="wall" aria-labelledby="cc-wall-title">
+    <div class="cc-wrap">
+      <header class="cc-head">
+        <p class="cc-kicker">Kiosk mode · press K</p>
+        <h2 id="cc-wall-title">Put your agent network <em>on the wall</em>.</h2>
+        <p class="cc-lede">The hub's dashboard scales to any screen. Every request is drawn as it travels from the asking deck through the hub to the agent, and the answer flies back. Leave it on a TV in the office and watch your agents work with each other.</p>
+      </header>
+      <figure class="cc-tv">
+        <img src="assets/hub-wall.webp" width="2000" height="1125" loading="lazy" alt="The BotPort dashboard in kiosk mode on a wall display: decks online, shared agents, requests in flight, success rate and median answer time around the live map">
+      </figure>
+    </div>
+  </section>
+
+  <!-- Kiosk -->
+  <section class="cc-band cc-alt" id="kiosk" aria-labelledby="cc-kiosk-title">
+    <div class="cc-wrap cc-split">
+      <div class="cc-copy">
+        <p class="cc-kicker">The kiosk</p>
+        <h2 id="cc-kiosk-title">A front door your whole team <em>walks through</em>.</h2>
+        <p class="cc-lede">The chat-first view your team's non-admins live in is a complete place to work.</p>
+        <ul class="cc-list">
+          <li>"What can I do?" skill cards that start real work</li>
+          <li>A File library and a Data library that summarise what the agents keep</li>
+          <li>Scheduled tasks that deliver to chat, email or Telegram</li>
+          <li>One timeline per agent, with topics it names itself</li>
+          <li>A ⋯ per agent that now shares it on the network, after saying exactly what that means</li>
+        </ul>
+      </div>
+      <div class="cc-stage cc-kiosk-stage">
+        <figure class="cc-browser" style="--l:0%;--t:0%;--w:100%">
+          <div class="cc-bar"><i></i><i></i><i></i><span>deck.example.com</span></div>
+          <img src="assets/kiosk-chat.webp" width="1600" height="1000" loading="lazy" alt="The kiosk: an agent greets Maya with skill cards; Scheduled, Library and Data tiles">
+        </figure>
+        <figure class="cc-card" style="--l:4%;--t:46%;--w:50%;--r:-1.5deg">
+          <img src="assets/share-dialog.webp" width="900" height="863" loading="lazy" alt="Share Inbox Assistant on the network? What other decks can do with it, and what stays out of their reach">
+        </figure>
+        <figure class="cc-phone" style="--l:76%;--t:38%;--w:24%;--r:3deg">
+          <img src="assets/phone-kiosk.webp" width="600" height="1298" loading="lazy" alt="The kiosk on a phone: four agents, two shared on the network">
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- Devices -->
+  <section class="cc-band" id="devices" aria-labelledby="cc-dev-title">
+    <div class="cc-wrap">
+      <header class="cc-head">
+        <p class="cc-kicker">M5Stack StopWatch · PaperColor · StickS3</p>
+        <h2 id="cc-dev-title">Talk to your agents. <em>They talk back.</em></h2>
+        <p class="cc-lede">Press, speak, done. The answer is spoken sentence by sentence while it's still being written, any length, with the text following the voice. Offline, the device keeps voice notes and sends them when the deck is back.</p>
+      </header>
+      <div class="cc-stage cc-dev-stage">
+        <figure class="cc-watch" style="--l:0%;--t:17%;--w:24%;--r:-6deg">
+          <img src="assets/watch-home.webp" width="466" height="466" loading="lazy" alt="StopWatch clock face: the time, the agent's character, battery time left">
+        </figure>
+        <figure class="cc-watch" style="--l:25%;--t:3%;--w:32%">
+          <img src="assets/watch-reply.webp" width="466" height="466" loading="lazy" alt="StopWatch speaking an answer about tomorrow's meetings">
+        </figure>
+        <figure class="cc-paper" style="--l:60%;--t:2%;--w:18.5%;--r:-3deg">
+          <img src="assets/paper-dashboard.webp" width="400" height="600" loading="lazy" alt="PaperColor dashboard">
+          <span class="cc-leds"><i></i><i></i></span>
+        </figure>
+        <figure class="cc-paper" style="--l:80.5%;--t:8%;--w:18.5%;--r:3deg">
+          <img src="assets/paper-answer.webp" width="400" height="600" loading="lazy" alt="PaperColor showing an answer">
+          <span class="cc-leds"><i></i><i></i></span>
+        </figure>
+      </div>
+      <dl class="cc-specs">
+        <div><dt>StopWatch</dt><dd>466×466 round AMOLED, touch, vibration, a clock face that wears any picture you send</dd></div>
+        <div><dt>PaperColor</dt><dd>4″ six-ink e-paper, room sensor, two status lights, a fresh dashboard every five minutes</dd></div>
+        <div><dt>StickS3</dt><dd>240×135 LCD in your pocket, 18 animated characters</dd></div>
+        <div><dt>All three</dt><dd>Signed over-the-air updates from your own deck; battery, room and time with every question</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <!-- Upgrade -->
+  <section class="cc-band cc-alt" id="upgrade" aria-labelledby="cc-up-title">
+    <div class="cc-wrap">
+      <header class="cc-head">
+        <p class="cc-kicker">Upgrade to 0.8.2</p>
+        <h2 id="cc-up-title">The hub first, <em>then the decks</em>.</h2>
+        <p class="cc-lede">Flight Decks on 0.8.2 need a hub that speaks protocol 2. Keys you already have keep working; new decks come from the hub's Decks page.</p>
+      </header>
+      <div class="cc-cmds">
+        <div class="cc-cmd">
+          <div class="cc-cmd-head"><span>On the hub</span><button type="button" class="cc-copy-btn" data-copy="cc-cmd-hub">Copy</button></div>
+          <pre id="cc-cmd-hub"><code>cd ~/captain-claw &amp;&amp; git pull
+~/botport-venv/bin/pip install ~/captain-claw/botport
+scripts/botport-tmux.sh restart</code></pre>
+        </div>
+        <div class="cc-cmd">
+          <div class="cc-cmd-head"><span>On each Flight Deck</span><button type="button" class="cc-copy-btn" data-copy="cc-cmd-deck">Copy</button></div>
+          <pre id="cc-cmd-deck"><code>cd ~/captain-claw &amp;&amp; git pull
+pip install .
+# restart Flight Deck, then its agents</code></pre>
+        </div>
+      </div>
+      <p class="cc-more"><a href="https://github.com/kstevica/captain-claw/blob/main/docs/botport-deployment.md">The BotPort guide</a>, from <code>pip install</code> on a Raspberry Pi to the first request between two decks.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+  (function () {
+    var root = document.querySelector(".cc082");
+    if (!root) return;
+    // Respect reduced motion: the live map stays on its poster frame.
+    if (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      root.querySelectorAll("video[autoplay]").forEach(function (v) { v.removeAttribute("autoplay"); v.pause(); });
+    }
+    root.querySelectorAll(".cc-copy-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var pre = document.getElementById(btn.dataset.copy);
+        var text = pre ? pre.innerText : "";
+        var done = function (ok) { btn.textContent = ok ? "Copied" : "Select and copy"; setTimeout(function () { btn.textContent = "Copy"; }, 1600); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () { done(true); }, function () { select(pre); done(false); });
+        } else { select(pre); done(false); }
+      });
+    });
+    function select(el) {
+      if (!el) return;
+      var r = document.createRange(); r.selectNodeContents(el);
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+    }
+  })();
+</script>
+
+</body>
+</html>

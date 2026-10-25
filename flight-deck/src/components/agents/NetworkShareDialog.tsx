@@ -16,6 +16,7 @@ async function otherDecks(): Promise<string[] | null> {
     if (isFullStatus(st)) {
       return st.network.decks.filter((d) => d.status === 'connected').map((d) => d.label || d.name)
     }
+    if (st.decks) return st.decks.map((d) => d.label || d.name)
     const names = new Set<string>()
     for (const r of st.remote_agents || []) {
       const at = r.lastIndexOf('@')

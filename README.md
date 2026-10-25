@@ -1,46 +1,98 @@
 # Captain Claw
 
-### Command a fleet of AI agents
+### Command a fleet of AI agents — on every deck, every desk, every wrist
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENCE)
-[![Version](https://img.shields.io/badge/version-0.8.1-purple)](release-notes/RELEASE_NOTES_0.8.1.md)
+[![Version](https://img.shields.io/badge/version-0.8.2-purple)](release-notes/RELEASE_NOTES_0.8.2.md)
 [![Interface](https://img.shields.io/badge/interface-terminal%20%7C%20web%20UI%20%7C%20desktop-black)](#quick-start)
 [![Models](https://img.shields.io/badge/models-OpenAI%20%7C%20Claude%20%7C%20Gemini%20%7C%20DeepSeek%20%7C%20Ollama%20%7C%20OpenRouter-orange)](#multi-model-support)
 
-> Most AI tools give you one agent in a chat box. Captain Claw **Flight Deck** is a multi-agent command center — spawn specialist teams, run **seven orchestration modes**, ship software with **Code** (a plan → build → independent-review pipeline), and compose deterministic **Flows**. Self-hosted, MIT licensed, and works with every major LLM provider (or 100% local with Ollama). Since **0.8.0** it is safe for a **whole team**, with agents in your **inbox** and on your **glasses** — and **0.8.1** gives that team a complete **kiosk** and three **M5Stack** devices you talk to.
+<p align="center">
+  <a href="#whats-new-in-082"><img src="docs/screenshots/hero-0.8.2.webp" width="100%" alt="Captain Claw 0.8.2: the BotPort hub's live network map, the kiosk's Share on network dialog on a phone, a StopWatch speaking an answer and a PaperColor e-paper dashboard"></a>
+</p>
 
-**[🌐 Website](https://captain-claw.com)** · **[🚀 Live Demo](https://cohort001.captain-claw.com/)** · **[📖 Docs](https://captain-claw.com/docs)** · **[📦 PyPI](https://pypi.org/project/captain-claw/)** · **[📝 0.8.1 release notes](release-notes/RELEASE_NOTES_0.8.1.md)**
+> Most AI tools give you one agent in a chat box. Captain Claw **Flight Deck** is a multi-agent command center: spawn specialist teams, run **seven orchestration modes**, ship software with **Code** (plan → build → independent review), and compose deterministic **Flows**. Self-hosted, MIT licensed, and it works with every major LLM provider, or 100% local with Ollama. Since **0.8.2** your Flight Decks **work together**: a planner on your VPS asks a researcher on the Raspberry Pi at home, and you watch the request cross a live map. Your team works from a **kiosk**; you can just talk to a **watch**.
 
-![Flight Deck — spawn a team of specialists, monitor them live, and chat with any one from a single dashboard](docs/screenshots/flight-deck.png)
+**[🌐 Website](https://captain-claw.com)** · **[🚀 Live Demo](https://cohort001.captain-claw.com/)** · **[📖 Docs](https://captain-claw.com/docs)** · **[📦 PyPI](https://pypi.org/project/captain-claw/)** · **[📝 0.8.2 release notes](release-notes/RELEASE_NOTES_0.8.2.md)** · **[🛰️ BotPort guide](docs/botport-deployment.md)**
 
-<p align="center"><strong>7 orchestration modes</strong> &nbsp;·&nbsp; <strong>57 built-in tools</strong> per agent &nbsp;·&nbsp; <strong>6 shared memory layers</strong> &nbsp;·&nbsp; <strong>31 ready-made specialists</strong> &nbsp;·&nbsp; <strong>a full coding pipeline</strong> &nbsp;·&nbsp; <strong>a team-safe deck and kiosk</strong> &nbsp;·&nbsp; <strong>three M5Stack voice devices</strong> &nbsp;·&nbsp; <strong>living beings you raise</strong> &nbsp;·&nbsp; <strong>small models that do real work</strong></p>
+<p align="center"><strong>Flight Decks that work together</strong> &nbsp;·&nbsp; <strong>7 orchestration modes</strong> &nbsp;·&nbsp; <strong>57 built-in tools</strong> per agent &nbsp;·&nbsp; <strong>6 shared memory layers</strong> &nbsp;·&nbsp; <strong>31 ready-made specialists</strong> &nbsp;·&nbsp; <strong>a full coding pipeline</strong> &nbsp;·&nbsp; <strong>a team-safe deck and kiosk</strong> &nbsp;·&nbsp; <strong>three M5Stack voice devices</strong> &nbsp;·&nbsp; <strong>living beings you raise</strong> &nbsp;·&nbsp; <strong>small models that do real work</strong></p>
 
-A **self-hosted framework for orchestrating fleets of specialist AI agents** — from **ensemble reasoning** (seven orchestration modes) to a **full agentic coding pipeline** (plan → independent review → ship). Model-agnostic and local-friendly: connect OpenAI, Anthropic, Google Gemini, DeepSeek, Ollama, or OpenRouter (plus "Sign in with ChatGPT" and Google subscription text through the Antigravity CLI — no API key), or run 100% local with Ollama. Backed by 57 built-in tools per agent, persistent cross-session memory, and autonomous "dream cycle" cognition.
+A **self-hosted framework for orchestrating fleets of specialist AI agents**, from **ensemble reasoning** (seven orchestration modes) to a **full agentic coding pipeline** (plan → independent review → ship). Model-agnostic and local-friendly: connect OpenAI, Anthropic, Google Gemini, DeepSeek, Ollama, or OpenRouter (plus "Sign in with ChatGPT" and Google subscription text through the Antigravity CLI, no API key), or run 100% local with Ollama. Backed by 57 built-in tools per agent, persistent cross-session memory, and autonomous "dream cycle" cognition.
 
-### 🎙️ NEW in 0.8.1: three devices that listen — and keep notes when you're offline
+## 🛰️ BotPort — Flight Decks that work together `NEW in 0.8.2`
 
-[![M5Stack StopWatch running Captain Claw — the clock face with the agent's character, listening, working, an answer whose spoken sentence is lit, a background picture, and the info page](docs/screenshots/stopwatch-screens.png)](firmware/device/README.md)
+<p align="center">
+  <img src="docs/screenshots/botport-live.webp" width="100%" alt="The BotPort hub's live network map: five Flight Decks around the hub, each with the agents it shares, requests and answers flying between them">
+</p>
 
-[![M5Stack PaperColor running Captain Claw — the e-paper dashboard with the clock, room climate, battery and voice notes, and an answer](docs/screenshots/papercolor-screens.png)](firmware/device/README.md)
+Every Flight Deck used to be an island. Now any number of them join one network through **BotPort**, a small hub that is happy on a Raspberry Pi in a tmux pane. Agents address each other as **`Agent@deck`**: your planner on the VPS asks `Researcher@pi` at home, and the answer streams back with live progress, as if both sat on the same deck.
 
-Push-to-talk Captain Claw clients on three M5Stack devices — the **StickS3** (240×135 LCD), the **StopWatch** (466×466 round AMOLED with a clock face, touch and vibration) and the **PaperColor** (a 4" colour e-paper dashboard with two status lights and a room sensor). Press, talk, press again — or just stop talking: Flight Deck transcribes it, one of your agents answers, and the device **speaks the answer sentence by sentence while the model is still writing it**, the text following the voice. Out of Wi-Fi it keeps **voice notes** and sends them when the deck is back; hold the button for **note-taking mode**. Every question carries the battery, the room's temperature and the local time; the watch wears any picture you send the agent as its background; and all three take **signed over-the-air updates** from your own deck. One firmware tree: `cd firmware/device && pio run -e stopwatch -t upload` (or `-e sticks3`, `-e papercolor_b`). Details in [firmware/device/README.md](firmware/device/README.md).
+- **Every deck dials out.** A Pi behind home NAT or a laptop joins as easily as a server. Only the hub must be reachable (Tailscale, a tunnel, or its own TLS).
+- **Add a deck in a minute, with no restart.** The hub's **Decks** page makes the deck's key and a **join code**. Paste the code into that deck and it's on the network.
+- **Everyone can share.** Owners put their own agents on the network from the agent's **⋯**, after a dialog that says plainly what other decks can and can't do with them.
+- **Safe by construction.** A request from another deck runs in a lane of its own. It never sends email or triggers Flows, can't fan out to further decks, and obeys your deny list.
+- **Built not to lose work.** Decks reconnect, answers wait for a requester that dropped, a worker that dropped gets time to come back, and resubmission is idempotent.
 
-### 🧭 NEW in 0.8.1: a kiosk for everyone
+<p align="center">
+  <img src="docs/screenshots/botport-add-deck.webp" width="100%" alt="Add a Flight Deck in a minute: name it on the hub, copy the join code, paste it into the deck">
+</p>
 
-[![The kiosk — an agent greets you with its skill cards; File library, Data library and Scheduled tasks tiles on the left](docs/screenshots/kiosk-chat.webp)](#whats-new-in-081)
+<p align="center">
+  <img src="docs/screenshots/botport-wall.webp" width="100%" alt="Kiosk mode: the BotPort network map full screen on a wall display">
+</p>
 
-The chat-first view your team's non-admins live in is now a complete place to work: a **getting-started guide**, one-click **"What can I do?" skill cards**, a **File library** and a **Data library** that summarise everything the agents keep, **Scheduled tasks** that deliver to chat, email or Telegram, one **timeline** per agent with named topics, a **reasoning-effort** picker, and a ⋯ menu per agent for its model, instructions and settings. Admins get an **Admin console**, invitations by email, a waitlist that answers applicants, branding and daily plan limits. See [What's New in 0.8.1](#whats-new-in-081).
+**Set it up:** [docs/botport-deployment.md](docs/botport-deployment.md), from `pip install` on the Pi to the first request between two decks. Press **K** on the hub's dashboard and it becomes a wall display.
 
-**0.8.0**, the release before, made Flight Deck safe for a team (every route knows who is calling, per-user Google and Microsoft, shared agents, team keys), put **agents in your inbox** behind guards that stop them inventing a send, added a **HUD for Meta Ray-Ban Display**, **Claude driving your fleet over MCP**, and **Bat**, a mode that keeps going until an independent judge says the work is done. See [What's New in 0.8.0](#whats-new-in-080).
+## 🧭 The kiosk — a front door your whole team walks through
 
-### 💻 Code — an engineering department, not a coding assistant
+<p align="center">
+  <img src="docs/screenshots/kiosk-0.8.2.webp" width="100%" alt="The kiosk: an agent greets you with skill cards, the Share on network dialog, and the kiosk on a phone">
+</p>
+
+The chat-first view your team's non-admins live in is a complete place to work:
+
+- a **getting-started guide** and one-click **"What can I do?" skill cards**;
+- a **File library** and a **Data library** that summarise everything the agents keep;
+- **Scheduled tasks** that deliver to chat, email or Telegram;
+- one **timeline** per agent with named topics, and a **reasoning-effort** picker;
+- a **⋯** menu per agent for its model, instructions and settings, which now also **shares it on the network**.
+
+Admins get an **Admin console**, invitations by email, a waitlist that answers applicants, branding and daily plan limits.
+
+## 🎙️ Devices — talk to your agents, they talk back
+
+<p align="center">
+  <img src="docs/screenshots/devices-0.8.2.webp" width="100%" alt="M5Stack StopWatch speaking an answer and showing its clock face, PaperColor e-paper showing its dashboard and an answer">
+</p>
+
+Push-to-talk Captain Claw clients on three M5Stack devices:
+
+- the **StopWatch**: a 466×466 round AMOLED with a clock face, touch and vibration;
+- the **PaperColor**: a 4" colour e-paper dashboard with two status lights and a room sensor;
+- the **StickS3**.
+
+Press, talk, press again, or just stop talking. Flight Deck transcribes it, one of your agents answers, and the device **speaks the answer sentence by sentence while the model is still writing it**, the text following the voice. Since 0.8.2 an answer can be **any length**.
+
+- Out of Wi-Fi, it keeps **voice notes** and sends them when the deck is back.
+- Every question carries the battery, the room's temperature and the local time.
+- All three take **signed over-the-air updates** from your own deck.
+
+One firmware tree: `cd firmware/device && pio run -e stopwatch -t upload` (or `-e sticks3`, `-e papercolor_b`). Details in [firmware/device/README.md](firmware/device/README.md).
+
+[![Every StopWatch screen: the clock face with the agent's character, listening, working, an answer whose spoken sentence is lit, a background picture, and the info page](docs/screenshots/stopwatch-screens.png)](firmware/device/README.md)
+
+[![Every PaperColor screen: the e-paper dashboard with the clock, room climate, battery and voice notes, and an answer](docs/screenshots/papercolor-screens.png)](firmware/device/README.md)
+
+**0.8.1** made the kiosk a complete place to work and turned the pocket client into a family of three devices. **0.8.0** before it made Flight Deck safe for a team: every route knows who is calling, there are per-user Google and Microsoft accounts, shared agents and team keys. It also put **agents in your inbox** behind guards that stop them inventing a send, added a **HUD for Meta Ray-Ban Display**, let **Claude drive your fleet over MCP**, and introduced **Bat**, a mode that keeps going until an independent judge says the work is done. See [What's New in 0.8.1](#whats-new-in-081) and [What's New in 0.8.0](#whats-new-in-080).
+
+## 💻 Code — an engineering department, not a coding assistant
 
 Describe what you want built. A router sizes the job; big work runs **plan → your approval → build → three independent reviewers in parallel → triage → capped fix loop**, every phase a git commit in the folder's own repo. Agents query a persistent **Code Map** (symbols + architecture, git-hash-fresh) instead of re-reading your tree; per-turn **token costs are shown in chat**; the whole process **exports as one auditable Markdown transcript**. Works on fresh folders or **your existing local repos linked in** — on any models you configure, including a cheap implementer with a premium reviewer.
 
 Cursor and Claude Code give you one very good agent that plans, writes, reviews, and tests in a single context. Code splits those roles across **independent agents** — the reviewer never grades its own homework, QA actually runs the tests — and puts **you at the approval gate** before anything is built. Self-hosted, model-agnostic, no lock-in. A complete real run (an RTS game with 185 tests, ~$2.50 on DeepSeek) ships in [`examples/code/`](examples/code/). Details in [RELEASE_NOTES_0.7.0.md](release-notes/RELEASE_NOTES_0.7.0.md) and [USAGE.md](USAGE.md#code--the-agentic-coding-studio-new-in-070).
 
-### Pick the right shape for the problem
+## Pick the right shape for the problem
 
 One agent isn't always the answer — and one orchestration strategy never is. Captain Claw ships **seven distinct modes**, each tuned to a different kind of work.
 
@@ -53,7 +105,7 @@ One agent isn't always the answer — and one orchestration strategy never is. C
 
 The fifth mode is **💻 Code** (above) — a plan-gated, independently-reviewed engineering pipeline. The sixth is **Flight Deck** itself — spawn, monitor, and coordinate the whole crew from one dashboard. The seventh, new in 0.8.0, is **🦇 Bat** — the stubborn finisher: checkpointed steps with retries, survives restarts, and stops only when an independent, fail-closed judge says the task is done.
 
-### More than orchestration
+## More than orchestration
 
 | | |
 |---|---|
@@ -82,6 +134,33 @@ Captain Claw is **MIT licensed and free forever** — your data stays on your ma
 </p>
 
 [![Star History Chart](https://api.star-history.com/svg?repos=kstevica/captain-claw&type=Date)](https://star-history.com/#kstevica/captain-claw&Date)
+
+## What's New in 0.8.2
+
+**Decks That Work Together.** Flight Decks connect through **BotPort** and lend each other their agents. **Upgrade the hub first** (decks need protocol 2) — see the [upgrade steps](release-notes/RELEASE_NOTES_0.8.2.md#upgrading).
+
+- **BotPort, rebuilt around Flight Decks.**
+  - An agent on one deck consults or delegates to `Agent@deck` on another, with live progress.
+  - Every deck dials out, so a Raspberry Pi at home joins as easily as a VPS.
+  - Answers wait for a requester that dropped; a worker that dropped gets time to come back.
+  - Remote requests run in their own lane: no email sends, no Flows, no fan-out, plus the admin's deny list.
+- **Add a deck from the hub's dashboard, no restart.**
+  - The new **Decks** page makes a key and a one-time **join code**; Flight Deck's *Admin console → BotPort → Join code* takes it in one paste.
+  - Rotate or remove a key and it takes effect at once.
+  - Every deck has a display name and a description that the whole network, and your agents, see.
+- **A dashboard for the wall.**
+  - A live map where every request flies from deck to hub to agent and back.
+  - KPIs, an in-flight rail, a ticker.
+  - **Kiosk mode** (`K`), a Requests page, a sign-in screen, a phone layout.
+- **Everyone shares.** Users put the agents they own on the network from the agent's ⋯ (kiosk too), after an honest "Share on network?" dialog. Admins keep a switch and a Stop button for every share.
+- **Hardening.**
+  - Agent tokens go only to that agent's own address.
+  - The hub has an admin token, a DNS-rebinding guard, constant-time key checks and a failure limiter.
+  - Fixed: a swarm path traversal and a dashboard XSS.
+- **Devices** speak answers of any length (no more 66-second ceiling); the PaperColor does an hourly white pass to keep its six inks clean.
+- **Research reports with pictures.** `web_fetch` keeps the relevant pictures a page shows, and reports embed them (.md, .html, .docx).
+
+See [RELEASE_NOTES_0.8.2.md](release-notes/RELEASE_NOTES_0.8.2.md) and [docs/botport-deployment.md](docs/botport-deployment.md).
 
 ## What's New in 0.8.1
 
@@ -562,6 +641,7 @@ Decompose complex tasks into a dependency graph and execute subtasks in parallel
 Connect Flight Decks through a routing hub, so agents on one deck can work with agents on another (`Researcher@pi`): each deck dials out to the hub (decks behind NAT work), and a request runs on the receiving deck in a locked-down lane of its own.
 
 - **Sharing** — an admin chooses which agents a deck offers; users can share the agents they own from the agent's menu.
+- **Decks from the dashboard** (0.8.2) — add a deck on the hub's **Decks** page (its key and a one-time join code, no restart), give it a display name and description the whole network sees, rotate or remove its key.
 - **Live network dashboard** — the hub, every deck and its agents, and each request drawn as it travels; a kiosk mode for a wall screen.
 - **BotPort Swarm** — DAG-based multi-agent orchestration across networked instances. Approval gates, retry with fallback, checkpointing, inter-agent file transfer (up to 50 MB), cron scheduling, and a visual dashboard.
 
@@ -769,6 +849,7 @@ Full reference: [USAGE.md](USAGE.md#configuration-reference) (23 config sections
 - **[docs/botport-deployment.md](docs/botport-deployment.md)** — Connecting Flight Decks through BotPort, step by step: the hub in tmux on a Raspberry Pi (or any Linux box), reaching it (Tailscale / tunnels / TLS), connecting decks, sharing agents (admins and users), the live dashboard and kiosk mode, safeguards, troubleshooting, upgrading
 - **[docs/glasses-hud.md](docs/glasses-hud.md)** — The Flight Deck HUD for Meta Ray-Ban Display smart glasses (`/hud`)
 - **[firmware/device/README.md](firmware/device/README.md)** — The M5Stack StickS3, StopWatch and PaperColor push-to-talk voice clients: setup, buttons, build and flash, over-the-air updates
+- **[release-notes/RELEASE_NOTES_0.8.2.md](release-notes/RELEASE_NOTES_0.8.2.md)** — Everything in 0.8.2 (Flight Decks that work together over BotPort, the hub's Decks page, a dashboard for the wall), with the upgrade order and the new settings
 - **[release-notes/RELEASE_NOTES_0.8.1.md](release-notes/RELEASE_NOTES_0.8.1.md)** — Everything in 0.8.1 (the kiosk, the admin console, three devices), with the upgrade checklist and the new settings table
 - **[release-notes/RELEASE_NOTES_0.8.0.md](release-notes/RELEASE_NOTES_0.8.0.md)** — Everything in 0.8.0, with its upgrade checklist
 - **[captain-claw.com/docs](https://captain-claw.com/docs)** — The same documentation as a website, with a devices section and the 0.8.1 settings

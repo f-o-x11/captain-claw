@@ -128,7 +128,7 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
                 "active_concerns": d.active_concerns, "max_concurrent": d.max_concurrent,
                 "agents": [a.to_dict() for a in d.agents],
             }
-            for d in server.connections.list_decks(connected_only=False)
+            for d in server.connections.list_decks(connected_only=False) if server.can_return(d)
         ]
         return web.json_response(snap)
 
@@ -149,7 +149,8 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
             "now": datetime.now(timezone.utc).isoformat(),
             "hub": server.status_snapshot(),
             "stats": await server.concerns.get_stats(),
-            "instances": [_instance_view(i, server) for i in server.connections.list_instances()],
+            "instances": [_instance_view(i, server) for i in server.connections.list_instances()
+                          if server.can_return(i)],
             "active": [_concern_view(c, server.live_progress.get(c.id)) for c in active],
             "recent": [_concern_view(c, counts=counts.get(c.id, {})) for c in recent],
         })

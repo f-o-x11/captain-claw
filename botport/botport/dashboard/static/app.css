@@ -3339,7 +3339,8 @@ html.kiosk {
 @media (max-width: 520px) {
   .brand-name,
   .live-label,
-  .uptime {
+  .uptime,
+  html:not(.kiosk) #kiosk-btn {
     display: none;
   }
 
