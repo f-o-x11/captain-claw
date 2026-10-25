@@ -9,7 +9,7 @@ import { hasTierSets, TIER_SETS_EVENT } from '../../services/tierConfig'
 import { fetchSharedTierSets } from '../../services/sharedTierSets'
 import { getOAuthClientConfig, getAdminTelegram } from '../../services/sharedIntegrations'
 import { getSystemProcesses, type SystemProcessResponse } from '../../services/system'
-import { isDesktopApp } from '../../services/desktopShell'
+import { isAppShell } from '../../services/desktopShell'
 import {
   fetchAllUsers, fetchWaitlistPending, fetchOpenInvites, fetchUsageToday, fetchCosts, fetchProviderKeys,
 } from './consoleApi'
@@ -129,7 +129,7 @@ export function OverviewPage() {
         icon={LayoutGrid}
         title={`${greeting()}${user?.display_name ? `, ${user.display_name.split(' ')[0]}` : ''}`}
         description={<>Here's how <b className="font-medium text-zinc-300">{branding.name}</b> is doing.</>}
-        actions={isDesktopApp()
+        actions={isAppShell()
           ? <Button icon={MessagesSquare} onClick={enterKioskView}>Switch to user view</Button>
           : <Button icon={LayoutDashboard} onClick={() => leaveConsole('desktop')}>Open Flight Deck</Button>}
       />

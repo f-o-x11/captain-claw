@@ -33,10 +33,11 @@ import {
   Trash2,
   BookOpen,
   ShieldCheck,
+  Smartphone,
 } from 'lucide-react'
 import { useUIStore } from '../../stores/uiStore'
 import { openConsole, leaveKioskView, selectConsoleAdmin } from '../../stores/consoleStore'
-import { isDesktopApp } from '../../services/desktopShell'
+import { isAppShell, hasAndroidAppSettings, openAndroidAppSettings } from '../../services/desktopShell'
 import { useAgentStore } from '../../stores/agentStore'
 import { useAuthStore, logoutUser } from '../../stores/authStore'
 import { useChatStore, parseLaneKey, clearAgentSlices } from '../../stores/chatStore'
@@ -971,6 +972,8 @@ function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onPro
     { icon: Database, title: 'Data library', detail: 'Every table your agents keep, summarised and easy to read', onClick: onData },
     { icon: Folders, title: 'Shared folders', detail: 'The folders your agents work in together — open, search, add files', onClick: onFolders },
     { icon: IdCard, title: 'Profile', detail: 'About you, your company, your preferences', onClick: onProfile },
+    // The Android app: back to its start screen — the saved decks and accounts.
+    ...(hasAndroidAppSettings() ? [{ icon: Smartphone, title: 'Switch deck', detail: 'Your Flight Decks and accounts on this phone', onClick: openAndroidAppSettings }] : []),
     { icon: RefreshCw, title: 'Refresh agents', detail: 'Check every agent again', onClick: onRefresh },
     { icon: Compass, title: 'Getting started', detail: 'A short tour: agents, connections, Telegram and more', onClick: onGuide },
   ]
@@ -1234,7 +1237,7 @@ function AgentsColumn({
   const wsConnected = useAgentStore((s) => s.wsConnected)
   const { authEnabled, user: authUser, signingOut } = useAuthStore()
   const consoleAdmin = useAuthStore(selectConsoleAdmin) && !locked
-  const desktopApp = isDesktopApp()
+  const appShell = isAppShell()
   const { theme, toggle: toggleTheme } = useThemeStore()
   const width = usePersistedSize('fd:simple-left-width', 260, 200, 440, 'x')
   const [search, setSearch] = useState('')
@@ -1414,7 +1417,7 @@ function AgentsColumn({
               <LayoutDashboard className="h-4 w-4" />
             </button>
           )}
-          {consoleAdmin && !desktopApp && (
+          {consoleAdmin && !appShell && (
             <button onClick={() => openConsole()} className={iconBtn} title="Admin console — models, archetypes, connections, users, settings">
               <ShieldCheck className="h-4 w-4" />
             </button>

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { useNotificationStore } from './notificationStore'
-import { isDesktopApp } from '../services/desktopShell'
+import { isAppShell } from '../services/desktopShell'
 
 export interface User {
   id: string
@@ -83,7 +83,7 @@ export interface AuthStore {
 const KIOSK_VIEW_KEY = 'fd:kiosk-view'
 
 function readKioskView(): boolean {
-  try { return isDesktopApp() && sessionStorage.getItem(KIOSK_VIEW_KEY) === '1' } catch { return false }
+  try { return isAppShell() && sessionStorage.getItem(KIOSK_VIEW_KEY) === '1' } catch { return false }
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
@@ -149,10 +149,10 @@ export const selectKioskLocked = (s: AuthStore): boolean =>
   // The desktop admin's own view — never whoever signs in after them.
   (s.kioskView && (s.authEnabled === false || s.user?.role === 'admin'))
   || (s.authEnabled === false
-    // The desktop app keeps its admin's way to the console (its kiosk is kioskView).
-    ? s.simpleChatOnly && !isDesktopApp()
-    // The desktop app has no full Flight Deck: anyone but an admin gets the kiosk.
-    : s.user?.role !== 'admin' && (s.user?.kiosk === true || isDesktopApp()))
+    // The apps (desktop, Android) keep their admin's way to the console (their kiosk is kioskView).
+    ? s.simpleChatOnly && !isAppShell()
+    // The apps have no full Flight Deck: anyone but an admin gets the kiosk.
+    : s.user?.role !== 'admin' && (s.user?.kiosk === true || isAppShell()))
 
 // ── Auth API calls ──
 
