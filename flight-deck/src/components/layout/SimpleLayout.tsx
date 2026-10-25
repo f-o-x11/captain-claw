@@ -22,6 +22,7 @@ import {
   Plug,
   IdCard,
   Users,
+  Globe,
   X,
   Info,
   Compass,
@@ -74,6 +75,8 @@ import {
   type AgentMenuItem,
 } from './KioskAgentDialogs'
 import { useIsMobile } from '../../hooks/useMediaQuery'
+import { NetworkBadge, networkShareAction } from '../agents/NetworkShare'
+import { dockerShareKey, processShareKey, useNetworkShareStore } from '../../stores/networkShareStore'
 
 // ── Simple layout ────────────────────────────────────────────────────
 //
@@ -110,6 +113,12 @@ interface SimpleAgent {
 }
 
 const STATE_RANK: Record<AgentState, number> = { running: 0, starting: 1, unknown: 2, stopped: 3 }
+
+/** How the BotPort share store names this agent ("" for one it can't share). */
+function shareKeyOf(a: SimpleAgent): string {
+  if (a.managed) return ''
+  return a.kind === 'process' ? processShareKey(a.startKey) : a.kind === 'docker' ? dockerShareKey(a.name) : ''
+}
 
 function dockerState(status: string): AgentState {
   if (/running/i.test(status)) return 'running'
@@ -520,6 +529,21 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     }
   }
 
+  // Sharing one's own agents on this deck's BotPort network (when it has one):
+  // the "⋯" menu offers it, the list shows a "network" badge.
+  const netAgents = useNetworkShareStore((s) => s.agents)
+  const netCanShare = useNetworkShareStore((s) => s.canShare)
+  const netAdmin = useNetworkShareStore((s) => s.admin)
+  const netDeck = useNetworkShareStore((s) => s.deckName)
+  const netSetShared = useNetworkShareStore((s) => s.setShared)
+  const shareKeys = useMemo(() => agents.map(shareKeyOf).filter(Boolean).join('|'), [agents])
+  useEffect(() => {
+    const st = useNetworkShareStore.getState()
+    void st.fetch().then(() => {
+      for (const k of shareKeys.split('|')) if (k) useNetworkShareStore.getState().ensure(k)
+    })
+  }, [shareKeys])
+
   // The kiosk's "⋯" on an agent. Its files and data live in the Library and
   // Data buttons (bottom left) for the agents those index — the library's
   // "Everything it keeps" opens the agent's own live view. An agent they
@@ -550,6 +574,13 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
       items.push(
         { icon: BookOpen, label: 'Instructions', hint: 'What it should always keep in mind', onSelect: () => setAgentInstructionsId(a.id) },
         { icon: SlidersHorizontal, label: 'Settings', hint: 'Model, how it thinks, vision', onSelect: () => setAgentSettingsId(a.id) },
+      )
+      const net = networkShareAction(netAgents[shareKeyOf(a)], {
+        canShare: netCanShare, admin: netAdmin, deckName: netDeck, displayName: a.name, setShared: netSetShared,
+        onError: (m) => useNotificationStore.getState().add('error', 'BotPort network', m),
+      })
+      if (net.show) items.push({ icon: Globe, label: net.label, hint: net.hint, onSelect: net.onClick, disabled: net.disabled })
+      items.push(
         { icon: Trash2, label: 'Remove agent', hint: 'Delete it and its folder', danger: true,
           onSelect: () => setAgentRemoveId(a.id), disabled: switching.has(a.id) },
       )
@@ -1432,6 +1463,7 @@ function AgentsColumn({
                           <Users className="h-2.5 w-2.5" />shared
                         </span>
                       )}
+                      {shareKeyOf(a) && <NetworkBadge shareKey={shareKeyOf(a)} />}
                     </div>
                     <div className="truncate text-[11px] text-zinc-500">
                       {isBooting
@@ -2096,6 +2128,7 @@ function PhoneLayout({
                       <span className="truncate text-[15px] font-medium text-zinc-100">{a.name}</span>
                       {busy && <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500 dark:bg-amber-400" title="Working" />}
                       {info?.unread && !busy && <span className="h-2 w-2 shrink-0 rounded-full bg-sky-400" title="New reply" />}
+                      {shareKeyOf(a) && <NetworkBadge shareKey={shareKeyOf(a)} />}
                     </span>
                     <span className="block truncate text-xs text-zinc-500">
                       {isBooting ? 'Starting…'

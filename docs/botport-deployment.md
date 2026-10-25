@@ -274,9 +274,12 @@ Each agent shared by its owner shows **shared by owner** in that list, with a
 **Stop** button to take it off the network. (An admin offers other people's
 agents through this list; only an agent's owner shares it from its card.)
 
-**Users** — on their own agent's card: the actions menu (the small gear) →
-**Share on network…**, confirm. The card shows a **network** badge while the
-agent is on the network; **Stop sharing on network** takes it off. A share
+**Users** — on their own agent: in the kiosk, the agent's **⋯** menu →
+**Share on network…**; in the Agent Desktop, the card's actions menu (the
+small gear) → **Share on network…**. Confirm, and the agent shows a
+**network** badge while it is on the network; **Stop sharing on network** (same
+menu) takes it off. The item appears only when the deck is connected to a hub
+and the admin lets users share. A share
 belongs to the agent's owner: if the agent changes hands it lapses until the
 new owner shares it, and removing the agent (or replacing it with a clone or
 a new container of the same name) removes its share.
