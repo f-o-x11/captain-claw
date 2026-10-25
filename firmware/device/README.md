@@ -153,6 +153,15 @@ speaking and trouble exactly as above; the voice carries the answers:
   picture through restarts, M5GFX starts it without one, and refreshes were
   several times slower; the 1.0.5–1.0.9 partial clock refresh (gone in
   1.0.11) also left the controller in its window without it.
+- **A white pass, hourly** (1.0.18): six-ink paper that only ever goes from
+  one picture to the next loses colour and keeps faint shadows of earlier
+  pictures. Once an hour (the first dashboard on its mark in a new hour,
+  normally :00) and once after a restart (power, update, crash; not the
+  deep-sleep wakes) the paper goes all white first, then draws the
+  dashboard. The restart's pass waits for the next five-minute mark, so a
+  jolted paper still doesn't redraw at once; a dashboard someone asked for
+  (back from the answer, a press) never gets one. Another screen asked for
+  during the white pass cuts it short, as above.
 - **Quick screen changes** (1.0.12): the refresh is the firmware's own
   (`PaperPanel::refresh()`, the same steps as M5GFX's `display()`), so it
   knows when the panel is in its waveform. Asking for another screen then —

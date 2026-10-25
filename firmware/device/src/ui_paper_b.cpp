@@ -489,15 +489,19 @@ struct PaperPanel : lgfx::Panel_ED2208 {
   // the booster, the refresh — but with `*waveform` set while the panel runs
   // its waveform (the long part), so the main loop can cut it short with a
   // reset pulse when another screen is asked for, and the bus let go
-  // meanwhile (the microSD card shares it).
-  void refresh(volatile bool* waveform) {
+  // meanwhile (the microSD card shares it). `white`: an all-white page
+  // instead of the frame (the cleaning pass, see pushToPanel()).
+  void refresh(volatile bool* waveform, bool white = false) {
     const int w = width(), h = height();
     static uint8_t line[200];
     begin();
     cmd(0x10);  // the pixels, two a byte
+    if (white) memset(line, 0x11, w / 2);
     for (int y = 0; y < h; ++y) {
-      const lgfx::bgr888_t* px = reinterpret_cast<const lgfx::bgr888_t*>(row(y));
-      for (int x = 0; x < w; x += 2) line[x >> 1] = code(px[x]) << 4 | code(px[x + 1]);
+      if (!white) {
+        const lgfx::bgr888_t* px = reinterpret_cast<const lgfx::bgr888_t*>(row(y));
+        for (int x = 0; x < w; x += 2) line[x >> 1] = code(px[x]) << 4 | code(px[x + 1]);
+      }
       _bus->writeBytes(line, w / 2, true, false);
     }
     _bus->wait();
@@ -531,9 +535,16 @@ static PaperPanel* paperPanel() {
 #endif
 
 static volatile bool inWaveform = false;  // the panel is running a refresh's waveform
+static volatile bool cleanNext = false;   // a white pass before this frame (commit(): cleanDue())
+static volatile bool cutDone = false;     // tick() cut the waveform short
+static void markCleaned();
 
 // Every refresh starts from a reset controller, and runs as PaperPanel::
-// refresh() (so it can be cut short); off the board, M5GFX's own.
+// refresh() (so it can be cut short); off the board, M5GFX's own. With
+// cleanNext, the paper goes all white first, then to the frame: the inks
+// driven to one end and back, so they keep their colour (see cleanDue()).
+// Another screen asked for during the white pass cuts it short and skips
+// the frame — the new screen draws next.
 static void pushToPanel() {
   waitPanel(45000);
   M5.Display.startWrite();
@@ -541,11 +552,20 @@ static void pushToPanel() {
   M5.Display.endWrite();
 #ifndef PREVIEW
   if (PaperPanel* p = paperPanel()) {
+    cutDone = false;
+    if (cleanNext) {
+      cleanNext = false;
+      p->reset();
+      p->refresh(&inWaveform, true);
+      if (cutDone) return;
+      markCleaned();
+    }
     p->reset();
     p->refresh(&inWaveform);
     return;
   }
 #endif
+  cleanNext = false;
   M5.Display.display();
   waitPanel(45000);
 }
@@ -597,6 +617,32 @@ static bool everShown = false;
 static uint32_t lastDashMs = 0;  // the dashboard, this boot (0: not yet)
 static constexpr uint32_t kDashEverySec = 5 * 60;  // on the clock's five-minute marks
 
+// A white pass before the dashboard (pushToPanel()): six-ink paper that only
+// ever goes from one picture to the next loses colour and keeps faint
+// shadows of the pictures before. Once an hour — the first dashboard drawn
+// on its mark in a new hour, normally :00 — and once after a restart (power,
+// an update, a crash; not the deep-sleep wakes), on its next mark too: a
+// jolted paper still never redraws at once. Never for a dashboard someone
+// asked for (back from the answer, a press): that one stays quick. In RTC
+// memory, which a restart clears.
+RTC_DATA_ATTR static bool rtcCleaned = false;
+RTC_DATA_ATTR static uint32_t rtcCleanAt = 0;           // by the clock
+RTC_DATA_ATTR static uint8_t rtcDashesSinceClean = 0;   // (no clock: every twelfth dashboard)
+static constexpr uint32_t kCleanEverySec = 60 * 60;
+
+static bool cleanDue() {
+  if (!rtcCleaned) return true;
+  const uint32_t now = (uint32_t)time(nullptr);
+  if (now >= 1700000000 && rtcCleanAt >= 1700000000) return now / kCleanEverySec != rtcCleanAt / kCleanEverySec;
+  return rtcDashesSinceClean >= kCleanEverySec / kDashEverySec;
+}
+
+static void markCleaned() {
+  rtcCleanAt = (uint32_t)time(nullptr);
+  rtcDashesSinceClean = 0;
+  rtcCleaned = true;
+}
+
 #ifndef PREVIEW
 static void keepShown() {
   Preferences p;
@@ -623,6 +669,7 @@ struct Want {
   Kind kind = Kind::None;
   std::function<void()> draw;
   bool active = false;
+  bool onMark = false;  // the dashboard on its five-minute mark (not asked for)
 };
 static Want want;
 static bool forceNext = false;  // drawNow(): the dashboard, now, whatever the clock says
@@ -645,10 +692,11 @@ bool waiting() { return false; }
 
 static bool cutShort = false;  // a different screen was asked for while one draws
 
-static void draw(Kind kind, std::function<void()> fn) {
+static void draw(Kind kind, std::function<void()> fn, bool onMark = false) {
   want.kind = kind;
   want.draw = std::move(fn);
   want.active = true;
+  want.onMark = onMark;
   if (refreshing && kind != Kind::Reply && kind != shownKind) cutShort = true;  // (pages: askReplyPage)
 }
 
@@ -665,7 +713,9 @@ static void commit() {
   if (w.kind == Kind::Dash) {
     lastDashMs = millis() ? millis() : 1;
     rtcDashAt = (uint32_t)time(nullptr);
+    if (rtcDashesSinceClean < 255) ++rtcDashesSinceClean;
   }
+  cleanNext = w.kind == Kind::Dash && w.onMark && cleanDue();
   keepShown();
   startRefresh();
 }
@@ -680,6 +730,7 @@ void tick() {
   if (refreshing && cutShort && inWaveform) {
     PaperPanel::pulse();
     cutShort = false;
+    cutDone = true;
   }
 #endif
   if (refreshing) return;
@@ -1033,7 +1084,9 @@ static void drawDashboard(bool asleep) {
               {board::kBackKey, "answer"}});
 }
 
-static void askDashboard(bool asleep) { draw(Kind::Dash, [=] { drawDashboard(asleep); }); }
+static void askDashboard(bool asleep, bool onMark = false) {
+  draw(Kind::Dash, [=] { drawDashboard(asleep); }, onMark);
+}
 
 // On each five-minute mark, while the dashboard is on the paper: the whole
 // page again (a reset controller makes a full refresh quick).
@@ -1043,14 +1096,14 @@ void hold(bool recording) { held = recording; }
 
 static void dashTick() {
   if (held) return;  // drawn once the recording ends
-  if (shownKind == Kind::Dash && !viewing && !answerDue && dashDue()) askDashboard(false);
+  if (shownKind == Kind::Dash && !viewing && !answerDue && dashDue()) askDashboard(false, true);
 }
 
 // The dashboard on its five-minute mark, or when it was asked for (drawNow).
 static void dashboardIfDue() {
   const bool now = forceNext && millis() - forceAtMs < 3000;
   forceNext = false;
-  if (now || (dashDue() && !held)) askDashboard(false);
+  if (now || (dashDue() && !held)) askDashboard(false, !now);
 }
 
 void setHome(const Home& home) {
@@ -1067,7 +1120,7 @@ void showHome(const Home& home) {
 // mark has come (the sleep timer is set to land on the next), else nothing.
 void showSleeping(const String&, uint8_t) {
   forceNext = false;
-  if (dashDue()) askDashboard(true);
+  if (dashDue()) askDashboard(true, true);
   flush();
 }
 
