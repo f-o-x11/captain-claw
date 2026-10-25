@@ -77,12 +77,10 @@ from __future__ import annotations
 
 import asyncio
 import io
-import itertools
 import json
 import logging
 import math
 import re
-import secrets
 import shutil
 import struct
 import time
@@ -92,6 +90,13 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from captain_claw.flight_deck import glasses_bridge as gb
 from captain_claw.flight_deck import usage_quota
+from captain_claw.flight_deck.bus_client import (  # noqa: F401 — activity_text: the device's activity line
+    HEARD_AFTER_S,
+    TURN_KEEP_S,
+    BusClient,
+    activity_text,
+    running_agents,
+)
 
 log = logging.getLogger(__name__)
 
@@ -148,15 +153,13 @@ MAX_NOTE_SECONDS = 120
 _SENTENCE_END = re.compile(r"[.!?…](?=\s)|\n")
 # "New topic" said with nothing after it: no answer follows the new session.
 NEW_TOPIC_REPLY = "New topic — go ahead."
-TURN_KEEP_S = 600.0              # a turn (its answer) waits this long for its device to come back
 RESUME_GRACE_S = 1.5             # a reconnect's talk-from-sleep recording starts within this
-HEARD_AFTER_S = 2.0              # a device message this long after an answer: it got there
 
 # The device turn per channel, kept across reconnects (weak Wi-Fi drops the
 # link mid-turn): open from the send until "ready", and its answer until the
-# device is heard from after it. A reconnect carries on with it.
+# device is heard from after it (TURN_KEEP_S, HEARD_AFTER_S). A reconnect
+# carries on with it.
 _turns: dict[str, dict] = {}
-_conn_serials = itertools.count(1)
 
 # Offline voice notes already handed to the agent, per device channel: a
 # batch sent again (its notes_done lost with the link) is acknowledged, not
@@ -227,20 +230,6 @@ def screen_text(text: str, has_dj: bool = False) -> str:
     if not has_dj:
         out = out.replace("Đ", "Dj")  # the StickS3's font has đ but not Đ
     return re.sub(r"\n{3,}", "\n\n", out).strip()
-
-
-# Emoji and symbol marks the device font can't draw (agent activity uses a few).
-_NO_GLYPH = re.compile("[\U0001F000-\U0001FFFF\u2600-\u27BF\uFE0F\u200D]")
-# Runtime statuses that are turn bookkeeping, not activity worth showing.
-_QUIET_STATUSES = {"", "thinking", "ready", "idle", "done", "completed", "agent_connected",
-                   "agent_reconnecting", "subscribed"}
-
-
-def activity_text(text: str, limit: int = 120) -> str:
-    """An activity line as the device shows it: one line, no emoji, "…"."""
-    out = _NO_GLYPH.sub("", str(text or "")).replace("\n", " ")
-    out = re.sub(r"\.\.\.$", "…", re.sub(r"\s{2,}", " ", out).strip())
-    return out[:limit]
 
 
 def _blen(s: str) -> int:
@@ -492,19 +481,10 @@ async def _device_user(token: str) -> dict | None:
     return user
 
 
-def _running_agents(user_id: str) -> list[dict]:
-    from captain_claw.flight_deck.mcp_server_routes import _user_agents
-
-    return [
-        a for a in _user_agents(user_id)
-        if a.get("port") and str(a.get("status", "")).lower() in ("running", "up")
-    ]
-
-
 def _pick_agent(user_id: str, selector: str) -> dict | None:
     """The agent a selector names (slug, name or port) among the owner's
     running agents, else their first running one."""
-    agents = _running_agents(user_id)
+    agents = running_agents(user_id)
     sel = (selector or "").strip()
     if sel:
         for a in agents:
@@ -520,17 +500,17 @@ def _pick_agent(user_id: str, selector: str) -> dict | None:
 # ── One connected device ──────────────────────────────────────────────
 
 
-class _DeviceConn:
+class _DeviceConn(BusClient):
+    MSG_ID_PREFIX = "dev_"
+
     def __init__(self, ws: WebSocket, user: dict, device_id: str, *, lang: str,
                  speak: bool, screen: tuple[int, int], voice: str = "",
                  round_screen: bool = False, chunked: bool = False,
                  paper: bool = False, hw: str = "", fw: str = "", sound_cmds: bool = False) -> None:
-        self.ws = ws
+        super().__init__(ws, user)
         self.hw = hw  # device kind + firmware version, for over-the-air updates
         self.fw = fw
         self.sound_cmds = sound_cmds  # it changes volume / beeps when told to ("cmds=sound")
-        self.user = user
-        self.user_id = str(user.get("id", ""))
         self.device_id = device_id
         self.lang = lang
         self.speak = speak
@@ -540,11 +520,6 @@ class _DeviceConn:
         self.chunked = chunked            # pictures may span several frames
         self.paper = paper                # colour e-paper: pictures at their own shape
         self._image_lock = asyncio.Lock()  # one picture's parts at a time
-        self.ch: gb._ChannelState | None = None
-        self.agent: dict | None = None
-        self.serial = next(_conn_serials)
-        self.closed = False  # the link is gone; a turn still open keeps listening
-        self.opened_at = self.last_heard_at = time.monotonic()
         self.bg_id: str | None = None  # the background it has ("" none); None: it can't show one
         # The answer as the model writes it (agent_delta): shown as it grows
         # and spoken sentence by sentence as they complete.
@@ -554,15 +529,10 @@ class _DeviceConn:
         self.streamed = False    # some of this answer went out as it came
         self.last_part = ""      # the text last shown as a part
         self.speech_parts = 0    # sounds sent for this answer: the first gets the cue, the rest carry on
-        self._send_lock = asyncio.Lock()
         self.recording = False
         self.rec_rate = 16000
         self.rec = bytearray()
-        # A device turn is open from our send until the agent says "ready".
-        self.pending = False
         self.cue_alone = False  # the open turn is a bare "new topic"
-        self.last_reply_at = 0.0
-        self._last_activity = ""
         self._audio_q: asyncio.Queue = asyncio.Queue()
         self._audio_task: asyncio.Task | None = None
         self._audio_worker: asyncio.Task | None = None
@@ -574,7 +544,6 @@ class _DeviceConn:
         # Offline voice notes arriving: the one now (note_start … note_end), the batch so far.
         self.note: dict | None = None
         self.notes: list[dict] = []
-        self._bg: set[asyncio.Task] = set()
 
     # ── over-the-air updates ──
     async def offer_update(self, reply_none: bool = False) -> bool:
@@ -589,137 +558,46 @@ class _DeviceConn:
             await self.send_json({"type": "update_none"})
         return offer is not None
 
-    # ── wire ──
-    async def send_json(self, obj: dict) -> None:
-        if self.closed:
-            return
-        async with self._send_lock:
-            await self.ws.send_text(json.dumps(obj, default=str))
-
-    async def send_bin(self, kind: int, payload: bytes) -> None:
-        if self.closed:
-            return
-        async with self._send_lock:
-            await self.ws.send_bytes(bytes([kind]) + payload)
-
-    def _spawn(self, coro) -> None:
-        task = asyncio.create_task(coro)
-        self._bg.add(task)
-        task.add_done_callback(self._bg.discard)
-
     # ── binding ──
     @property
     def channel_id(self) -> str:
         return f"device:{self.user_id}:{self.device_id}"
 
-    async def bind(self, selector: str) -> bool:
-        agent = _pick_agent(self.user_id, selector)
-        if agent is None:
-            await self.send_json({"type": "error", "text": "No running agent. Start one in Flight Deck."})
-            return False
-        ch = await gb._get_or_create_channel(self.channel_id)
-        if self.ch is not ch:
-            if self.ch is not None and self.on_bus in self.ch.callback_subscribers:
-                self.ch.callback_subscribers.remove(self.on_bus)
-            self.ch = ch
-        # One device socket per channel listens (a reconnect replaces the old).
-        ch.callback_subscribers[:] = [cb for cb in ch.callback_subscribers
-                                      if getattr(cb, "__self__", None) is None
-                                      or not isinstance(cb.__self__, _DeviceConn)]
-        ch.callback_subscribers.append(self.on_bus)
-        await gb._ensure_agent_binding(ch, str(agent.get("host") or "localhost"), int(agent["port"]))
-        self.agent = agent
-        await self.send_json({"type": "bound", "agent": agent.get("name", ""), "slug": agent.get("slug", ""),
-                              "linked": ch.agent_ws is not None})
-        return True
+    def turns(self) -> dict[str, dict]:
+        return _turns
 
-    def unbind(self) -> None:
-        if self.ch is not None and self.on_bus in self.ch.callback_subscribers:
-            self.ch.callback_subscribers.remove(self.on_bus)
+    def pick_agent(self, selector: str) -> dict | None:
+        return _pick_agent(self.user_id, selector)
 
     # ── agent bus → device ──
-    async def on_bus(self, ev: dict) -> None:
-        etype = ev.get("type")
-        if etype == "agent":
-            proactive = bool(ev.get("proactive")) and not ev.get("fd_delivers")
-            if not (self.pending or proactive):
-                return  # a turn from another surface on the same agent
-            turn = _turns.get(self.channel_id) if self.pending else None
-            text = str(ev.get("text", "") or "")
-            closes = False
-            if ev.get("command") == "/new":
-                # A spoken "new topic, …": the device hears the answer that
-                # follows, not "New session created". Said alone, nothing
-                # follows — a short line closes the turn instead.
-                if not (self.pending and self.cue_alone):
-                    return
-                self.cue_alone = False
-                self._end_turn()
-                text, closes = NEW_TOPIC_REPLY, True
-            if not text.strip():
-                return
-            await self._show_reply(text, proactive, turn)
-            if closes:
-                await self.send_json({"type": "state", "state": "ready"})
-        elif etype == "narration":
-            if self.pending and ev.get("text"):
-                await self.send_json({"type": "status", "text": str(ev["text"])[:200]})
-        elif etype == "agent_delta":
-            if self.pending and not self.cue_alone and not self.closed:
-                await self._on_delta(str(ev.get("text", "") or ""))
-        elif etype == "activity":
-            if self.pending and ev.get("phase") != "done":
-                tool = str(ev.get("tool", "") or "")
-                if tool and tool != "progress":
-                    await self._reset_stream()  # what the model wrote before a tool call isn't the answer
-                await self._send_activity(str(ev.get("text", "")), tool)
-        elif etype == "status":
-            status = str(ev.get("status", ""))
-            # "Using <tool>..." duplicates the tool's activity line (which says more).
-            tool_start = status.startswith("Using ") and status.endswith("...")
-            if self.pending and status.strip().lower() not in _QUIET_STATUSES and not tool_start:
-                await self._send_activity(status, "")
-            if status == "thinking" and self.pending:
-                await self.send_json({"type": "state", "state": "thinking"})
-            elif status == "ready" and self.pending:
-                self._end_turn()
-                await self.send_json({"type": "state", "state": "ready"})
-            elif status == "agent_connected":
-                await self.send_json({"type": "state", "state": "connected"})
-            elif status == "agent_reconnecting":
-                await self.send_json({"type": "state", "state": "agent_offline"})
-                await self.send_json({"type": "status", "text": "Reconnecting to agent…"})
-        elif etype == "error":
-            if self.pending:
-                self._end_turn()
-                text = ("The agent is busy — try again in a moment." if ev.get("retryable")
-                        else str(ev.get("text", "") or "Agent error"))
-                await self.send_json({"type": "error", "text": text[:300]})
-        elif etype == "media":
-            if self.closed or not (self.pending or time.monotonic() - self.last_reply_at < MEDIA_WINDOW_S):
-                return
-            for item in ev.get("items") or []:
-                kind = str(item.get("kind", ""))
-                if kind == "image":
-                    self._spawn(self._send_image(item))
-                elif kind == "audio":
-                    _answers.setdefault(self.channel_id, []).append(("file", item))
-                    await self._audio_q.put(("file", item))
+    def _command_answer(self, command: str, text: str) -> tuple[str | None, bool]:
+        if command != "/new":
+            return text, False
+        # A spoken "new topic, …": the device hears the answer that follows,
+        # not "New session created". Said alone, nothing follows — a short
+        # line closes the turn instead.
+        if not (self.pending and self.cue_alone):
+            return None, False
+        self.cue_alone = False
+        self._end_turn()
+        return NEW_TOPIC_REPLY, True
 
-    async def _send_activity(self, text: str, tool: str) -> None:
-        line = activity_text(text)
-        if not line or line == self._last_activity:
+    async def _on_media(self, ev: dict) -> None:
+        if self.closed or not (self.pending or time.monotonic() - self.last_reply_at < MEDIA_WINDOW_S):
             return
-        self._last_activity = line
-        await self.send_json({"type": "activity", "text": line, "tool": tool})
+        for item in ev.get("items") or []:
+            kind = str(item.get("kind", ""))
+            if kind == "image":
+                self._spawn(self._send_image(item))
+            elif kind == "audio":
+                _answers.setdefault(self.channel_id, []).append(("file", item))
+                await self._audio_q.put(("file", item))
 
     async def _show_reply(self, text: str, proactive: bool, turn: dict | None = None) -> None:
         """An answer on the screen and spoken (what of it wasn't already, as it
         streamed); a turn's answer is also kept until the device is heard from
         after it (a dropped link loses it)."""
-        if turn is not None:
-            turn.update(answer={"text": text, "proactive": proactive}, via=self.serial,
-                        sent_at=time.monotonic(), heard=False)
+        self._keep_answer(turn, text, proactive)
         if self.closed:
             self._forget_stream()
             return  # the reconnect brings it
@@ -752,6 +630,8 @@ class _DeviceConn:
 
     # ── the answer as it streams ──
     async def _on_delta(self, text: str) -> None:
+        if self.cue_alone:
+            return  # a bare "new topic": its short line is the answer
         self.partial += text
         while True:
             m = _SENTENCE_END.search(self.partial, self.spoken_upto)
@@ -802,69 +682,13 @@ class _DeviceConn:
         self.streamed = False
         self.last_part = ""
 
-    async def stop_agent(self) -> None:
-        """The device's stop button while the agent works: the agent stops
-        after its current step (its "ready" ends the turn); what was queued
-        to be spoken is dropped."""
-        ch = self.ch
-        if not (self.pending and ch is not None and ch.agent_ws is not None):
-            return
-        await self.stop_audio()
-        self._forget_stream()
-        try:
-            await ch.agent_ws.send(json.dumps({"type": "cancel"}))
-        except Exception as exc:
-            await self.send_json({"type": "error", "text": f"Couldn't stop: {exc}"[:200]})
-            return
-        await self.send_json({"type": "status", "text": "Stopping…"})
+    async def stop_output(self) -> None:
+        await self.stop_audio()  # the device's stop button: what was queued to be spoken is dropped
 
     # ── a turn across reconnects ──
-    def _end_turn(self) -> None:
-        self.pending = False
-        turn = _turns.get(self.channel_id)
-        if turn is not None:
-            turn["open"] = False
-        if self.closed:
-            self.unbind()  # nothing more to keep for the reconnect
-
-    def _kept_turn(self) -> dict | None:
-        turn = _turns.get(self.channel_id)
-        if turn and time.monotonic() - max(turn["at"], turn["sent_at"]) <= TURN_KEEP_S:
-            return turn
-        return None
-
-    def take_over(self) -> None:
-        """A device back after a dropped link: the turn still running on its
-        channel is this connection's now, so its answer comes here."""
-        turn = self._kept_turn()
-        if turn and turn["open"]:
-            self.pending = True
-
-    async def resume(self) -> None:
-        """After take_over: the answer the device may have missed comes
-        again, or a turn still running shows as thinking again."""
-        turn = self._kept_turn()
-        if turn is None:
-            return
+    async def _resume_ready(self) -> bool:
         await asyncio.sleep(RESUME_GRACE_S)  # woken by talking: that recording goes first
-        if self.recording or _turns.get(self.channel_id) is not turn:
-            return  # they're asking something new
-        answer = turn.get("answer")
-        if answer and not turn["heard"] and turn["via"] != self.serial:
-            await self._show_reply(answer["text"], answer["proactive"], turn)
-            if not turn["open"]:
-                await self.send_json({"type": "state", "state": "ready"})
-        elif turn["open"] and not answer:
-            await self.send_json({"type": "state", "state": "thinking"})
-
-    def heard(self) -> None:
-        """Something came from the device: the answer sent to it a moment
-        before got there."""
-        self.last_heard_at = time.monotonic()
-        turn = _turns.get(self.channel_id)
-        if (turn and turn.get("answer") and turn["via"] == self.serial
-                and time.monotonic() - turn["sent_at"] >= HEARD_AFTER_S):
-            turn["heard"] = True
+        return not self.recording
 
     # ── device → agent ──
     def source_fields(self) -> dict[str, str]:
@@ -886,57 +710,26 @@ class _DeviceConn:
             screen = f"{w}×{h} pixel"
         return _DEVICE_SYSTEM_CONTEXT.replace("{screen}", screen)
 
-    async def send_to_agent(self, text: str, ctx: Any = None, extra_notes: list[str] | None = None) -> bool:
-        """The words to the agent as a device turn, with the device's
-        readings (and any *extra_notes*) as context lines; False when it
-        didn't go (the device has been told why)."""
-        ch = self.ch
-        if ch is None:
-            await self.send_json({"type": "error", "text": "No agent bound."})
-            return False
-        for _ in range(50):  # the first send after binding waits for the link
-            if ch.agent_ws is not None:
-                break
-            await asyncio.sleep(0.1)
-        if ch.agent_ws is None:
-            await self.send_json({"type": "error", "text": "Agent isn't reachable."})
-            return False
-        allowed, quota = await usage_quota.admit_message(self.user_id, text)
-        if not allowed:
-            await self.send_json({"type": "error", "text": usage_quota.short_limit_text(quota)})
-            await self.send_json({"type": "state", "state": "ready"})
-            return False
-        async with ch.send_lock:
-            content = text if ch.context_sent else self.system_context() + text
-            payload = {
-                "type": "chat", "content": content, "surface": "device",
-                "client_msg_id": "dev_" + secrets.token_hex(6),
-                # Which device it was (turn_source): recorded on the message
-                # and the key of the agent's reasoning effort for devices.
-                **self.source_fields(),
-            }
-            readings = device_context_line(ctx, self.hw)
-            notes = ([readings] if readings else []) + list(extra_notes or [])
-            if notes:
-                payload["context_notes"] = notes
-            try:
-                await ch.agent_ws.send(json.dumps(payload))
-                ch.context_sent = True
-            except Exception as exc:
-                await self.send_json({"type": "error", "text": f"Send failed: {exc}"})
-                return False
-        self.pending = True
+    def chat_fields(self, ch: Any, text: str, ctx: Any, extra_notes: list[str] | None) -> dict:
+        """A device turn: the device rules ahead of the binding's first
+        message, and the device's readings (and any *extra_notes*) as
+        context lines."""
+        fields = {
+            "content": text if ch.context_sent else self.system_context() + text, "surface": "device",
+            # Which device it was (turn_source): recorded on the message
+            # and the key of the agent's reasoning effort for devices.
+            **self.source_fields(),
+        }
+        readings = device_context_line(ctx, self.hw)
+        notes = ([readings] if readings else []) + list(extra_notes or [])
+        if notes:
+            fields["context_notes"] = notes
+        return fields
+
+    def _turn_started(self, text: str, turn: dict) -> None:
         self._forget_stream()  # a new answer
         self.speech_parts = 0
         self.cue_alone = cue_alone(text)
-        _turns[self.channel_id] = {"at": time.monotonic(), "open": True, "answer": None,
-                                   "via": 0, "sent_at": 0.0, "heard": False}
-        self._last_activity = ""
-        try:
-            await self.send_json({"type": "state", "state": "thinking"})
-        except Exception:
-            pass  # the device went away: the agent has the turn all the same
-        return True
 
     async def _note_text(self, note: dict) -> tuple[str, str]:
         """(text, why it failed): ("", "") is a note with nothing said in it."""
@@ -1295,15 +1088,10 @@ class _DeviceConn:
                     pass
             await proc.wait()
 
-    async def close(self) -> None:
-        self.closed = True
-        if not self.pending:
-            self.unbind()  # (a turn still running keeps listening: its answer waits for the reconnect)
+    async def _close_output(self) -> None:
         await self.stop_audio()
         if self._audio_worker is not None:
             self._audio_worker.cancel()
-        for task in list(self._bg):
-            task.cancel()
 
 
 # ── Route ─────────────────────────────────────────────────────────────
@@ -1436,7 +1224,7 @@ async def device_ws(ws: WebSocket) -> None:
                 else:
                     await conn.send_json({"type": "notes_done", "ids": [], "heard": 0})
             elif mtype == "agents":
-                items = [{"slug": a.get("slug"), "name": a.get("name")} for a in _running_agents(conn.user_id)]
+                items = [{"slug": a.get("slug"), "name": a.get("name")} for a in running_agents(conn.user_id)]
                 await conn.send_json({"type": "agents", "items": items,
                                       "current": (conn.agent or {}).get("slug", "")})
             elif mtype == "select":

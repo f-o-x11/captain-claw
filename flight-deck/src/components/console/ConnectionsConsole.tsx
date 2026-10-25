@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import {
-  Plug, Mail, LayoutGrid, Send, Scale, Mic, Sparkles, MessageCircle, Database, ChevronRight, ChevronLeft,
+  Plug, Mail, LayoutGrid, Send, Scale, Mic, Sparkles, MessageCircle, Database, ChevronRight, ChevronLeft, Cable,
 } from 'lucide-react'
 import GoogleConnection from '../connections/GoogleConnection'
 import MicrosoftConnection from '../connections/MicrosoftConnection'
@@ -9,6 +9,7 @@ import CodexConnection from '../connections/CodexConnection'
 import AntigravityConnection from '../connections/AntigravityConnection'
 import MCPConnection from '../connections/MCPConnection'
 import MCPAgentAccess from '../connections/MCPAgentAccess'
+import AgentLinksConnection, { type LinksStatus } from '../connections/AgentLinksConnection'
 import JevConnection from '../connections/JevConnection'
 import SonioxConnection from '../connections/SonioxConnection'
 import WhatsAppNudgeConnection from '../connections/WhatsAppNudgeConnection'
@@ -29,7 +30,7 @@ import { Page, PageHeader, Dot } from './parts'
 // own connection. The same cards as Connections and Admin → Integrations; all
 // stay mounted so sign-in popups and half-typed forms survive switching.
 
-type ServiceId = 'google' | 'microsoft' | 'telegram' | 'mcp' | 'jev' | 'soniox' | 'codex' | 'antigravity' | 'whatsapp' | 'typesense'
+type ServiceId = 'google' | 'microsoft' | 'telegram' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'codex' | 'antigravity' | 'whatsapp' | 'typesense'
 
 interface Service {
   id: ServiceId
@@ -45,6 +46,8 @@ const SERVICES: Service[] = [
   { id: 'microsoft', label: 'Microsoft 365', hint: 'Outlook, Calendar and OneDrive — each person signs in', icon: LayoutGrid, everyone: true },
   { id: 'telegram', label: 'Telegram', hint: 'One team bot people talk to their agents through', icon: Send, everyone: true },
   { id: 'mcp', label: 'MCP servers', hint: 'Extra tools for agents from MCP servers', icon: Plug, everyone: true },
+  // The admin's own links; everyone links their own systems from Connections.
+  { id: 'systems', label: 'Systems', hint: 'Other systems that send your agents messages and files', icon: Cable, everyone: true },
   { id: 'jev', label: 'Jev', hint: 'Legal research (TypeSafe) — a team key or each person\'s own', icon: Scale, everyone: true },
   { id: 'soniox', label: 'Soniox', hint: 'Speech-to-text and voices — a team key or each person\'s own', icon: Mic, everyone: true },
   { id: 'codex', label: 'ChatGPT', hint: 'A ChatGPT subscription as a model provider', icon: Sparkles, everyone: false },
@@ -124,7 +127,15 @@ export function ConnectionsConsole() {
   }, [])
   const accounts = useAuthStore((s) => s.authEnabled !== false)
   const oauth = useAuthStore(selectConnectionsAvailable)
-  const statuses = useStatuses(accounts, oauth)
+  const [systems, setSystems] = useState<LinksStatus | null>(null)
+  const statuses: Partial<Record<ServiceId, Status>> = {
+    ...useStatuses(accounts, oauth),
+    ...(systems ? {
+      systems: systems.connected > 0
+        ? { tone: 'on' as const, text: `${systems.connected} connected` }
+        : { tone: 'off' as const, text: systems.links ? `${systems.links} link${systems.links === 1 ? '' : 's'}, none connected` : 'No links' },
+    } : {}),
+  }
   const current = SERVICES.find((s) => s.id === active)!
 
   const pick = (id: ServiceId) => { setActive(id); setDetail(true) }
@@ -205,6 +216,7 @@ export function ConnectionsConsole() {
           {panel('microsoft', null, <MicrosoftConnection />)}
           {panel('telegram', accounts ? <SharedTelegramBotAdmin /> : null, <TelegramConnection />)}
           {panel('mcp', accounts ? <SharedMCPServers refreshTick={0} inline /> : null, <><MCPConnection /><MCPAgentAccess /></>)}
+          {panel('systems', null, <AgentLinksConnection active={active === 'systems'} onStatus={setSystems} />)}
           {panel('jev', accounts ? <JevTeamKey refreshTick={0} /> : null, <JevConnection />)}
           {panel('soniox', accounts ? <SonioxTeamKey refreshTick={0} /> : null, <SonioxConnection />)}
           {panel('codex', null, <CodexConnection />)}

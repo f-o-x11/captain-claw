@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import uuid
 from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
@@ -826,6 +827,52 @@ class FlightDeckDB:
                 ON personal_access_tokens(token_hash);
             CREATE INDEX IF NOT EXISTS idx_pat_user
                 ON personal_access_tokens(user_id);
+            -- Agent links (agent_link.py): a system someone connected to one of
+            -- their agents over /link/ws, with a key of its own. Only the key's
+            -- sha256 is stored; key_hint is its last 4 characters.
+            CREATE TABLE IF NOT EXISTS agent_links (
+                id               TEXT PRIMARY KEY,
+                user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name             TEXT NOT NULL DEFAULT '',
+                agent_slug       TEXT NOT NULL DEFAULT '',
+                instructions     TEXT NOT NULL DEFAULT '',
+                key_hash         TEXT NOT NULL,
+                key_hint         TEXT NOT NULL DEFAULT '',
+                agent_session_id TEXT NOT NULL DEFAULT '',
+                agent_may_send   INTEGER NOT NULL DEFAULT 1,
+                webhook_url      TEXT NOT NULL DEFAULT '',
+                webhook_secret   TEXT NOT NULL DEFAULT '',
+                created_at       TEXT NOT NULL,
+                updated_at       TEXT NOT NULL,
+                last_used_at     TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_links_key
+                ON agent_links(key_hash);
+            CREATE INDEX IF NOT EXISTS idx_agent_links_user
+                ON agent_links(user_id);
+            -- What Flight Deck has for a linked system (agent_link_http.py): answers
+            -- to its HTTP messages and the agent's own messages, kept a week.
+            CREATE TABLE IF NOT EXISTS agent_link_events (
+                seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+                link_id    TEXT NOT NULL REFERENCES agent_links(id) ON DELETE CASCADE,
+                kind       TEXT NOT NULL,
+                re         TEXT NOT NULL DEFAULT '',
+                body       TEXT NOT NULL DEFAULT '{}',
+                delivered  TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_link_events
+                ON agent_link_events(link_id, seq);
+            -- The files those events name: where they are on the agent.
+            CREATE TABLE IF NOT EXISTS agent_link_files (
+                id         TEXT PRIMARY KEY,
+                link_id    TEXT NOT NULL REFERENCES agent_links(id) ON DELETE CASCADE,
+                agent_slug TEXT NOT NULL DEFAULT '',
+                path       TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                kind       TEXT NOT NULL DEFAULT 'file',
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS oauth_clients (
                 id            TEXT PRIMARY KEY,
                 client_name   TEXT NOT NULL DEFAULT '',
@@ -1004,6 +1051,9 @@ class FlightDeckDB:
             ("gmail_sends", "origin", "TEXT NOT NULL DEFAULT 'agent'"),
             ("gmail_sends", "topic_id", "TEXT NOT NULL DEFAULT ''"),
             ("gmail_sends", "in_reply_to_message_id", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_links", "agent_may_send", "INTEGER NOT NULL DEFAULT 1"),
+            ("agent_links", "webhook_url", "TEXT NOT NULL DEFAULT ''"),
+            ("agent_links", "webhook_secret", "TEXT NOT NULL DEFAULT ''"),
         ]:
             try:
                 await self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
@@ -1377,6 +1427,172 @@ class FlightDeckDB:
         ) as cur:
             await self._db.commit()
             return (cur.rowcount or 0) > 0
+
+    # ── Agent links (agent_link.py) ───────────────────────────────────
+    # A connected system's key is shown once, at creation or rotation; only
+    # its hash is kept.
+
+    _AGENT_LINK_FIELDS = ("name", "agent_slug", "instructions", "agent_session_id",
+                          "agent_may_send", "webhook_url", "webhook_secret")
+    LINK_EVENTS_KEPT_DAYS = 7
+    LINK_EVENTS_KEPT = 500  # per link
+
+    async def create_agent_link(self, user_id: str, *, name: str, agent_slug: str,
+                                instructions: str, key_hash: str, key_hint: str,
+                                agent_may_send: bool = True, webhook_url: str = "",
+                                webhook_secret: str = "") -> dict:
+        assert self._db is not None
+        now = _utcnow()
+        row = {"id": _uuid(), "user_id": user_id, "name": name, "agent_slug": agent_slug,
+               "instructions": instructions, "key_hash": key_hash, "key_hint": key_hint,
+               "agent_session_id": "", "agent_may_send": int(agent_may_send), "webhook_url": webhook_url,
+               "webhook_secret": webhook_secret, "created_at": now, "updated_at": now, "last_used_at": None}
+        await self._db.execute(
+            "INSERT INTO agent_links (id, user_id, name, agent_slug, instructions, key_hash, key_hint,"
+            " agent_session_id, agent_may_send, webhook_url, webhook_secret, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)",
+            (row["id"], user_id, name, agent_slug, instructions, key_hash, key_hint,
+             int(agent_may_send), webhook_url, webhook_secret, now, now),
+        )
+        await self._db.commit()
+        return row
+
+    async def get_agent_link(self, link_id: str) -> dict | None:
+        assert self._db is not None
+        async with self._db.execute("SELECT * FROM agent_links WHERE id = ?", (link_id,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def get_agent_link_by_key(self, key_hash: str) -> dict | None:
+        assert self._db is not None
+        async with self._db.execute("SELECT * FROM agent_links WHERE key_hash = ?", (key_hash,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def list_agent_links(self, user_id: str) -> list[dict]:
+        assert self._db is not None
+        rows = await self._db.execute_fetchall(
+            "SELECT * FROM agent_links WHERE user_id = ? ORDER BY created_at DESC", (user_id,),
+        )
+        return [dict(r) for r in rows]
+
+    async def update_agent_link(self, link_id: str, user_id: str, **fields: str | int) -> bool:
+        """Change a link's name / agent / instructions / session / sending and
+        webhook settings (other fields are ignored)."""
+        assert self._db is not None
+        cols = [k for k in fields if k in self._AGENT_LINK_FIELDS]
+        if not cols:
+            return False
+        sets = ", ".join(f"{c} = ?" for c in cols)
+        async with self._db.execute(
+            f"UPDATE agent_links SET {sets}, updated_at = ? WHERE id = ? AND user_id = ?",
+            (*[int(fields[c]) if isinstance(fields[c], bool) else fields[c] for c in cols],
+             _utcnow(), link_id, user_id),
+        ) as cur:
+            await self._db.commit()
+            return (cur.rowcount or 0) > 0
+
+    async def set_agent_link_key(self, link_id: str, user_id: str, key_hash: str, key_hint: str) -> bool:
+        assert self._db is not None
+        async with self._db.execute(
+            "UPDATE agent_links SET key_hash = ?, key_hint = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (key_hash, key_hint, _utcnow(), link_id, user_id),
+        ) as cur:
+            await self._db.commit()
+            return (cur.rowcount or 0) > 0
+
+    async def touch_agent_link(self, link_id: str) -> None:
+        assert self._db is not None
+        await self._db.execute("UPDATE agent_links SET last_used_at = ? WHERE id = ?", (_utcnow(), link_id))
+        await self._db.commit()
+
+    async def delete_agent_link(self, link_id: str, user_id: str) -> bool:
+        assert self._db is not None
+        async with self._db.execute(
+            "DELETE FROM agent_links WHERE id = ? AND user_id = ?", (link_id, user_id),
+        ) as cur:
+            await self._db.commit()
+            return (cur.rowcount or 0) > 0
+
+    # What Flight Deck keeps for a linked system: events (a week, the newest
+    # 500 per link) and the files they name.
+
+    @staticmethod
+    def _link_event(row: Any) -> dict:
+        event = dict(row)
+        try:
+            event["body"] = json.loads(event.get("body") or "{}")
+        except ValueError:
+            event["body"] = {}
+        return event
+
+    async def add_link_event(self, link_id: str, kind: str, re: str, body: dict) -> dict:
+        assert self._db is not None
+        now = _utcnow()
+        async with self._db.execute(
+            "INSERT INTO agent_link_events (link_id, kind, re, body, created_at) VALUES (?, ?, ?, ?, ?)",
+            (link_id, kind, re, json.dumps(body, ensure_ascii=False), now),
+        ) as cur:
+            seq = cur.lastrowid
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.LINK_EVENTS_KEPT_DAYS)).isoformat()
+        await self._db.execute(
+            "DELETE FROM agent_link_events WHERE link_id = ? AND (created_at < ? OR seq <= ?)",
+            (link_id, cutoff, (seq or 0) - self.LINK_EVENTS_KEPT),
+        )
+        await self._db.execute("DELETE FROM agent_link_files WHERE link_id = ? AND created_at < ?", (link_id, cutoff))
+        await self._db.commit()
+        return {"seq": seq, "link_id": link_id, "kind": kind, "re": re, "body": body,
+                "delivered": "", "created_at": now}
+
+    async def link_events_after(self, link_id: str, after: int, limit: int = 50) -> list[dict]:
+        assert self._db is not None
+        rows = await self._db.execute_fetchall(
+            "SELECT * FROM agent_link_events WHERE link_id = ? AND seq > ? ORDER BY seq LIMIT ?",
+            (link_id, after, limit),
+        )
+        return [self._link_event(r) for r in rows]
+
+    async def link_event_for(self, link_id: str, re: str) -> dict | None:
+        """The newest event answering message *re*."""
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT * FROM agent_link_events WHERE link_id = ? AND re = ? ORDER BY seq DESC LIMIT 1",
+            (link_id, re),
+        ) as cur:
+            row = await cur.fetchone()
+            return self._link_event(row) if row else None
+
+    async def undelivered_link_events(self, link_id: str, kind: str) -> list[dict]:
+        assert self._db is not None
+        rows = await self._db.execute_fetchall(
+            "SELECT * FROM agent_link_events WHERE link_id = ? AND kind = ? AND delivered = ''"
+            " ORDER BY seq", (link_id, kind),
+        )
+        return [self._link_event(r) for r in rows]
+
+    async def mark_link_event(self, seq: int, via: str) -> None:
+        """How an event reached the system (the first way only)."""
+        assert self._db is not None
+        await self._db.execute(
+            "UPDATE agent_link_events SET delivered = ? WHERE seq = ? AND delivered = ''", (via, seq),
+        )
+        await self._db.commit()
+
+    async def add_link_file(self, link_id: str, *, agent_slug: str, path: str, name: str, kind: str) -> str:
+        assert self._db is not None
+        file_id = "f_" + secrets.token_urlsafe(18)
+        await self._db.execute(
+            "INSERT INTO agent_link_files (id, link_id, agent_slug, path, name, kind, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)", (file_id, link_id, agent_slug, path, name, kind, _utcnow()),
+        )
+        await self._db.commit()
+        return file_id
+
+    async def get_link_file(self, file_id: str) -> dict | None:
+        assert self._db is not None
+        async with self._db.execute("SELECT * FROM agent_link_files WHERE id = ?", (file_id,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
     # ── OAuth 2.1 (inbound MCP; claude.ai custom connectors) ──────────
 
