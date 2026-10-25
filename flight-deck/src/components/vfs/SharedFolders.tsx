@@ -9,6 +9,7 @@ import {
   Clock,
   Cloud,
   CloudUpload,
+  Cloudy,
   Copy,
   Database,
   Download,
@@ -28,6 +29,7 @@ import {
   Globe,
   HardDrive,
   Image,
+  Info,
   Link2,
   Loader2,
   Lock,
@@ -60,18 +62,19 @@ import { Highlight, libraryIconBtn } from '../library/libraryParts'
 import { FilePreview } from '../library/FilePreview'
 import { isUntrustedFile } from '../../utils/untrustedContent'
 import { DriveConnect } from './DriveConnect'
+import { OneDriveConnect } from './OneDriveConnect'
 
 // ── Shared folders ──────────────────────────────────────────────────
 //
 // The kiosk's "Folders": the folders every agent of the user reads and
 // writes as vfs:<folder>/<path> — the ones they made, the ones an agent run
-// made for its team, folders linked from this computer, Google Drive folders
-// and the ones other people shared. Open one and walk it like a file
+// made for its team, folders linked from this computer, Google Drive and
+// OneDrive folders// and the ones other people shared. Open one and walk it like a file
 // browser: preview a file beside the list, open, edit, rename or download
 // it, drop files in. Search finds a file by name in every folder at once,
 // and Recent files shows what the agents wrote last.
 
-type Group = 'mine' | 'runs' | 'shared' | 'link' | 'gdrive'
+type Group = 'mine' | 'runs' | 'shared' | 'link' | 'gdrive' | 'onedrive'
 type Nav = '' | 'recent' | Group
 type Sort = 'recent' | 'name' | 'size'
 
@@ -81,6 +84,7 @@ const GROUPS: { id: Group; label: string; one: string; icon: typeof Folder; tile
   { id: 'shared', label: 'Shared with me', one: 'Shared with you', icon: Users, tile: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
   { id: 'link', label: 'Linked folders', one: 'Linked folder', icon: Link2, tile: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' },
   { id: 'gdrive', label: 'Google Drive', one: 'Google Drive', icon: Cloud, tile: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' },
+  { id: 'onedrive', label: 'OneDrive', one: 'OneDrive', icon: Cloudy, tile: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400' },
 ]
 const GROUP = Object.fromEntries(GROUPS.map((g) => [g.id, g])) as Record<Group, (typeof GROUPS)[number]>
 const RUN_LABEL: Record<string, string> = { vatra: 'Vatra', basna: 'Basna', council: 'Council' }
@@ -109,6 +113,7 @@ type Dialog =
   | { kind: 'share'; folder: VFSProject }
   | { kind: 'tables'; folder: VFSProject }
   | { kind: 'drive' }
+  | { kind: 'onedrive' }
   | { kind: 'link' }
 
 const refKey = (r: FolderRef) => `${r.owner}\0${r.project}`
@@ -126,18 +131,27 @@ function groupOf(p: VFSProject | undefined): Group {
   if (p.shared) return 'shared'
   if (p.kind === 'link') return 'link'
   if (p.kind === 'gdrive') return 'gdrive'
+  if (p.kind === 'onedrive') return 'onedrive'
   if (p.kind && RUN_LABEL[p.kind]) return 'runs'
   return 'mine'
 }
 
 const titleOf = (p: VFSProject) => p.title || p.name
 
+/** A folder mounted from Google Drive or OneDrive: read-only, its files on
+ *  disk stand-ins until read (or Markdown copies). */
+const isMount = (p: VFSProject) => p.kind === 'gdrive' || p.kind === 'onedrive'
+const cloudOf = (p: VFSProject) => (p.kind === 'onedrive' ? 'OneDrive' : 'Google Drive')
+
+// The explanation at the top of the folder lists, until the viewer hides it.
+const ABOUT_KEY = 'fd:folders-about-hidden'
+
 /** Files can be added, changed and removed: the user's own folder, a linked
  *  one that isn't read-only, one shared with them to edit. Drive is read-only. */
 function writable(p: VFSProject | undefined): boolean {
   if (!p) return false
   if (p.shared) return p.permission === 'edit'
-  if (p.kind === 'gdrive') return false
+  if (p.kind === 'gdrive' || p.kind === 'onedrive') return false
   if (p.kind === 'link') return p.mode !== 'ro' && !p.missing
   return true
 }
@@ -152,6 +166,7 @@ function originOf(p: VFSProject): string {
   if (p.shared) return `From ${p.owner_name || p.owner_email || 'someone'} · ${p.permission === 'edit' ? 'you can edit' : 'view only'}`
   if (p.kind === 'link') return p.missing ? `Missing — ${p.link_path}` : p.link_path || ''
   if (p.kind === 'gdrive') return p.drive?.source_path ? `Drive · ${p.drive.source_path.replace(/\//g, ' / ')}` : 'Google Drive'
+  if (p.kind === 'onedrive') return p.drive?.source_path ? `OneDrive · ${p.drive.source_path.replace(/\//g, ' / ')}` : 'OneDrive'
   if (p.title) return p.name
   return ''
 }
@@ -210,7 +225,7 @@ function FolderTile({ folder, size = 'md' }: { folder: VFSProject | undefined; s
 /** A file for the shared viewer. Someone else's folder (shared, or Google
  *  Drive) opens as someone else's file would: no scripts, nothing remote. */
 function toAgentFile(item: FileItem, folder: VFSProject | undefined): AgentFile {
-  const others = !!folder && (folder.shared || folder.kind === 'gdrive')
+  const others = !!folder && (folder.shared || isMount(folder))
   const group = getFileTypeGroup(asAgentFile(item.name))
   return {
     logical: `vfs:${item.ref.project}/${item.path}`,
@@ -226,13 +241,13 @@ function toAgentFile(item: FileItem, folder: VFSProject | undefined): AgentFile 
   }
 }
 
-export function SharedFolders({ phone = false, canLink = false, onClose, onConnectGoogle }: {
+export function SharedFolders({ phone = false, canLink = false, onClose, onConnect }: {
   phone?: boolean
   /** May link a folder from this computer (an admin, or a deck without sign-in). */
   canLink?: boolean
   onClose: () => void
-  /** Connections → Google, for Drive folders before the account is connected. */
-  onConnectGoogle?: () => void
+  /** Connections on that account's tab — Drive and OneDrive folders want it. */
+  onConnect?: (service: 'google' | 'microsoft') => void
 }) {
   const notify = useNotificationStore((s) => s.add)
   const [projects, setProjects] = useState<VFSProject[] | null>(null)
@@ -258,6 +273,13 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
   const [uploading, setUploading] = useState(0)
   const [dragging, setDragging] = useState(false)
   const uploadInput = useRef<HTMLInputElement | null>(null)
+  const [aboutHidden, setAboutHidden] = useState(() => {
+    try { return localStorage.getItem(ABOUT_KEY) === '1' } catch { return false }
+  })
+  const showAbout = (show: boolean) => {
+    setAboutHidden(!show)
+    try { if (show) localStorage.removeItem(ABOUT_KEY); else localStorage.setItem(ABOUT_KEY, '1') } catch { /* private window */ }
+  }
 
   const setSort = (s: Sort) => {
     setSortState(s)
@@ -349,7 +371,7 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
   const terms = useMemo(() => debounced.toLowerCase().split(/\s+/).filter(Boolean), [debounced])
 
   const counts = useMemo(() => {
-    const c: Record<Group, number> = { mine: 0, runs: 0, shared: 0, link: 0, gdrive: 0 }
+    const c: Record<Group, number> = { mine: 0, runs: 0, shared: 0, link: 0, gdrive: 0, onedrive: 0 }
     for (const p of projects ?? []) c[groupOf(p)]++
     return c
   }, [projects])
@@ -541,11 +563,11 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
         body: <>“{titleOf(p)}” leaves your folders. {p.owner_name || p.owner_email || 'Its owner'} still has it — ask them to share it again to get it back.</>,
         onConfirm: async () => { await leaveShare('vfs', p.name, p.owner_id || ''); done() },
       })
-    } else if (g === 'gdrive') {
+    } else if (g === 'gdrive' || g === 'onedrive') {
       const cloned = p.drive?.cloned || 0
       setDialog({
-        kind: 'confirm', title: 'Disconnect this Drive folder?', action: 'Disconnect',
-        body: <>“{titleOf(p)}” leaves your folders. Nothing in Google Drive changes.</>,
+        kind: 'confirm', title: `Disconnect this ${g === 'onedrive' ? 'OneDrive' : 'Drive'} folder?`, action: 'Disconnect',
+        body: <>“{titleOf(p)}” leaves your folders. Nothing in {cloudOf(p)} changes.</>,
         check: cloned ? `Also delete the ${cloned} file${cloned === 1 ? '' : 's'} turned into Markdown here` : undefined,
         onConfirm: async (alsoCloned) => { await vfsApi.driveUnmount(p.name, !alsoCloned); done() },
       })
@@ -583,7 +605,7 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
     try {
       if (what === 'refresh') {
         const r = await vfsApi.driveRefresh(p.name)
-        notify('success', 'Up to date with Google Drive', `${r.files} file${r.files === 1 ? '' : 's'}${r.cloned ? `, ${r.cloned} turned into Markdown` : ''}${r.truncated ? ' (capped)' : ''}.`)
+        notify('success', `Up to date with ${cloudOf(p)}`, `${r.files} file${r.files === 1 ? '' : 's'}${r.cloned ? `, ${r.cloned} turned into Markdown` : ''}${r.truncated ? ' (capped)' : ''}.`)
       } else {
         const on = !p.drive?.clonemd
         const r = await vfsApi.driveClone(p.name, on)
@@ -591,7 +613,7 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
           on ? `${r.cloned ?? 0} file${r.cloned === 1 ? '' : 's'} so far — agents read them faster.` : 'The ones already made stay.')
       }
     } catch (e) {
-      notify('error', 'Google Drive', msg(e))
+      notify('error', cloudOf(p), msg(e))
     } finally {
       setDriveBusy('')
       afterChange()
@@ -602,8 +624,8 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
     const g = groupOf(p)
     const items: AgentMenuItem[] = []
     if (!inside) items.push({ icon: FolderOpen, label: 'Open', onSelect: () => openAt(refOf(p)) })
-    // A Drive folder's files on disk are placeholders until read: no .zip.
-    if (p.files && g !== 'gdrive') {
+    // A Drive or OneDrive folder's files on disk are stand-ins until read: no .zip.
+    if (p.files && !isMount(p)) {
       items.push({ icon: Download, label: 'Download as .zip', hint: `${p.files} file${p.files === 1 ? '' : 's'} · ${formatSize(p.bytes)}`, onSelect: () => download(vfsApi.zipUrl(refOf(p)), `${p.name}.zip`) })
     }
     if (g === 'mine' || g === 'runs') {
@@ -612,20 +634,21 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
     if (g === 'shared') {
       items.push({ icon: FolderInput, label: 'Copy to my folders', hint: 'So your agents can work with it', onSelect: () => copyShared(p) })
     }
-    if (g === 'gdrive') {
-      items.push({ icon: RotateCw, label: 'Update from Google Drive', disabled: driveBusy === p.name, onSelect: () => driveAction(p, 'refresh') })
+    if (isMount(p)) {
+      items.push({ icon: RotateCw, label: `Update from ${cloudOf(p)}`, disabled: driveBusy === p.name, onSelect: () => driveAction(p, 'refresh') })
       items.push({
         icon: Sparkles, label: p.drive?.clonemd ? 'Stop making Markdown copies' : 'Make Markdown copies',
-        hint: p.drive?.clonemd ? 'New files are read from Drive when asked' : 'Agents read the files faster', disabled: driveBusy === p.name,
+        hint: p.drive?.clonemd ? `New files are read from ${cloudOf(p)} when asked` : 'Agents read the files faster', disabled: driveBusy === p.name,
         onSelect: () => driveAction(p, 'clone'),
       })
     }
-    if (inside && hiddenCount) {
+    // A mount's hidden entries are only its bookkeeping (manifest, cache).
+    if (inside && hiddenCount && !isMount(p)) {
       items.push({ icon: showHidden ? EyeOff : Eye, label: showHidden ? 'Hide hidden files' : `Show hidden files (${hiddenCount})`, onSelect: () => setShowHidden((v) => !v) })
     }
     items.push({
-      icon: g === 'link' ? Link2 : g === 'gdrive' ? Cloud : g === 'shared' ? X : Trash2,
-      label: g === 'link' ? 'Unlink' : g === 'gdrive' ? 'Disconnect' : g === 'shared' ? 'Remove from my folders' : 'Delete folder',
+      icon: g === 'link' ? Link2 : g === 'gdrive' ? Cloud : g === 'onedrive' ? Cloudy : g === 'shared' ? X : Trash2,
+      label: g === 'link' ? 'Unlink' : isMount(p) ? 'Disconnect' : g === 'shared' ? 'Remove from my folders' : 'Delete folder',
       danger: true,
       onSelect: () => removeFolder(p),
     })
@@ -666,6 +689,15 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
           {projects.length} folder{projects.length === 1 ? '' : 's'} · {totals.files} file{totals.files === 1 ? '' : 's'} · {formatSize(totals.bytes)}
         </span>
       )}
+      <button
+        onClick={() => showAbout(aboutHidden)}
+        className={`${iconBtn} ${aboutHidden ? '' : 'text-sky-600 dark:text-sky-400'}`}
+        title="What are shared folders?"
+        aria-label="What are shared folders?"
+        aria-pressed={!aboutHidden}
+      >
+        <Info className="h-4 w-4" />
+      </button>
       <button onClick={refreshAll} className={iconBtn} title="Refresh" aria-label="Refresh">
         <RotateCw className={`h-4 w-4 ${hitsLoading || (open && !entries && !entriesError) ? 'animate-spin' : ''}`} />
       </button>
@@ -702,6 +734,7 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
           items={[
             { icon: FolderPlus, label: 'New folder', onSelect: newFolder },
             { icon: Cloud, label: 'Connect a Google Drive folder', onSelect: () => { useVFSStore.getState().loadProjects(); setDialog({ kind: 'drive' }) } },
+            { icon: Cloudy, label: 'Connect a OneDrive folder', onSelect: () => setDialog({ kind: 'onedrive' }) },
             ...(canLink ? [{ icon: Link2, label: 'Link a folder', hint: 'From the computer this runs on', onSelect: () => setDialog({ kind: 'link' }) }] : []),
           ]}
         />
@@ -760,6 +793,12 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
           className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-400 transition-colors hover:bg-zinc-800/50 hover:text-zinc-200"
         >
           <Cloud className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />Connect Google Drive
+        </button>
+        <button
+          onClick={() => setDialog({ kind: 'onedrive' })}
+          className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-400 transition-colors hover:bg-zinc-800/50 hover:text-zinc-200"
+        >
+          <Cloudy className="h-4 w-4 shrink-0 text-indigo-600 dark:text-indigo-400" />Connect OneDrive
         </button>
         {canLink && (
           <button onClick={() => setDialog({ kind: 'link' })} className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-zinc-400 transition-colors hover:bg-zinc-800/50 hover:text-zinc-200">
@@ -827,6 +866,27 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
     )
   }
 
+  // What these folders are, above the lists — until the viewer hides it.
+  const about = !aboutHidden && (
+    <div className="mb-3 flex gap-3 rounded-xl border border-sky-500/25 bg-sky-500/5 px-3.5 py-3">
+      <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-600 dark:text-sky-400" />
+      <div className="min-w-0 flex-1 text-[13px] leading-relaxed text-zinc-400">
+        <p>
+          <span className="font-semibold text-zinc-100">A file system all your agents share.</span>{' '}
+          These folders are a virtual file system: any of your agents can open, read and write them by name
+          (<span className="font-mono text-xs text-zinc-300">vfs:folder/file</span>), so what one agent saves, another can pick up.
+        </p>
+        <p className="mt-1">
+          They belong to you, not to an agent: <span className="text-zinc-200">the files stay here even after the agent that made them is removed.</span>{' '}
+          Folders you connect from Google Drive or OneDrive show up here too, read-only.
+        </p>
+      </div>
+      <button onClick={() => showAbout(false)} className="h-fit shrink-0 rounded-lg p-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200" title="Hide" aria-label="Hide this explanation">
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+
   const spinner = <div className="flex h-full justify-center pt-16 text-zinc-500"><Loader2 className="h-5 w-5 animate-spin" /></div>
   const failure = (text: string, retry: () => void) => (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-zinc-500">
@@ -893,7 +953,7 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
             {!writable(p) && !p.missing && (
               <span className="flex items-center gap-1 rounded-md bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400"><Lock className="h-2.5 w-2.5" />Read-only</span>
             )}
-            {g === 'gdrive' && p.drive?.clonemd && <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">Markdown copies</span>}
+            {isMount(p) && p.drive?.clonemd && <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">Markdown copies</span>}
           </span>
         </button>
         <div className="absolute right-2 top-2.5">
@@ -907,16 +967,25 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
     if (projectsError && !projects) return failure(projectsError, () => loadProjects())
     if (!projects) return spinner
     if (projects.length === 0) {
-      return emptyState(<Folders className="h-7 w-7" />, 'No folders yet',
-        'When your agents save work to a shared folder it shows up here. Make one yourself, connect a Google Drive folder, or link one from this computer.',
-        <>
-          <button onClick={newFolder} className={primaryBtn}><FolderPlus className="h-4 w-4" />New folder</button>
-          <button onClick={() => { useVFSStore.getState().loadProjects(); setDialog({ kind: 'drive' }) }} className={btn}><Cloud className="h-4 w-4" />Connect Google Drive</button>
-        </>)
+      return (
+        <div className="flex h-full flex-col overflow-y-auto px-3 py-3 wide:px-4">
+          {about}
+          <div className="min-h-0 flex-1">
+            {emptyState(<Folders className="h-7 w-7" />, 'No folders yet',
+              'When your agents save work to a shared folder it shows up here. Make one yourself, or connect a Google Drive or OneDrive folder.',
+              <>
+                <button onClick={newFolder} className={primaryBtn}><FolderPlus className="h-4 w-4" />New folder</button>
+                <button onClick={() => { useVFSStore.getState().loadProjects(); setDialog({ kind: 'drive' }) }} className={btn}><Cloud className="h-4 w-4" />Google Drive</button>
+                <button onClick={() => setDialog({ kind: 'onedrive' })} className={btn}><Cloudy className="h-4 w-4" />OneDrive</button>
+              </>)}
+          </div>
+        </div>
+      )
     }
     const noFolders = shownFolders.length === 0 && rawRuns.length === 0
     return (
       <div className="@container h-full overflow-y-auto px-3 py-3 wide:px-4">
+        {about}
         {debounced && <div className="mb-2 px-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500">Folders</div>}
         {noFolders && !debounced && (
           <p className="px-1 py-6 text-center text-sm text-zinc-500">No folders here.</p>
@@ -946,7 +1015,10 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
   }
 
   const recentView = () => (
-    <div className="h-full overflow-y-auto px-3 py-3 wide:px-4">{hitList(true)}</div>
+    <div className="flex h-full flex-col overflow-y-auto px-3 py-3 wide:px-4">
+      {about}
+      <div className="min-h-0 flex-1">{hitList(true)}</div>
+    </div>
   )
 
   const crumbs = open && (() => {
@@ -1170,11 +1242,24 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
       {dialog?.kind === 'drive' && (
         <DriveConnect
           onClose={() => setDialog(null)}
-          onConnectGoogle={onConnectGoogle}
+          onConnectGoogle={onConnect ? () => onConnect('google') : undefined}
           onDone={async (name) => {
             setDialog(null)
             await loadProjects(true)
             notify('success', 'Google Drive folder connected', `Your agents can read it as vfs:${name}/.`)
+            openAt({ project: name, owner: '' })
+          }}
+        />
+      )}
+      {dialog?.kind === 'onedrive' && (
+        <OneDriveConnect
+          taken={new Set((projects ?? []).filter((p) => !p.shared).map((p) => p.name))}
+          onClose={() => setDialog(null)}
+          onConnectMicrosoft={onConnect ? () => onConnect('microsoft') : undefined}
+          onDone={async (name) => {
+            setDialog(null)
+            await loadProjects(true)
+            notify('success', 'OneDrive folder connected', `Your agents can read it as vfs:${name}/.`)
             openAt({ project: name, owner: '' })
           }}
         />

@@ -1,7 +1,8 @@
-"""A Google Drive folder mounted as a read-only VFS folder.
+"""A Google Drive or OneDrive folder mounted as a read-only VFS folder.
 
 The mount is a **real local directory tree of placeholder files**, registered as
-an ordinary ``.vfs-links.json`` link (``kind: "gdrive"``, ``mode: "ro"``).
+an ordinary ``.vfs-links.json`` link (``kind: "gdrive"`` or ``"onedrive"`` — the
+provider — and ``mode: "ro"``).
 Because the directories and files are real, `glob`, `ls`, tree-walking, path
 resolution and the FD file browser all work with no changes — only *content* is
 virtual. A ``.drive-manifest.json`` at the mount root is the authority on what
@@ -12,12 +13,17 @@ hooks that hydrate a placeholder (Phase 2) run inside the agent. Mount creation
 and refresh are driven from the FD routes but the work here is plain filesystem.
 
 Nothing is ever written back to Drive. Nothing is mirrored until asked for.
+
+The provider only changes the client (:mod:`captain_claw.drive_client` or
+:mod:`captain_claw.onedrive_client`, same interface) and a few words; the
+manifest records which one a mount uses (``provider``, Google when absent).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +43,29 @@ MANIFEST_NAME = ".drive-manifest.json"
 CACHE_DIRNAME = ".drive-cache"  # materialised bytes (Phase 2); created lazily.
 
 DEFAULT_MAX_FILES = 5000
+
+# The providers a mount can come from: the link entry's ``kind`` and the
+# manifest's ``provider``.
+GDRIVE = "gdrive"
+ONEDRIVE = "onedrive"
+DRIVE_KINDS = frozenset({GDRIVE, ONEDRIVE})
+PROVIDER_LABEL = {GDRIVE: "Google Drive", ONEDRIVE: "OneDrive"}
+
+
+def provider_label(provider: str) -> str:
+    return PROVIDER_LABEL.get(provider, PROVIDER_LABEL[GDRIVE])
+
+
+def make_provider_client(provider: str):
+    """This process's client for *provider* — the agent owner's connection
+    under Flight Deck (Flight Deck's own routes pass per-user factories)."""
+    if provider == ONEDRIVE:
+        from captain_claw.onedrive_client import make_client as make_onedrive
+
+        return make_onedrive()
+    from captain_claw.drive_client import make_client
+
+    return make_client()
 
 # Extensions read verbatim as text; everything else convertible goes through the
 # document extractors, and the rest can't be read as text at all.
@@ -82,7 +111,8 @@ def mount_root(user_id: str, project: str) -> Path:
 
 
 def is_drive_link(entry: dict[str, Any] | None) -> bool:
-    return bool(isinstance(entry, dict) and entry.get("kind") == "gdrive")
+    """A link entry that is a mount (of either provider)."""
+    return bool(isinstance(entry, dict) and entry.get("kind") in DRIVE_KINDS)
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +130,8 @@ class Manifest:
     listed. ``files`` maps a relative POSIX file path to its Drive metadata and
     materialisation ``state``. ``shared_drive_id`` is set when the mount root
     lives in a Shared (Team) Drive — every listing then needs that drive as its
-    corpus, or shared-drive folders read back empty.
+    corpus, or shared-drive folders read back empty. ``provider`` is where the
+    folder lives (:data:`GDRIVE` or :data:`ONEDRIVE`).
     """
 
     folder_id: str
@@ -108,6 +139,7 @@ class Manifest:
     files: dict[str, dict[str, Any]]
     clonemd: bool = False
     shared_drive_id: str = ""
+    provider: str = GDRIVE
 
     @classmethod
     def load(cls, root: Path) -> "Manifest":
@@ -121,6 +153,7 @@ class Manifest:
             files=dict(d.get("files", {}) or {}),
             clonemd=bool(d.get("clonemd", False)),
             shared_drive_id=str(d.get("shared_drive_id", "")),
+            provider=str(d.get("provider") or GDRIVE),
         )
 
     def save(self, root: Path) -> None:
@@ -133,6 +166,7 @@ class Manifest:
                     "files": self.files,
                     "clonemd": self.clonemd,
                     "shared_drive_id": self.shared_drive_id,
+                    "provider": self.provider,
                 },
                 indent=2,
                 sort_keys=True,
@@ -155,14 +189,16 @@ def _fmt_size(n: int | None) -> str:
     return f"{n / (1024 * 1024):.1f} MB"
 
 
-def placeholder_text(f: DriveFile) -> str:
+def placeholder_text(f: DriveFile, provider: str = GDRIVE) -> str:
     """The honest one-line marker a placeholder holds.
 
     Not zero bytes: anything that reads a placeholder through a path this
     subsystem did *not* intercept then gets an explanation instead of an empty
     file — a legible bug rather than a confusing one.
     """
-    bits = [f"⟨Google Drive · not cloned⟩ {f.name}"]
+    label = provider_label(provider)
+    tool = "microsoft_onedrive" if provider == ONEDRIVE else "google_drive"
+    bits = [f"⟨{label} · not cloned⟩ {f.name}"]
     if f.size:
         bits.append(_fmt_size(f.size))
     if f.modified_time:
@@ -186,20 +222,20 @@ def placeholder_text(f: DriveFile) -> str:
         )
     return (
         head
-        + "\n\nThis file lives in Google Drive and has not been downloaded yet. "
+        + f"\n\nThis file lives in {label} and has not been downloaded yet. "
         "It IS reachable — the file tools fetch its real content on demand: use "
         "`read` for text/documents, the extract tools (pdf_extract/docx_extract/"
         "xlsx_extract/pptx_extract) for Office files, or the vision tools for "
-        "images/video, all on THIS path. Do NOT use the google_drive tool to "
+        f"images/video, all on THIS path. Do NOT use the {tool} tool to "
         "re-download it and do NOT treat this marker as the file's content."
         + edit
         + " To make it a permanent local file, enable clonemd on the folder.\n"
     )
 
 
-def _write_placeholder(path: Path, f: DriveFile) -> None:
+def _write_placeholder(path: Path, f: DriveFile, provider: str = GDRIVE) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(placeholder_text(f), encoding="utf-8")
+    path.write_text(placeholder_text(f, provider), encoding="utf-8")
 
 
 def is_placeholder(mount: Path, rel: str) -> bool:
@@ -399,7 +435,7 @@ async def list_dir(
             # (re)write the marker for one that is still a placeholder or new.
             prior = man.files.get(child_rel)
             if prior is None or prior.get("state") == STATE_PLACEHOLDER:
-                _write_placeholder(local, child)
+                _write_placeholder(local, child, man.provider)
                 man.files[child_rel] = {
                     "file_id": child.id,
                     "mime": child.mime_type,
@@ -589,7 +625,7 @@ async def sync(
                     continue
                 # Unconvertible (image, archive): placeholder, and remember so a
                 # later refresh doesn't re-fetch it.
-                _write_placeholder(local, child)
+                _write_placeholder(local, child, man.provider)
                 man.files[child_rel] = {
                     "file_id": child.id, "mime": child.mime_type, "size": child.size,
                     "modified": child.modified_time, "md5": child.md5,
@@ -604,7 +640,7 @@ async def sync(
             if unchanged and prior:
                 state = prior.get("state", STATE_PLACEHOLDER)
             if state == STATE_PLACEHOLDER:
-                _write_placeholder(local, child)
+                _write_placeholder(local, child, man.provider)
             new_entry = {
                 "file_id": child.id,
                 "mime": child.mime_type,
@@ -682,6 +718,7 @@ async def create_mount(
     shared_drive_id: str = "",
     max_files: int = DEFAULT_MAX_FILES,
     progress=None,
+    provider: str = GDRIVE,
 ) -> dict[str, Any]:
     """Create the placeholder tree and the ``.vfs-links.json`` entry.
 
@@ -697,6 +734,7 @@ async def create_mount(
     man.folder_id = folder_id
     man.clonemd = clonemd
     man.shared_drive_id = shared_drive_id
+    man.provider = provider
     man.dirs.setdefault("", folder_id)
     man.save(root)
     summary = await sync(client, root, max_files=max_files, progress=progress)
@@ -706,6 +744,7 @@ async def create_mount(
 def link_entry(
     user_id: str, project: str, folder_id: str, *,
     clonemd: bool = False, shared_drive_id: str = "", source_path: str = "",
+    provider: str = GDRIVE,
 ) -> dict[str, Any]:
     """The ``.vfs-links.json`` value for a Drive mount.
 
@@ -719,15 +758,20 @@ def link_entry(
     return {
         "path": str(mount_root(user_id, project)),
         "mode": "ro",
-        "kind": "gdrive",
+        "kind": provider,
         "drive": {"folder_id": folder_id, "clonemd": bool(clonemd),
                   "shared_drive_id": shared_drive_id, "source_path": source_path,
                   "synced_at": 0},
     }
 
 
+def _cache_key(file_id: str) -> str:
+    """A file id as one safe file name (a OneDrive id may carry its drive)."""
+    return re.sub(r"[^A-Za-z0-9._!-]", "_", str(file_id)) or "_"
+
+
 def _cache_path(mount: Path, file_id: str) -> Path:
-    return mount / CACHE_DIRNAME / file_id
+    return mount / CACHE_DIRNAME / _cache_key(file_id)
 
 
 async def _fetch_text(client: DriveClient, rel: str, entry: dict[str, Any], sleep) -> str:
@@ -741,7 +785,10 @@ async def _fetch_text(client: DriveClient, rel: str, entry: dict[str, Any], slee
     f = _entry_as_file(rel, entry)
     if f.size and f.size > _MAX_FETCH_BYTES:
         raise DriveError(f"{f.name} is too large to fetch ({f.size} bytes)")
-    data, ext = await client.fetch(f, sleep=sleep)
+    # A client may hand over a readable form instead (OneDrive: an older
+    # Office file as its PDF); the raw bytes stay what a download gets.
+    fetch = getattr(client, "fetch_for_text", None) or client.fetch
+    data, ext = await fetch(f, sleep=sleep)
     text = bytes_to_text(data, ext, f.name)
     if text is None:
         raise DriveError(
@@ -792,24 +839,24 @@ async def read_through(abs_path: Path, *, client_factory=None) -> str | None:
     readable note rather than an exception, so a read never hard-fails on a
     transient outage — it falls back to the marker with the reason.
 
-    ``client_factory`` (async, returns a DriveClient) supplies a per-user client
-    — used by Flight Deck's file routes to hydrate with the MOUNT OWNER's token.
-    Agent-side callers pass nothing and get the global connection, which on the
-    agent already resolves that agent's own Google account. Built lazily, only
-    once the path is confirmed to be a Drive placeholder, so an ordinary read by
-    a user with no Google connection never triggers it.
+    ``client_factory`` (async, takes the mount's provider, returns its client)
+    supplies a per-user client — used by Flight Deck's file routes to hydrate
+    with the MOUNT OWNER's token. Agent-side callers pass nothing and get the
+    process's connection (:func:`make_provider_client`), which on the agent
+    already resolves that agent's owner's account. Built lazily, only once the
+    path is confirmed to be a placeholder, so an ordinary read by a user with
+    no Google or Microsoft connection never triggers it.
     """
     found = find_mount(abs_path)
     if not found:
         return None
     mount, rel = found
-    entry = Manifest.load(mount).files.get(rel)
+    man = Manifest.load(mount)
+    entry = man.files.get(rel)
     if entry is None or entry.get("state") == STATE_CLONED:
         return None  # untracked, or real content already on disk
 
-    from captain_claw.drive_client import make_client
-
-    client = await client_factory() if client_factory else make_client()
+    client = await client_factory(man.provider) if client_factory else make_provider_client(man.provider)
     try:
         return await hydrate(client, mount, rel)
     except DriveError as exc:
@@ -818,7 +865,7 @@ async def read_through(abs_path: Path, *, client_factory=None) -> str | None:
             marker = abs_path.read_text(encoding="utf-8")
         except OSError:
             pass
-        return f"[Google Drive — could not fetch this file: {exc}]\n\n{marker}"
+        return f"[{provider_label(man.provider)} — could not fetch this file: {exc}]\n\n{marker}"
     finally:
         await client.close()
 
@@ -837,7 +884,7 @@ def _blob_cache_path(mount: Path, file_id: str, ext: str) -> Path:
     validates by suffix accepts the returned path.
     """
     safe = ext if ext.startswith(".") else (f".{ext}" if ext else "")
-    return mount / CACHE_DIRNAME / f"{file_id}.blob{safe}"
+    return mount / CACHE_DIRNAME / f"{_cache_key(file_id)}.blob{safe}"
 
 
 async def materialize(abs_path: Path, *, sleep=None, client_factory=None) -> Path | None:
@@ -882,9 +929,7 @@ async def materialize(abs_path: Path, *, sleep=None, client_factory=None) -> Pat
     if f.size and f.size > _MAX_FETCH_BYTES:
         raise DriveError(f"{f.name} is too large to fetch ({f.size} bytes).")
 
-    from captain_claw.drive_client import make_client
-
-    client = await client_factory() if client_factory else make_client()
+    client = await client_factory(man.provider) if client_factory else make_provider_client(man.provider)
     try:
         data, got_ext = await client.fetch(f, sleep=sleep or asyncio.sleep)
     finally:

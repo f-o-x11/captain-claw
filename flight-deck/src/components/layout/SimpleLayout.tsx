@@ -654,10 +654,11 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
   // What a phone's Back closes before it leaves a chat (or Flight Deck).
   const phoneOverlayOpen = libraryOpen || dataOpen || foldersOpen || !!filesData
   const closePhoneOverlays = () => { closeLibrary(); closeData(); setFoldersOpen(false); setFilesDataId(null) }
-  // Drive folders want the user's Google account: Connections, on its tab.
-  const foldersConnections = () => {
+  // Drive and OneDrive folders want the user's Google or Microsoft account:
+  // Connections, on that tab.
+  const foldersConnections = (service: 'google' | 'microsoft') => {
     setFoldersOpen(false)
-    if (locked) { openConnections('google'); return }
+    if (locked) { openConnections(service); return }
     useChatStore.setState({ chatFullscreen: false }); setLayoutMode('full'); setView('connections')
   }
   const scheduledConnections = () => {
@@ -792,7 +793,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
       )}
       {foldersOpen && (
         <KioskWideDialog label="Shared folders" phone={isMobile} onClose={() => setFoldersOpen(false)} widest>
-          <SharedFolders phone={isMobile} canLink={canLinkFolders} onClose={() => setFoldersOpen(false)} onConnectGoogle={foldersConnections} />
+          <SharedFolders phone={isMobile} canLink={canLinkFolders} onClose={() => setFoldersOpen(false)} onConnect={foldersConnections} />
         </KioskWideDialog>
       )}
       {locked && agentInfo && (
