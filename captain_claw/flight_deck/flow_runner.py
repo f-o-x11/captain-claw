@@ -748,9 +748,11 @@ class FlowRunner:
             for a in agents:
                 if int(a.get("port") or 0) == int(port):
                     return a
-            # Fallback: hand-built target with a resolved token.
+            # Fallback: hand-built target. The token is looked up by port, so
+            # it only goes to loopback, never to a host the payload names.
+            local = str(host).strip().strip("[]").lower() in ("localhost", "127.0.0.1", "::1")
             return {"name": name or "origin", "host": host, "port": int(port),
-                    "auth": self.resolve_auth(int(port)) if self.resolve_auth else ""}
+                    "auth": self.resolve_auth(int(port)) if (self.resolve_auth and local) else ""}
         return None
 
     def _select_agent(self, selector: str, payload: dict[str, Any],

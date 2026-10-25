@@ -335,3 +335,30 @@ def test_agent_record_by_auth(deck):
     deck.registry["empty"] = {"web_port": 2}
     assert server._agent_record_by_auth("tok-alice")["slug"] == "alice-agent"
     assert server._agent_record_by_auth("tok-box")["slug"] == "box"
+
+
+# ── Same rule outside the proxies: flows and the glasses bridge ─────
+
+
+def test_a_flow_origin_on_another_host_gets_no_token():
+    from captain_claw.flight_deck.flow_runner import FlowRunner
+
+    fr = FlowRunner(store=None, get_agents=lambda: [], resolve_auth=lambda port: "tok-by-port",
+                    fd_self_base="http://localhost:1")
+    far = fr._explicit_origin({"origin_host": "evil.example", "origin_port": 24999}, [])
+    near = fr._explicit_origin({"origin_host": "localhost", "origin_port": 24999}, [])
+    assert far["host"] == "evil.example" and far["auth"] == ""
+    assert near["auth"] == "tok-by-port"
+
+
+async def test_a_glasses_channel_bound_elsewhere_gets_no_token(deck):
+    from captain_claw.flight_deck.glasses_bridge import _ChannelState, _resolve_channel_agent_auth
+
+    ch = _ChannelState(channel_id="c1")
+    ch.bound_port = ALICE_PORT
+    ch.bound_host = "evil.example"
+    assert await _resolve_channel_agent_auth(ch) == ""
+    ch.bound_host = "localhost"
+    assert await _resolve_channel_agent_auth(ch) == "tok-alice"
+    ch.bound_host = None  # never bound by host: the agent's own (loopback) address
+    assert await _resolve_channel_agent_auth(ch) == "tok-alice"

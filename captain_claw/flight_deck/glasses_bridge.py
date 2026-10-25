@@ -244,7 +244,7 @@ async def _agent_pump(ch: _ChannelState, host: str, port: int) -> None:
         if not auth:
             try:
                 from captain_claw.flight_deck.server import _resolve_agent_auth
-                auth = _resolve_agent_auth(port)
+                auth = _resolve_agent_auth(port, host=host)  # only to the agent's own address
             except Exception:
                 auth = ""
         params = f"?token={auth}" if auth else ""
@@ -1129,7 +1129,7 @@ async def _resolve_channel_agent_auth(ch: _ChannelState) -> str:
     if not auth and ch.bound_port:
         try:
             from captain_claw.flight_deck.server import _resolve_agent_auth
-            auth = _resolve_agent_auth(ch.bound_port)
+            auth = _resolve_agent_auth(ch.bound_port, host=ch.bound_host or "localhost")
         except Exception:
             auth = ""
     return auth or ""
@@ -1392,7 +1392,7 @@ async def glasses_upload_image(request: Request) -> JSONResponse:
 
     try:
         from captain_claw.flight_deck.server import _resolve_agent_auth
-        auth = _resolve_agent_auth(port)
+        auth = _resolve_agent_auth(port, host=host)  # only to the agent's own address
     except Exception:
         auth = ""
     params = f"?token={auth}" if auth else ""
