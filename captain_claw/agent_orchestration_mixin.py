@@ -270,6 +270,10 @@ _ECO_INTENT_PATTERNS: list[tuple[_re.Pattern[str], frozenset[str]]] = [
         r"\bshar(?:e|ed|es|ing|eable)\b|\bpublic\b|\bpublish\w*|\blinks?\b|\bpodijel\w*|\bpoveznic\w*"
         r"|\bjavn\w*\s+link", _re.I),
      frozenset({"public_link"})),
+    # Linked systems: a message to a system the owner linked to this agent
+    # (EN / HR "sustav").
+    (_re.compile(r"\blinked\s+system|\bsystems?\b|\bcrm\b|\bwebhook\b|\bsustav\w*", _re.I),
+     frozenset({"linked_system"})),
     # The watch's background picture (EN / HR "pozadina").
     (_re.compile(r"\bwallpaper\b|\bbackground\b|\bpozadin\w*|\bstopwatch\b", _re.I),
      frozenset({"watch_background"})),

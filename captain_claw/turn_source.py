@@ -34,6 +34,7 @@ SOURCE_LABELS: dict[str, str] = {
     "agent": "Other agents",
     "autonomy": "Autonomous work",
     "api": "API and MCP",
+    "link": "Agent links",
     "public": "Public link",
     "member": "Shared-agent members",
 }
@@ -54,7 +55,7 @@ KIND_LABELS: dict[str, str] = {
 SETTINGS_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Messaging", ("whatsapp", "telegram", "messenger", "discord")),
     ("Apps and devices", ("app", "glasses", "device:sticks3", "device:stopwatch", "device:papercolor")),
-    ("Automated", ("scheduled", "flow", "agent", "autonomy", "api")),
+    ("Automated", ("scheduled", "flow", "agent", "autonomy", "api", "link")),
     ("Other people", ("member", "public")),
 )
 
@@ -66,6 +67,7 @@ _AUTOMATION_SOURCES = {
     "fd_worker": "agent", "being": "agent",
     "autonomy": "autonomy", "autonomy_tool": "autonomy", "plan": "autonomy", "bat": "autonomy",
     "mcp_task": "api",
+    "link": "link",
 }
 # A turn's channel (the surface or the entry point) → its source.
 _CHANNEL_SOURCES = {

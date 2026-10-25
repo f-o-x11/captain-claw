@@ -1,11 +1,12 @@
 import { useState, type ComponentType, type ReactNode } from 'react'
-import { Plug, Mail, LayoutGrid, Sparkles, MessageCircle, Database, Scale, Send, Mic } from 'lucide-react'
+import { Plug, Mail, LayoutGrid, Sparkles, MessageCircle, Database, Scale, Send, Mic, Cable } from 'lucide-react'
 import GoogleConnection from '../components/connections/GoogleConnection'
 import MicrosoftConnection from '../components/connections/MicrosoftConnection'
 import CodexConnection from '../components/connections/CodexConnection'
 import AntigravityConnection from '../components/connections/AntigravityConnection'
 import MCPConnection from '../components/connections/MCPConnection'
 import MCPAgentAccess from '../components/connections/MCPAgentAccess'
+import AgentLinksConnection, { type LinksStatus } from '../components/connections/AgentLinksConnection'
 import TypesenseConnection from '../components/connections/TypesenseConnection'
 import WhatsAppNudgeConnection from '../components/connections/WhatsAppNudgeConnection'
 import JevConnection from '../components/connections/JevConnection'
@@ -19,7 +20,7 @@ import { useMCPStore } from '../stores/mcpStore'
 import { useJevStore } from '../stores/jevStore'
 import { useSonioxStore } from '../stores/sonioxStore'
 
-export type TabId = 'google' | 'microsoft' | 'telegram' | 'codex' | 'antigravity' | 'mcp' | 'jev' | 'soniox' | 'whatsapp' | 'typesense'
+export type TabId = 'google' | 'microsoft' | 'telegram' | 'codex' | 'antigravity' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'whatsapp' | 'typesense'
 
 interface TabDef {
   id: TabId
@@ -37,6 +38,8 @@ const TABS: TabDef[] = [
   { id: 'codex', label: 'ChatGPT', icon: Sparkles, deckOnly: true },
   { id: 'antigravity', label: 'Antigravity', icon: Sparkles, deckOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Plug },
+  // Other systems linked to the person's own agents (agent links), each with its own key.
+  { id: 'systems', label: 'Systems', icon: Cable },
   // The user's own Jev key (the deck's when sign-in is off) — kiosk users add theirs too.
   { id: 'jev', label: 'Jev', icon: Scale },
   // Speech-to-text / voice — the user's own key (else the team's); kiosk users connect theirs too.
@@ -58,8 +61,8 @@ function saveTab(id: TabId): void {
 
 // A small dot on the tab for the connections whose state is already loaded:
 // green connected, amber configured but not connected (Google / Microsoft) or
-// a Jev / Soniox key saved but not verified.
-function useTabDots(telegram: MyTelegram | null): Partial<Record<TabId, 'on' | 'pending'>> {
+// a Jev / Soniox key saved but not verified; green for Systems while one is connected.
+function useTabDots(telegram: MyTelegram | null, systemsConnected: number): Partial<Record<TabId, 'on' | 'pending'>> {
   const google = useGoogleAuthStore((s) => s.status)
   const microsoft = useMicrosoftAuthStore((s) => s.status)
   const codex = useCodexAuthStore((s) => s.status)
@@ -73,6 +76,7 @@ function useTabDots(telegram: MyTelegram | null): Partial<Record<TabId, 'on' | '
     microsoft: dot(microsoft),
     codex: codex?.connected && !codex.stale ? 'on' : undefined,
     mcp: mcpServers > 0 ? 'on' : undefined,
+    systems: systemsConnected > 0 ? 'on' : undefined,
     jev: jev?.key_set ? (jev.verified === false ? 'pending' : 'on') : undefined,
     soniox: soniox?.key_set ? (soniox.verified === false ? 'pending' : 'on') : undefined,
     telegram: telegram?.link && telegram.link.status !== 'rejected'
@@ -96,7 +100,8 @@ export default function ConnectionsPage({ kiosk = false, initialTab }: { kiosk?:
     return (tabs.find((t) => t.id === wanted)?.id) ?? tabs[0].id
   })
   const [telegram, setTelegram] = useState<MyTelegram | null>(null)
-  const dots = useTabDots(telegram)
+  const [systems, setSystems] = useState<LinksStatus | null>(null)
+  const dots = useTabDots(telegram, systems?.connected ?? 0)
 
   const select = (id: TabId) => {
     setActive(id)
@@ -176,6 +181,7 @@ export default function ConnectionsPage({ kiosk = false, initialTab }: { kiosk?:
         {panel('codex', <CodexConnection />)}
         {panel('antigravity', <AntigravityConnection />)}
         {panel('mcp', <><MCPConnection /><MCPAgentAccess /></>)}
+        {panel('systems', <AgentLinksConnection active={active === 'systems'} onStatus={setSystems} />)}
         {panel('jev', <JevConnection />)}
         {panel('soniox', <SonioxConnection />)}
         {panel('whatsapp', <WhatsAppNudgeConnection />)}

@@ -2676,6 +2676,11 @@ class AgentContextMixin:
             # when this agent wasn't spawned by a Flight Deck).
             from captain_claw.tools.public_link import PublicLinkTool
             self.tools.register(PublicLinkTool())
+            # Linked systems — a message and files to a system the owner
+            # linked to this agent (an agent link), sent on its own (clear
+            # error when this agent wasn't spawned by a Flight Deck).
+            from captain_claw.tools.linked_system import LinkedSystemTool
+            self.tools.register(LinkedSystemTool())
             # The StopWatch's background picture — Flight Deck crops, darkens
             # and sends it (clear error when not spawned by a Flight Deck).
             from captain_claw.tools.watch_background import WatchBackgroundTool
