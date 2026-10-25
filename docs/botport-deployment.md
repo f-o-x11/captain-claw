@@ -67,7 +67,8 @@ pretend to be another. Two ways to make keys, side by side:
   it makes the key, gives the deck a display name and a description, and hands
   you a *join code* to paste into that deck. The deck can connect at once: no
   file to edit, no restart. Rotating or removing a key there also takes effect
-  at once. With this, leave `auth.keys` empty and go on to step 3.
+  at once. With this, leave `auth.keys` empty and go on to step 3. (The hub
+  makes keys only with auth on: on an open hub any deck joins without one.)
 * **In the config file.** `botport gen-key` prints an `auth.keys` entry;
   the hub reads the file at start, so a new or changed key needs a restart.
   Handy when the dashboard is off.
@@ -557,7 +558,9 @@ changes must be sent as JSON.
 | **Join code** field says *That isn't a whole join code* | It was cut off when copied: press **Copy join code** again (it starts with `bpj1.`), or enter the fields by hand. A join code that was shown once and lost can't be shown again: **Rotate**. |
 | `WARNING: … readable by other users (chmod 600 …)` | `chmod 600 ~/.botport/config.yaml` |
 | Banner shows port 33080 or `Auth: DISABLED (open)` | The hub was started without `-c`: use the tmux script. |
-| Dashboard / API answer 401 | Enter the admin token (or `Authorization: Bearer …`); without `admin_token` set, the API answers only on the hub's own machine. |
+| Dashboard / API answer 401 | Enter the admin token (or `Authorization: Bearer …`); without `admin_token` set, the API answers only on the hub's own machine, opened as `http://127.0.0.1:23180/` or `http://localhost:23180/` (not by another name: that is what a DNS-rebinding page would use). |
+| Decks page: *Two keys for one deck* | A deck has a key in botport.yaml and one made on the dashboard; both connect as it. Remove one: the dashboard's with **Remove**, the file's by deleting the entry and restarting. |
+| **Add Flight Deck** says *Turn on auth first* | The hub runs with auth off, where keys change nothing. Set `auth.enabled: true` and restart once. |
 
 ## Upgrading
 

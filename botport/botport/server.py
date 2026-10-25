@@ -297,11 +297,12 @@ class BotPortServer:
                 self.counters["auth_failures"] += 1
                 self.auth_limiter.record_failure(bucket)
                 log.warning("Auth failed for %s %r from %s", msg.kind or "agent", msg.instance_name, addr)
-                note = self.decks.note_for(key)
+                note = self.decks.note_for(key, msg.secret)
                 await self._reject(ws, "Authentication failed" + (f": {note}" if note else ""),
                                    retry=False, code=CLOSE_AUTH_FAILED)
                 return None
             self.auth_limiter.record_success(bucket)
+            self.decks.accepted(key)
 
         bound = entry.instance.strip() if entry else ""
         if msg.kind == "deck":
@@ -1585,6 +1586,8 @@ async def _run_server(config: BotPortConfig) -> int:
     # The database must be usable before anything connects.
     await server.store._ensure_db()
     await server.decks.ensure_loaded()
+    for w in server.decks.conflicts():
+        log.warning("%s", w)
 
     app = server.create_app()
     runner = web.AppRunner(app, access_log=None, handle_signals=False)

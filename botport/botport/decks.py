@@ -18,7 +18,7 @@ import hashlib
 import hmac
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +31,11 @@ DECK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 LABEL_MAX = 80
 DESCRIPTION_MAX = 500
 _NOTES_MAX = 200
+
+
+_OPEN_HUB = ("This hub runs with auth off, so any Flight Deck can join without a key. Set "
+             "auth.enabled: true in botport.yaml and restart once, then add keys here (a key made "
+             "while anyone can reach this page could outlive that).")
 
 
 class DeckError(Exception):
@@ -109,8 +114,10 @@ class DeckRegistry:
         self._records: dict[str, DeckRecord] = {}
         self._loaded = False
         self._lock = asyncio.Lock()
-        # key -> why it stopped working (shown to a deck that still uses it).
-        self._notes: dict[str, str] = {}
+        # key -> (digest of the secret it stopped accepting, why). Shown only
+        # to a deck presenting that old secret, so it tells nobody else that
+        # the key exists.
+        self._notes: dict[str, tuple[str, str]] = {}
 
     async def ensure_loaded(self) -> None:
         if self._loaded:
@@ -136,6 +143,22 @@ class DeckRegistry:
         rec = self.get(name)
         return {"label": rec.label, "description": rec.description} if rec else {"label": "", "description": ""}
 
+    def conflicts(self) -> list[str]:
+        """Where botport.yaml and the dashboard both claim a deck or a key
+        (botport.yaml can change after a deck was added here)."""
+        out: list[str] = []
+        file_keys = {k.key.strip() for k in get_config().auth.keys if k.key.strip()}
+        for rec in self.records():
+            if not rec.has_key:
+                continue
+            if config_entry_for(rec.name) is not None:
+                out.append(f"Flight Deck '{rec.name}' has a key in botport.yaml and one made on the dashboard: "
+                           "both connect as it. Remove one of them.")
+            if rec.key in file_keys:
+                out.append(f"botport.yaml reuses the dashboard key id '{rec.key}' of '{rec.name}': "
+                           "give that entry another key.")
+        return out
+
     def knows_key(self, key: str) -> bool:
         key = (key or "").strip()
         return bool(key) and any(r.key == key for r in self._records.values() if r.has_key)
@@ -158,17 +181,26 @@ class DeckRegistry:
                 found = AuthKeyEntry(instance=rec.name, key=rec.key, secret="")
         return found
 
-    def note_for(self, key: str) -> str:
-        """Why this key no longer works, if the hub changed it (else "")."""
-        return self._notes.get((key or "").strip(), "")
+    def note_for(self, key: str, secret: str) -> str:
+        """Why these credentials stopped working, when they are exactly the
+        ones the hub retired (else "")."""
+        note = self._notes.get((key or "").strip())
+        if note is None or not secret:
+            return ""
+        old_digest, text = note
+        return text if _eq(old_digest, _digest((secret or "").strip())) else ""
+
+    def accepted(self, key: str) -> None:
+        """This key just let a deck in: any note about it is out of date."""
+        self._notes.pop((key or "").strip(), None)
 
     # ── Changing ─────────────────────────────────────────────────
 
-    def _note(self, key: str, text: str) -> None:
-        if not key:
+    def _note(self, key: str, old_digest: str, text: str) -> None:
+        if not key or not old_digest:
             return
         self._notes.pop(key, None)
-        self._notes[key] = text
+        self._notes[key] = (old_digest, text)
         while len(self._notes) > _NOTES_MAX:
             self._notes.pop(next(iter(self._notes)))
 
@@ -196,6 +228,8 @@ class DeckRegistry:
         """A new deck with its own key. Returns the record and the secret,
         which is never stored and cannot be shown again."""
         await self.ensure_loaded()
+        if not get_config().auth.enabled:
+            raise DeckError(_OPEN_HUB, status=409)
         async with self._lock:
             name = self._check_new_name(name)
             now = _now()
@@ -224,12 +258,14 @@ class DeckRegistry:
             if not DECK_NAME_RE.match(name):
                 raise DeckError("Not a deck name", status=404)
             now = _now()
-            rec = self.get(name) or DeckRecord(name=name, created_at=now)
+            old = self.get(name)
+            rec = replace(old) if old else DeckRecord(name=name, created_at=now)
             if label is not None:
                 rec.label = clean_label(label)
             if description is not None:
                 rec.description = clean_description(description)
             rec.updated_at = now
+            # The database first: a failed write leaves nothing half-changed.
             await self._store.save_deck_record(rec.to_row())
             self._records[rec.name.lower()] = rec
             return rec
@@ -239,17 +275,20 @@ class DeckRegistry:
         stops working at once."""
         await self.ensure_loaded()
         async with self._lock:
-            rec = self.get(name)
-            if rec is None or not rec.has_key:
+            old = self.get(name)
+            if old is None or not old.has_key:
                 raise DeckError("Only a key made on this dashboard can be rotated here", status=404)
+            if not get_config().auth.enabled:
+                raise DeckError(_OPEN_HUB, status=409)
             secret = secrets.token_urlsafe(32)
             now = _now()
-            rec.secret_hash = _digest(secret)
-            rec.rotated_at = now
-            rec.updated_at = now
+            rec = replace(old, secret_hash=_digest(secret), rotated_at=now, updated_at=now)
+            # The database first: a failed write leaves the old secret in force
+            # everywhere (and the deck connected), not half-rotated.
             await self._store.save_deck_record(rec.to_row())
-            self._note(rec.key, "this deck's secret was replaced on the hub; "
-                                "paste the new one into the deck's Network settings")
+            self._records[rec.name.lower()] = rec
+            self._note(rec.key, old.secret_hash, "this deck's secret was replaced on the hub; "
+                                                 "paste the new one into the deck's Network settings")
             return rec, secret
 
     async def remove(self, name: str) -> DeckRecord:
@@ -263,5 +302,5 @@ class DeckRegistry:
             await self._store.delete_deck_record(rec.name)
             self._records.pop(rec.name.lower(), None)
             if rec.has_key:
-                self._note(rec.key, "this key was removed on the hub")
+                self._note(rec.key, rec.secret_hash, "this key was removed on the hub")
             return rec

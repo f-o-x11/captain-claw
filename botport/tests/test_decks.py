@@ -209,3 +209,71 @@ async def test_a_named_deck_without_a_key_gets_one_and_keeps_its_name(make_hub):
     assert status == 201 and body["deck"]["label"] == "Lab bench" and body["deck"]["description"] == "The test rig"
     _, reg = await _connect(hub, body["credentials"])
     assert reg["ok"] and reg["deck_name"] == "lab"
+
+
+async def test_an_open_hub_makes_no_keys(make_hub):
+    hub = await make_hub()  # auth off
+    status, body = await _add(hub, name="pi")
+    assert status == 409 and "auth" in body["error"]
+    assert not [r for r in hub.server.decks.records() if r.has_key]
+
+
+async def test_the_retired_note_goes_only_to_the_old_secret_and_clears(make_hub):
+    hub = await make_hub(auth=[FILE_KEY])
+    _, body = await _add(hub, name="pi")
+    old = body["credentials"]
+    async with hub.session.post(hub.url("/api/decks/pi/rotate"), json={}) as r:
+        new = (await r.json())["credentials"]
+    # Someone with the key id but not the old secret learns nothing.
+    _, reg = await _connect(hub, {**old, "secret": "a-guess"}, deck_id="id-x")
+    assert reg["error"] == "Authentication failed"
+    _, reg = await _connect(hub, old, deck_id="id-x")
+    assert "secret was replaced" in reg["error"]
+    # Once the new secret is in use, the old story is over.
+    p, reg = await _connect(hub, new, deck_id="id-x")
+    assert reg["ok"]
+    await p.close()
+    _, reg = await _connect(hub, old, deck_id="id-y")
+    assert reg["error"] == "Authentication failed"
+
+
+async def test_a_failed_write_leaves_the_old_secret_in_force(make_hub, monkeypatch):
+    hub = await make_hub(auth=[FILE_KEY])
+    _, body = await _add(hub, name="pi")
+    pi, _ = await _connect(hub, body["credentials"])
+
+    async def broken(rec):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(hub.server.store, "save_deck_record", broken)
+    async with hub.session.post(hub.url("/api/decks/pi/rotate"), json={}) as r:
+        assert r.status == 500 and "nothing changed" in (await r.json())["error"]
+    async with hub.session.patch(hub.url("/api/decks/pi"), json={"label": "Never saved"}) as r:
+        assert r.status == 500
+    assert hub.server.decks.match(body["credentials"]["key"], body["credentials"]["secret"]) is not None
+    assert hub.server.decks.meta("pi")["label"] == ""
+    await pi.nothing("_closed", wait=0.3)
+
+
+async def test_keys_for_one_deck_in_both_places_are_reported(make_hub):
+    hub = await make_hub(auth=[FILE_KEY])
+    _, body = await _add(hub, name="pi")
+    # botport.yaml gains a key for the same deck (and the hub restarts).
+    hub.server.config.auth.keys.append(type(hub.server.config.auth.keys[0])(
+        instance="pi", key="pi-file", secret="p" * 32))
+    async with hub.session.get(hub.url("/api/decks")) as r:
+        listing = await r.json()
+    assert any("'pi' has a key in botport.yaml and one made on the dashboard" in w for w in listing["warnings"])
+    async with hub.session.delete(hub.url("/api/decks/pi")) as r:
+        out = await r.json()
+    assert out["ok"] and out["still_in_file"] is True
+
+
+async def test_loopback_only_api_refuses_a_rebound_domain(make_hub):
+    hub = await make_hub(auth=[FILE_KEY])  # no admin token: local requests only
+    async with hub.session.get(hub.url("/api/decks"), headers={"Host": "attacker.example:80"}) as r:
+        assert r.status == 401
+    async with hub.session.get(hub.url("/api/decks"), headers={"Host": "localhost"}) as r:
+        assert r.status == 200
+    async with hub.session.get(hub.url("/api/decks")) as r:
+        assert r.status == 200  # 127.0.0.1:<port>

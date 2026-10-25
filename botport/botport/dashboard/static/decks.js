@@ -244,10 +244,14 @@
     el.sub.textContent = decks.length
       ? `${online} of ${decks.length} online. Add one and it can connect at once, no restart needed.`
       : "Each Flight Deck that joins this hub gets its own key. Add one and it can connect at once, no restart needed.";
-    el.banner.innerHTML = data.auth_enabled
-      ? ""
-      : `<div class="deck-banner">${I.warn}<div><b>This hub is open: any Flight Deck that can reach it joins, without a key.</b>
-         <span>Set <code>auth.enabled: true</code> in botport.yaml and restart once; from then on only decks with a key, from this page or the file, can connect.</span></div></div>`;
+    const warnings = (data.warnings || [])
+      .map((w) => `<div class="deck-banner">${I.warn}<div><b>Two keys for one deck</b><span>${esc(w)}</span></div></div>`)
+      .join("");
+    el.banner.innerHTML =
+      (data.auth_enabled
+        ? ""
+        : `<div class="deck-banner">${I.warn}<div><b>This hub is open: any Flight Deck that can reach it joins, without a key.</b>
+         <span>Set <code>auth.enabled: true</code> in botport.yaml and restart once; then add decks here, and only decks with a key (from this page or the file) can connect. Names and descriptions work either way.</span></div></div>`) + warnings;
     if (!decks.length) {
       el.grid.innerHTML = `<div class="deck-empty">
         <div class="de-orbit"><span></span><span></span><i>${I.deck}</i></div>
@@ -282,7 +286,8 @@
       .join("") + (agents.length > 5 ? `<span class="dchip more">+${agents.length - 5}</span>` : "");
     const auth = D.data && D.data.auth_enabled;
     const source = d.managed
-      ? `<span class="dsrc dash" title="Made on this page: rotate or remove it here">${I.key}Dashboard key</span>`
+      ? `<span class="dsrc dash" title="Made on this page: rotate or remove it here">${I.key}Dashboard key</span>${
+          d.in_file ? `<span class="dsrc file" title="It also has a key in botport.yaml">${I.key}botport.yaml</span>` : ""}`
       : d.in_file
         ? `<span class="dsrc file" title="This deck's key is in botport.yaml (auth.keys)">${I.key}botport.yaml</span>`
         : auth
@@ -316,7 +321,7 @@
         <div class="deck-key">${source}${d.key ? `<code title="Key id (not secret)">${esc(d.key)}</code>` : ""}</div>
         <div class="deck-acts">
           <button class="dbtn" type="button" data-deck-act="edit" title="Name and description">${I.edit}<span>Edit</span></button>
-          ${d.managed ? `<button class="dbtn" type="button" data-deck-act="rotate" title="Make a new secret">${I.rotate}<span>Rotate</span></button>
+          ${d.managed ? `${auth ? `<button class="dbtn" type="button" data-deck-act="rotate" title="Make a new secret">${I.rotate}<span>Rotate</span></button>` : ""}
           <button class="dbtn danger" type="button" data-deck-act="remove" title="Remove from this hub">${I.trash}<span>Remove</span></button>` : ""}
           ${keyless && auth ? `<button class="dbtn" type="button" data-deck-act="makekey" title="Give this deck a key and a join code">${I.key}<span>Make key</span></button>` : ""}
           ${keyless && d.has_record && d.status !== "online" ? `<button class="dbtn danger" type="button" data-deck-act="forget" title="Forget its name and description">${I.trash}<span>Forget</span></button>` : ""}
@@ -401,7 +406,30 @@
 
   /* Add: name it, then its credentials. */
 
+  // An open hub (auth off) makes no keys: any deck joins without one, and a
+  // key made while anyone can reach this page could outlive that.
+  function openAuthOff() {
+    openModal(
+      { kind: "authoff", tone: "warn" },
+      `${head(I.shield, "Turn on auth first", "", "warn")}
+      <div class="dm-body">
+        <ul class="dm-points">
+          <li>${I.link}<span>This hub runs with auth off: any Flight Deck that reaches it can join, no key needed. On such a hub, keys change nothing.</span></li>
+          <li>${I.key}<span>Set <code>auth.enabled: true</code> in botport.yaml and restart the hub once. Then add each Flight Deck here: it gets a key and a join code, and connects without further restarts.</span></li>
+          <li>${I.shield}<span>Keys are made only once auth is on, so none can be created while anyone may use this page.</span></li>
+        </ul>
+      </div>
+      <footer class="dm-foot">
+        <button class="btn-grad dm-primary" type="button" data-m="close">Got it</button>
+      </footer>`,
+    );
+  }
+
   function openAdd() {
+    if (D.data && !D.data.auth_enabled) {
+      openAuthOff();
+      return;
+    }
     openModal(
       { kind: "add", nameEdited: false },
       `${head(I.deck, "Add a Flight Deck", "It gets its own key. Paste the join code into that deck and it connects, no restart.")}
@@ -652,9 +680,10 @@
       `${head(I.trash, `Remove ${title} from this hub?`, "", "danger")}
       <div class="dm-body">
         <ul class="dm-points">
-          <li>${I.key}<span>Its key <code>${esc(d.key)}</code> stops working at once${live ? `, and ${title} disconnects now` : ""}.</span></li>
+          <li>${I.key}<span>Its key <code>${esc(d.key)}</code> stops working at once${live && d.via === "dashboard" ? `, and ${title} disconnects now` : ""}.</span></li>
           <li>${I.link}<span>Other decks can no longer reach its agents. Requests still running with it will fail.</span></li>
           <li>${I.edit}<span>Its display name and description are forgotten. To bring it back, add it again and paste the new join code into it.</span></li>
+          ${d.in_file ? `<li>${I.warn}<span>It also has a key in botport.yaml, which keeps working: remove that entry and restart the hub to shut it out.</span></li>` : ""}
         </ul>
         <div class="dm-error" role="alert" hidden></div>
       </div>

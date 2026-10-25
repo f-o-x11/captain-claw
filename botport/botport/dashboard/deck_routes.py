@@ -9,6 +9,7 @@ to another origin without a CORS preflight this hub does not grant.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -18,6 +19,8 @@ from botport.decks import DECK_NAME_RE, DeckError, DeckRecord, config_entry_for
 if TYPE_CHECKING:
     from botport.models import InstanceInfo
     from botport.server import BotPortServer
+
+log = logging.getLogger(__name__)
 
 
 def _connection_view(info: InstanceInfo | None) -> dict[str, Any]:
@@ -111,13 +114,19 @@ def setup_deck_routes(app: web.Application, server: BotPortServer) -> None:
             raise web.HTTPBadRequest(text='{"error": "expected a JSON object"}', content_type="application/json")
         return data
 
-    def _error(exc: DeckError) -> web.Response:
-        return web.json_response({"error": str(exc)}, status=exc.status)
+    def _error(exc: Exception) -> web.Response:
+        if isinstance(exc, DeckError):
+            return web.json_response({"error": str(exc)}, status=exc.status)
+        # The registry changes nothing until the database has the change.
+        log.exception("Deck change failed")
+        return web.json_response({"error": f"The hub could not save that ({exc}); nothing changed. Try again."},
+                                 status=500)
 
     async def list_decks(request: web.Request) -> web.Response:
         await server.decks.ensure_loaded()
         return web.json_response({
             "auth_enabled": server.config.auth.enabled,
+            "warnings": server.decks.conflicts(),
             "decks": deck_views(server),
         })
 
@@ -126,7 +135,7 @@ def setup_deck_routes(app: web.Application, server: BotPortServer) -> None:
         name = str(data.get("name") or "").strip()
         try:
             rec, secret = await server.decks.create(name, data.get("label"), data.get("description"))
-        except DeckError as exc:
+        except Exception as exc:
             return _error(exc)
         server.auth_limiter.forget_key(rec.key)
         server.deck_changed(rec.name)
@@ -146,7 +155,7 @@ def setup_deck_routes(app: web.Application, server: BotPortServer) -> None:
                 label=data["label"] if "label" in data else None,
                 description=data["description"] if "description" in data else None,
             )
-        except DeckError as exc:
+        except Exception as exc:
             return _error(exc)
         server.deck_changed(rec.name)
         return web.json_response({"deck": _find(server, rec.name)})
@@ -162,7 +171,7 @@ def setup_deck_routes(app: web.Application, server: BotPortServer) -> None:
             return web.json_response({"error": "No key made on this dashboard for that deck"}, status=404)
         try:
             rec, secret = await server.decks.rotate(name)
-        except DeckError as exc:
+        except Exception as exc:
             return _error(exc)
         dropped = await server.drop_key(rec.key, "this deck's secret was replaced on the hub")
         server.deck_changed(rec.name)
@@ -184,11 +193,13 @@ def setup_deck_routes(app: web.Application, server: BotPortServer) -> None:
             return web.json_response({"error": "No such deck on this dashboard"}, status=404)
         try:
             rec = await server.decks.remove(name)
-        except DeckError as exc:
+        except Exception as exc:
             return _error(exc)
         dropped = await server.drop_key(rec.key, "this deck was removed on the hub") if rec.has_key else []
         server.deck_changed(rec.name)
-        return web.json_response({"ok": True, "disconnected": dropped})
+        # Its botport.yaml key (if any) still works: say so, not "removed".
+        return web.json_response({"ok": True, "disconnected": dropped,
+                                  "still_in_file": config_entry_for(rec.name) is not None})
 
     # The route pattern is DECK_NAME_RE without its anchors.
     name = "{name:" + DECK_NAME_RE.pattern.strip("^$") + "}"
