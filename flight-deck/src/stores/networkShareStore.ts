@@ -18,6 +18,10 @@ interface NetworkShareState {
   admin: boolean
   deckName: string
   agents: Record<string, BotportShareAgent>
+  /** The agent waiting for "Share on network?" (NetworkShareDialog), if any. */
+  confirm: { agent: BotportShareAgent; displayName: string } | null
+  askShare: (agent: BotportShareAgent, displayName: string) => void
+  closeConfirm: () => void
   fetch: (force?: boolean) => Promise<void>
   /** Refetch (at most every few seconds) when `key` is not known yet. */
   ensure: (key: string) => void
@@ -44,6 +48,9 @@ export const useNetworkShareStore = create<NetworkShareState>((set, get) => ({
   admin: false,
   deckName: '',
   agents: {},
+  confirm: null,
+  askShare: (agent, displayName) => set({ confirm: { agent, displayName } }),
+  closeConfirm: () => set({ confirm: null }),
   fetch: (force = false) => {
     if (inflight) return inflight
     if (get().loaded && !force) return Promise.resolve()

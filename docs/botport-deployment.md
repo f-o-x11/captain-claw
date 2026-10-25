@@ -276,7 +276,10 @@ agents through this list; only an agent's owner shares it from its card.)
 
 **Users** — on their own agent: in the kiosk, the agent's **⋯** menu →
 **Share on network…**; in the Agent Desktop, the card's actions menu (the
-small gear) → **Share on network…**. Confirm, and the agent shows a
+small gear) → **Share on network…**. A dialog explains what sharing means
+(who can ask it, what stays out of reach, what it can still draw on, and that
+it counts toward the deck's usage) and lists the decks on the network now.
+Confirm, and the agent shows a
 **network** badge while it is on the network; **Stop sharing on network** (same
 menu) takes it off. The item appears only when the deck is connected to a hub
 and the admin lets users share. A share
@@ -398,6 +401,12 @@ and `/api/overview` (what the dashboard draws), both with
   `shared_agent_usage`) — the agent itself enforces this for every `BP` lane —
   plus whatever the admin denies (for an agent other people's decks use,
   consider `shell, scripts, write, edit`).
+* It still answers **with the agent's own tools and data**: its files, its
+  datastore, and accounts connected to it (an inbox, for instance — reading
+  mail is not blocked, only writing). Share an agent only when its owner is
+  comfortable with other decks getting answers drawn from those, or deny the
+  tools in question (e.g. `read, datastore, google_mail, microsoft_mail`) for remote requests. The
+  "Share on network" dialog tells users exactly this.
 * Only Flight Decks are identified by the hub. A legacy agent (or a hub swarm)
   asking is let in only when *Accept requests from* is *Any deck*, and gets a
   lane of its own.
