@@ -2,8 +2,9 @@
 // captain_claw/flight_deck/botport_routes.py over botport_link.py. The deck
 // connects out to the hub so its agents can consult agents on other Flight
 // Decks (Agent → this deck → hub → other deck → agent), and serves the agents
-// an admin exposes. Status is for everyone signed in (admins get all of it);
-// the rest is admin-only. The secret is write-only: never returned.
+// an admin exposes or their owners share. Status and sharing one's own agents
+// are for everyone signed in (admins get all of it); the rest is admin-only.
+// The secret is write-only: never returned.
 
 import { useAuthStore, refreshAccessToken } from '../stores/authStore'
 
@@ -132,6 +133,8 @@ export interface BotportConfig {
   max_concurrent: number
   max_inbound_timeout: number
   deny_tools: string[]
+  // Users may share the agents they own on the network themselves.
+  user_sharing: boolean
   secret_set: boolean
   // Fields pinned by FD_BOTPORT_* environment variables (they win).
   env_locked: string[]
@@ -155,6 +158,7 @@ export interface BotportConfigPatch {
   max_concurrent?: number
   max_inbound_timeout?: number
   deny_tools?: string[]
+  user_sharing?: boolean
 }
 
 export const getBotportConfig = () => fdFetch<BotportConfig>('/fd/botport/config')
@@ -172,10 +176,41 @@ export interface BotportLocalAgent {
   kind: 'docker' | 'process' | string
   status: string
   description: string
+  owner: string
+  // On the network now, and why: the admin's list and/or its owner's share.
   exposed: boolean
+  by_admin: boolean
+  by_owner: boolean
+  // False for Flight Deck's own workers, which are never on the network.
+  shareable: boolean
 }
 
 export const getBotportAgents = () => fdFetch<{ agents: BotportLocalAgent[] }>('/fd/botport/agents')
+
+// ── Sharing one's own agents (every user) ──
+
+export type BotportShareAgent = Pick<BotportLocalAgent,
+  'name' | 'slug' | 'kind' | 'status' | 'exposed' | 'by_admin' | 'by_owner' | 'shareable'>
+
+/** Your agents (an admin: every agent) and whether each is on the network. */
+export interface BotportShares {
+  enabled: boolean
+  state: BotportLinkState
+  deck_name: string
+  // The admin lets users share their own agents.
+  user_sharing: boolean
+  // You may share here now: the link is on and sharing is allowed (or you are the admin).
+  can_share: boolean
+  agents: BotportShareAgent[]
+}
+
+export const getBotportShares = () => fdFetch<BotportShares>('/fd/botport/shares')
+
+/** Share one of your agents on the network, or stop (an admin: any agent). */
+export const setBotportShare = (slug: string, shared: boolean) =>
+  fdFetch<BotportShares>(`/fd/botport/shares/${encodeURIComponent(slug)}`, {
+    method: 'PUT', body: JSON.stringify({ shared }),
+  })
 
 export interface BotportProbe {
   ok: boolean

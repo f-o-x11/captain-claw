@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Cpu, Play, Square, RotateCcw, Trash2, ScrollText, ChevronUp, MessageSquare, Loader2, FolderOpen, Database, Target, Clock, Pencil, Check, X, Copy, MoreVertical, Minimize2, Maximize2, Settings, Leaf, Feather, Download, Upload, Brain, Inbox, ShieldAlert, Eraser, Gift, Bug, Users, Layers } from 'lucide-react'
+import { Cpu, Play, Square, RotateCcw, Trash2, ScrollText, ChevronUp, MessageSquare, Loader2, FolderOpen, Database, Target, Clock, Pencil, Check, X, Copy, MoreVertical, Minimize2, Maximize2, Settings, Leaf, Feather, Download, Upload, Brain, Inbox, ShieldAlert, Eraser, Gift, Bug, Users, Layers, Globe } from 'lucide-react'
 import { useAgentMemoryTransfer } from '../../hooks/useAgentMemoryTransfer'
 import { ReflectionMergeModal } from './ReflectionMergeModal'
 import { PendingInsightsModal } from './PendingInsightsModal'
@@ -23,6 +23,7 @@ import { useAuthStore } from '../../stores/authStore'
 import { queueSave, registerHydrator } from '../../services/settingsSync'
 import { ShareModal } from '../common/ShareModal'
 import { SharedCountBadge } from './SharedCountBadge'
+import { NetworkBadge, useNetworkShare, type NetworkShareAction } from './NetworkShare'
 import { useSharedAgentStore } from '../../stores/sharedAgentStore'
 import { isManagedAgent } from '../../utils/managedAgents'
 import { ownerShareNote } from '../../utils/sharedAgent'
@@ -178,6 +179,8 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
 
   const isRunning = proc.status === 'running'
   const agentName = proc.name || proc.slug
+  // On this deck's BotPort network (its owner may share it; see NetworkShare).
+  const network = useNetworkShare(proc.slug, agentName)
   const chatId = `proc-${proc.slug}`
 
   const memory = useAgentMemoryTransfer({
@@ -242,6 +245,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
 
   const actionProps = {
     isRunning,
+    network,
     actionLoading,
     onStart: () => doAction('start', () => startProcess(proc.slug)),
     onStop: () => doAction('stop', () => stopProcess(proc.slug)),
@@ -424,6 +428,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
                     <Pencil className="h-2.5 w-2.5" />
                   </button>
                   <SharedCountBadge agentRef={proc.agent_ref} />
+                  <NetworkBadge agentKey={proc.slug} />
                 </>
               )}
             </div>
@@ -568,6 +573,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
                       <Pencil className="h-3 w-3" />
                     </button>
                     <SharedCountBadge agentRef={proc.agent_ref} />
+                    <NetworkBadge agentKey={proc.slug} />
                   </>
                 )}
               </div>
@@ -891,8 +897,9 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
   )
 }
 
-function ProcessActionsDropdown({ isRunning, actionLoading, onStart, onStop, onRestart, onShare, canShare, onPacks, canPacks, onClone, onRemove, onConfig, onExportMemory, onExportFullMemory, onImportMemory, onImportStageMemory, onMergeReflection, onReviewPending, freebie, onRefreshFreeModels, memoryState, memoryBusy, iconOnly }: {
+function ProcessActionsDropdown({ isRunning, network, actionLoading, onStart, onStop, onRestart, onShare, canShare, onPacks, canPacks, onClone, onRemove, onConfig, onExportMemory, onExportFullMemory, onImportMemory, onImportStageMemory, onMergeReflection, onReviewPending, freebie, onRefreshFreeModels, memoryState, memoryBusy, iconOnly }: {
   isRunning: boolean
+  network: NetworkShareAction
   actionLoading: string | null
   onStart: () => void
   onStop: () => void
@@ -956,6 +963,7 @@ function ProcessActionsDropdown({ isRunning, actionLoading, onStart, onStop, onR
     { icon: Brain,     label: 'Merge Reflection…', onClick: onMergeReflection, show: isRunning },
     { icon: Inbox,     label: 'Pending Insights…', onClick: onReviewPending, show: isRunning },
     { icon: Users,     label: 'Share…',  onClick: onShare,   show: canShare },
+    { icon: Globe,     label: network.label || 'Share on network…', onClick: network.onClick, show: network.show, disabled: network.disabled },
     { icon: Layers,    label: PACKS_MENU_LABEL, onClick: onPacks, show: canPacks },
     { icon: Copy,      label: 'Clone',   onClick: onClone,   loading: actionLoading === 'clone' },
     { icon: Trash2,    label: 'Remove',  onClick: onRemove,  loading: actionLoading === 'remove',  danger: true },

@@ -837,6 +837,7 @@ async def _start_botport_link(db: Any) -> None:
         deck_id = secrets.token_hex(16)
         await db.set_system_setting(_bl.DECK_ID_KEY, deck_id)
     stored = _bl.unseal_settings(await db.get_system_setting(_bl.SETTING_KEY))
+    link.user_shares = _bl.parse_shares(await db.get_system_setting(_bl.SHARES_KEY))
     link.configure(
         fleet=_fleet_snapshot,
         consult_events=_consult_peer_events,
@@ -1446,6 +1447,7 @@ _optional_agent_manager_dep = Depends(get_optional_managed_user) if AUTH_ENABLED
 from captain_claw.flight_deck.auth_routes import router as auth_router
 from captain_claw.flight_deck.settings_routes import router as settings_router
 from captain_claw.flight_deck.botport_routes import router as botport_router
+from captain_claw.flight_deck.botport_routes import forget_share as botport_forget_share
 from captain_claw.flight_deck.chat_routes import router as chat_router
 from captain_claw.flight_deck.admin_routes import router as admin_router
 from captain_claw.flight_deck.profile_routes import router as profile_router
@@ -3098,6 +3100,7 @@ async def remove_container(container_id: str, force: bool = False, purge: bool =
     await asyncio.get_event_loop().run_in_executor(None, lambda: c.remove(force=force))
     await _set_owner_agent_instructions(owner_id, "docker", short_id, "")
     await _forget_shared_agent(agent_ref, owner_id)
+    await botport_forget_share(_slug((c.labels or {}).get("flight-deck.agent-name", name)))
     if purge:
         problem = await _purge_agent(name, short_id)
         if problem:
@@ -8719,6 +8722,7 @@ async def remove_process(slug: str, force: bool = False, purge: bool = False, re
     # …and its instructions, so a later agent of the same name doesn't inherit them.
     await _set_owner_agent_instructions(owner_id, "process", slug, "")
     await _forget_shared_agent(agent_ref, owner_id)
+    await botport_forget_share(slug)
     if purge:
         problem = await _purge_agent(slug, f"proc-{slug}")
         if problem:
