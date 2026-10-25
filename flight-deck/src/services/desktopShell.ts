@@ -38,10 +38,10 @@ export function isDesktopApp(): boolean {
   return SIMULATED || !!bridge()?.isDesktop
 }
 
-// The Captain Claw Android app (android/hud): a WebView shell around a deck's
-// kiosk that appends ` CaptainClawHUD/<version>` to its user agent. The token
-// is older than the kiosk — the app first showed the HUD (hud/device.ts reads
-// it too).
+// The Captain Android app (kept out of this repo until it is published): a
+// WebView shell around a deck's kiosk that appends ` CaptainClawHUD/<version>`
+// to its user agent. The token is older than the kiosk — the app first showed
+// the HUD (hud/device.ts reads it too).
 const ANDROID_APP = /\bCaptainClawHUD\/\S+/.test(navigator.userAgent || '')
 
 /** The Captain Claw Android app. */

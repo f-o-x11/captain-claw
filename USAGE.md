@@ -6055,10 +6055,6 @@ captain-claw-fd
 
 Besides the bridge pages above, Flight Deck now ships a full frontend for the Meta Ray-Ban Display at **`/hud/`**: chat with your running agents (the same conversation as the dashboard, dictation or handwriting through Meta's composer, replies read aloud), read the Markdown files your agents wrote, and browse datastore tables read-only — all driven by swipes and pinches on a 600 × 600 display. It is a separate, lean page (about 150 KB on the wire for the first load, cached by a service worker afterwards). Pair it by opening `/hud/pair` on your phone or computer and typing the code the glasses show. Requirements, pairing, screens and limits: [docs/glasses-hud.md](docs/glasses-hud.md).
 
-### Android HUD app — NEW in 0.8.1
-
-`android/hud` is a small Android app — one WebView in a Kotlin shell — that shows a deck's HUD (`<deck>/hud/`) full screen on a phone: chat with your running agents, read the Markdown files they wrote, and browse datastore tables. The HUD's code isn't in the APK: the app loads it fresh from the deck on every start (and again when the deck serves a newer build), so every Flight Deck deploy updates the app and the deck needs no change. On first run the app asks for the deck address and checks it; the deck can be changed later from the HUD, a launcher shortcut or the can't-reach screen. The phone's Back key, the on-screen keyboard and spoken replies (Android's text-to-speech) behave as in a native app, and off the glasses the HUD switches to touch: "Tap" instead of "Pinch", one-tap Send, sign-in starting with email, and sideways swipes for records and file pages. Plain http is allowed only for decks on a local network; a deck with `FD_LOCKDOWN` needs https for its sign-in cookie. Turns from the app are recorded with source `app:android`. Build, install, first run and sign-in: [docs/android-app.md](docs/android-app.md).
-
 ---
 
 ## M5Stack Voice Devices (StickS3, StopWatch, PaperColor)

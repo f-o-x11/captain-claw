@@ -357,16 +357,6 @@ Lumen).
 | **INMO Air 3** | Normal dashboard; we haven't tested it | Full Android with a 1920 × 1080 viewport, so the dashboard fits. Its own input is a ring, the temple touchpad or voice, so pair a Bluetooth keyboard or mouse for the dashboard, or try `https://<your-host>/hud/`. |
 | **RayNeo X3 Pro** | Try the HUD; we haven't tested it | A 640 × 480 display with temple-touchpad or ring input. How that input reaches web pages is unknown (on Android, probably arrow keys and Enter), and no browser has been reviewed for it. If one is available, open `https://<your-host>/hud/` (or `/?ui=hud`): the small viewport and arrow-key input suit the HUD better than the dashboard. |
 
-## Android app
-
-The HUD also runs on Android phones, in the **Captain Claw** app
-(`android/hud/`): a WebView shell that loads `<your deck>/hud/` from the deck,
-so it needs no server changes and gets every HUD update with Flight Deck.
-There the HUD signs in with email first, is driven by touch (taps, swipes,
-Prev / Next chips, no focus rings) and reads replies aloud with Android's
-text-to-speech. Build, install, first run and sign-in:
-[android-app.md](android-app.md).
-
 ## Deployment checklist
 
 Meta's glasses only load web apps from a **public HTTPS URL**: no HTTP, no LAN

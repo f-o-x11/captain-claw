@@ -9,9 +9,10 @@
 // toolkit uses (PageTransition.tsx). Rokid Lumen (community host that runs
 // Display web apps unchanged) injects `window.lumen` on the app's origin.
 //
-// The Captain Claw Android app (android/hud): a phone WebView shell that loads
-// a deck's /hud/ and appends ` CaptainClawHUD/<version>` to its user agent.
-// It is a touch phone, never glasses.
+// The Captain Android app (kept out of this repo until it is published): a
+// phone WebView shell that appends ` CaptainClawHUD/<version>` to its user
+// agent; its first versions loaded a deck's /hud/. It is a touch phone, never
+// glasses.
 
 export type GlassesHost = 'meta-display' | 'rokid-lumen' | null
 export type HudHost = 'meta-display' | 'rokid-lumen' | 'android-app' | null
@@ -65,7 +66,7 @@ export function deviceLabel(): string {
   return 'Browser'
 }
 
-/** The app's native side (android/hud MainActivity), injected for the deck's
+/** The Android app's native side (its MainActivity), injected for the deck's
  *  origin only. Absent everywhere else. */
 interface AppBridge { postMessage(message: string): void }
 
