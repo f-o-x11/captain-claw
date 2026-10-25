@@ -1,6 +1,5 @@
 package com.captainclaw.hud
 
-import android.content.Context
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -14,9 +13,10 @@ import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
 /**
- * The Flight Deck this app shows: its origin (scheme://host[:port], no path —
- * the HUD lives at /hud/ and calls /fd/... on the same origin), kept in
- * SharedPreferences.
+ * A Flight Deck's address: what the user typed (with or without http(s)://)
+ * turned into an origin — scheme://host[:port], no path; the kiosk is the
+ * deck's own page and calls /fd/... on the same origin — and checked against
+ * the deck's GET /fd/auth/status. The saved decks are [DeckStore]'s.
  *
  * Clear-text http is for decks on the local network only: a literal private /
  * loopback / link-local / CGNAT (Tailscale) address, a local name (.local,
@@ -25,16 +25,7 @@ import javax.net.ssl.SSLException
  * IP ranges), so this is where the rule is enforced.
  */
 object Deck {
-    private const val PREFS = "deck"
-    private const val KEY_ORIGIN = "origin"
     private const val TIMEOUT_MS = 10_000
-
-    fun saved(context: Context): String? =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_ORIGIN, null)
-
-    fun save(context: Context, origin: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_ORIGIN, origin).apply()
-    }
 
     /** What the user typed, as origins to try in order, or why it can't be one. */
     sealed interface Parsed {
@@ -133,7 +124,7 @@ object Deck {
 
     /** The outcome of asking a candidate origin for GET /fd/auth/status. */
     sealed interface Check {
-        data class Ok(val origin: String, val authEnabled: Boolean) : Check
+        data class Ok(val origin: String, val authEnabled: Boolean, val name: String, val logo: String) : Check
         data class Failed(val message: String) : Check
     }
 
@@ -195,7 +186,12 @@ object Deck {
                 return Check.Failed("$origin answered, but not like Flight Deck.")
             }
             if (!json.has("auth_enabled")) return Check.Failed("$origin answered, but not like Flight Deck.")
-            return Check.Ok(origin, json.optBoolean("auth_enabled", true))
+            return Check.Ok(
+                origin,
+                json.optBoolean("auth_enabled", true),
+                json.optString("instance_name").ifBlank { "Flight Deck" },
+                json.optString("instance_logo"),
+            )
         } catch (e: UnknownHostException) {
             return Check.Failed("Can't find ${URI(origin).host} — check the address and your network.")
         } catch (e: SSLException) {
