@@ -65,3 +65,6 @@ models/lupa-data/
 # lupa web source is never a build artifact
 !lupa/web/src/lib/
 !lupa/web/src/lib/**
+
+# The Android app lives in its own private repo until it is published.
+android/

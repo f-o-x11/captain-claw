@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Files the app hands to other apps (Downloads.kt): a file opened to view
-     it, and before Android 10 a download (the app's own Download folder). -->
-<paths>
-    <cache-path name="view" path="view/" />
-    <external-files-path name="downloads" path="Download/" />
-    <files-path name="downloads_internal" path="Download/" />
-</paths>
