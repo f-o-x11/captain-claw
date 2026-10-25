@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from captain_claw import pack_access, saved_attribution
+from captain_claw import pack_access, research_images, saved_attribution
 from captain_claw.logging import get_logger
 from captain_claw.tools.registry import Tool, ToolResult
 from captain_claw.vfs import is_vfs_path, resolve_vfs_path
@@ -202,12 +202,16 @@ class ReadTool(Tool):
                     ),
                 )
 
-            # Check if file is too large
+            # Check if file is too large — an HTML report's inline pictures
+            # don't count: they are served as short placeholders below.
             _stat = file_path.stat()
             file_size = _stat.st_size
             from captain_claw.config import get_config
             max_size = get_config().tools.read.max_file_bytes
-            if file_size > max_size:
+            too_big = file_size > max_size
+            if too_big and file_size <= 8 * max_size:
+                too_big = research_images.collapsed_size(file_path) > max_size
+            if too_big:
                 return ToolResult(
                     success=False,
                     error=(
@@ -258,6 +262,10 @@ class ReadTool(Tool):
                         "If it's an image, use the image_vision tool instead."
                     ),
                 )
+
+            # Inline base64 pictures (an HTML report's) as short placeholders —
+            # edit/write put them back, so they never flood the context.
+            content, _inline = research_images.collapse_inline_images(content)
 
             # Apply offset and limit
             all_lines = content.splitlines()
@@ -316,6 +324,8 @@ class ReadTool(Tool):
                 )
             elif offset is not None or limit is not None:
                 info += f" [lines {start_line}-{end_line}]"
+            if _inline:
+                info += f" [{len(_inline)} {research_images.PLACEHOLDER_NOTE}]"
 
             if header:
                 return ToolResult(success=True, content=f"{info}\n{header}\n{content}")
