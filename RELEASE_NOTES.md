@@ -1,381 +1,249 @@
-# Captain Claw v0.8.1 Release Notes
+# Captain Claw v0.8.2 Release Notes
 
-**Release title:** A Kiosk for Everyone · Devices That Listen
-**Release date:** 2026-10-24
+**Release title:** Decks That Work Together
+**Release date:** 2026-10-25
 
-0.8.0 put agents in front of other people. 0.8.1 is about what those people
-found when they got there. Nine days, 121 merged pull requests and 160 commits
-later, the **kiosk** — the chat-first view a team's non-admins live in — is a
-complete place to work: a guide on the first visit, one-click **skill cards**,
-a **File library** and a **Data library** that summarise everything the agents
-keep, **Scheduled tasks** that deliver to chat, email or Telegram, one
-**timeline** per agent with named topics, and a per-agent menu for the model,
-the instructions and how hard it thinks. Admins get an **Admin console** of
-their own, invitations by email, a waitlist that answers applicants, branding,
-and daily plan limits.
+Until now every Flight Deck was an island. Your agents could work as a team,
+but only with the agents on the same machine. 0.8.2 connects the islands.
 
-The pocket client becomes a family. One firmware tree now builds for three
-M5Stack devices — the **StickS3**, the round **StopWatch** and the four-inch
-colour e-paper **PaperColor** — that take **signed updates over the air**, keep
-**voice notes offline** and send them when the deck is back, speak the answer
-**sentence by sentence as the model writes it** with the text following the
-voice, and tell the agent the battery, the room's temperature and the time with
-every question. And every channel now shares **one conversation**: the agent
-knows whether a message came from the web, WhatsApp, the owner's Telegram or
-"M5Stack StickS3 (desk)".
+**BotPort** is the hub that does it, rebuilt around Flight Decks. Run it on
+anything that can stay on (a Raspberry Pi in a tmux pane is plenty), and every
+Flight Deck that joins can lend its agents to the others. The planner on your
+VPS asks `Researcher@pi`, the research agent on the Pi at home, and the answer
+streams back with live progress, as if the two sat on the same deck. Decks dial
+out, so a deck behind home NAT or on a laptop joins just as easily as a server.
 
-The version number is a patch bump, but read [Upgrading](#upgrading) before you
-deploy a team deck: **daily plan limits are on by default** (30 messages and
-300k tokens a day on the free plan), and MCP servers become private to whoever
-added them.
+Adding a deck takes a minute and no restart: press **Add Flight Deck** on the
+hub's new **Decks** page, paste the **join code** it shows into that deck, and
+press Save. Every deck gets a display name and a description that the whole
+network sees. The hub's dashboard is now a **live map of the network**, made for
+a wall screen: each request flies from the asking deck through the hub to the
+agent, and the answer flies back.
+
+And it isn't only for admins. **Anyone can share the agents they own**, from
+the agent's menu or the kiosk's **⋯**, after a dialog that says plainly what
+other decks will and won't be able to do with it.
+
+Also in 0.8.2: devices speak answers **of any length** (the old 66-second
+ceiling is gone), the PaperColor keeps its colours clean with an **hourly white
+pass**, and research reports now carry **the pictures** from the pages they
+cite.
+
+**Upgrade the hub first** (Flight Decks need protocol 2). See
+[Upgrading](#upgrading).
 
 ## Highlights
 
-### The kiosk, a complete place to work
+### BotPort: Flight Decks that work together
 
-- **A guide on the first visit.** A kiosk user's first visit opens *Getting
-  started*: creating an agent, giving it work, connecting Google or Microsoft,
-  the team Telegram bot, the profile — each step with a real screenshot in the
-  viewer's theme (phone screenshots on a phone, swipe to turn the page) and a
-  button straight to it. Info, Settings and the empty chat open it again.
-- **A chat that reads like a conversation app.** Larger, centred messages; a
-  roomier composer with attach, paste and a round send button; and an empty
-  chat or a fresh topic opens with *"Good afternoon, Maya."* and the agent's
-  top three **skill cards**.
-- **"What can I do?"** Skill cards are one-click tasks Flight Deck writes for
-  each agent from its archetype, instructions, tools, connected accounts,
-  schedules, topics, intentions, insights and playbooks (with the owner's fast
-  tier, cached, rewritten when the agent changes). Six sit in the composer;
-  **More** opens up to sixteen more on request, with "Suggest again" and a
-  nudge when the list is old. A card that needs something — an email to
-  answer, claims to check — asks for it first, with a text box, a file or a
-  picture.
-- **How hard it thinks.** A reasoning-effort button in the composer offers
-  *Auto* plus exactly the levels the agent's model has — one scale (off ·
-  minimal · low · medium · high · xhigh · max) translated per vendor and
-  transport for Claude, OpenAI GPT-5.x/6 and o-series, Gemini 2.5–4 and Gemma,
-  Grok, DeepSeek V4, Kimi, GLM, MiniMax, Qwen, Mistral, gpt-oss, Nemotron,
-  local servers, Ollama and OpenRouter. A server that refuses the field is
-  healed: the request goes again without it. Agent Settings also sets a level
-  per **source** (WhatsApp, Telegram, a device, scheduled tasks, …).
-- **One timeline per agent.** *New topic* no longer wipes the screen: the
-  conversation stays, with a divider the agent names (*"New topic · Rome
-  trip"*) once the topic is left behind. A **Topics** menu jumps back to any
-  topic or resumes it; the new `sessions` tool does the same by asking ("go back
-  to the Rome trip") on surfaces with no menu. Turns from other channels show
-  where they came from — *via WhatsApp*, *via M5Stack StickS3 (desk)* — and the
-  loaded window is capped at 2,000 rows with *Earlier* and *Later messages*, so
-  a long-lived tab stays quick.
-- **A File library.** Flight Deck reads every file the user's agents keep —
-  stopped agents too — and has the fast tier write a title, a summary, one of
-  twelve categories and tags. Pictures are described by a model that can see
-  (text in them read word for word); recordings and videos are transcribed
-  with Soniox and summarised. Search runs through names, summaries, transcripts
-  and text; a preview pane shows the selected picture, player, PDF first page,
-  rendered Markdown, table or code. From a file: open, download, edit, present
-  as a deck, publish a **public link**, or share it from the phone.
-- **A Data library.** The same for the agents' datastore tables: each column
-  profiled (how full, ranges, sums, dates, common values), a title, summary and
-  key facts written from the profile, and a live data grid with readable
-  headers, links, formatted numbers and a record panel per row. Export as CSV
-  (formula-safe), JSON or XLSX.
-- **Scheduled tasks.** Kiosk users schedule their own agents: a prompt on a
-  timer (`daily`, `weekdays 08:30`, `weekly mon,wed 18:00`, …, in the user's
-  time zone) whose result goes to the agent's chat, the user's own Gmail or
-  Outlook, and/or Telegram. Each task runs in a session of its own (*"⏰ Morning
-  brief"*), every run is logged and searchable, and *Continue in chat* picks the
-  conversation up.
-- **Each agent has a ⋯ menu** — **Info** (its intentions and topics),
-  **Instructions** (the owner's standing instructions, applied from the next
-  reply), **Settings** (provider, model, key and endpoint from the providers an
-  agent can actually run on; vision auto/on/off; how it thinks; reasoning effort
-  per source) and **Remove**, which deletes the agent, its chat log and its
-  scheduled tasks for good. A power switch per agent starts and stops it.
-- **A new agent picker.** A gallery with search by role, task or skill, family
-  chips, and cards that show the model class and thinking style; a detail panel
-  explains the pick — what it does, what it runs on, how it thinks, what it can
-  do — before you name it.
-- **A message queue you can read.** One card on top says what is happening and
-  offers the next step; below it *Up next* (numbered, reorderable, editable) and
-  a folded *Done* list with times and tokens; undo for remove, skip and clear.
-- **Info and limits.** The Info dialog shows the user's corner of the deck in
-  one read: the tier set their agents run on (never a key), their agents and
-  models, the profile text their agents receive, their plan, today's message
-  and token meters, and which accounts are connected.
-- **On a phone** the kiosk is one screen at a time — the agent list, or one
-  chat full screen with a back arrow — with dialogs as sheets, 16 px fields iOS
-  doesn't zoom into, and a viewport that follows the keyboard. The Android
-  HUD app (`android/hud`, `docs/android-app.md`) wraps the deck's `/hud/` for
-  phones.
-- **Who gets the kiosk is the admin's choice** — *Off*, *Everyone* or *Selected
-  users*, a *Kiosk mode* box per user, and a default for new accounts.
-  `--simple-chat` now only seeds *Everyone* until an admin picks.
+```
+ Agent "Planner"         Flight Deck "vps1"           BotPort hub            Flight Deck "pi"        Agent "Researcher"
+ flight_deck tool  ──▶  /fd/consult-peer  ══ wss ══▶  routes Agent@deck  ══ ws ══▶  BotPort link  ──▶  its own lane
+   "Researcher@pi"   ◀──  live progress    ◀═════════   progress + result ◀═══════   (proxy)       ◀──  the answer
+```
 
-### Running a deck for people
+- **Agent@deck.** An agent on another deck is addressed as `Researcher@pi`.
+  `list_agents` shows every shared agent on the network, with its deck's
+  display name: *Flight Deck 'pi' (Kitchen Pi)*. **Consult** for a quick
+  answer with live progress, **delegate** for work whose result lands in the
+  asking agent's chat.
+- **Every deck dials out.** Only the hub must be reachable: a Raspberry Pi
+  at home, a laptop or a deck behind NAT joins as easily as a VPS. Tailscale,
+  a Cloudflare Tunnel, Caddy or the hub's own TLS keep it private.
+- **Agents never hold the hub's credentials.** An agent asks its own Flight
+  Deck, which carries the request. The receiving deck hands it to its own
+  agent the same way it would a local consult.
+- **Built not to lose work.**
+  - A deck that drops reconnects by itself and supersedes its old socket.
+  - An answer waits on the hub (15 min) for a requester that dropped.
+  - A worker that dropped mid-task gets 90 s to come back.
+  - Lost acknowledgements are resubmitted, and submission is idempotent.
+  - A dispatch that never arrived is sent again.
+  - Timeouts tell both sides.
+  - Two Flight Deck processes sharing one identity back off instead of
+    fighting over the link.
+- **Safe by construction.** A request from another deck runs in a lane of its
+  own (`BP…`), never in the owner's chat or another deck's history:
+  - It never writes or sends email and never triggers Flows.
+  - It never gets the network tools (no A → B → A loops) or the tools bound
+    to the owner's session and memory.
+  - On top of that, the admin's **deny list** applies.
+  - *Accept requests from* matches only deck names the hub verified.
+  - An answer that drew on members' private data is not sent off the deck.
+- **Ops that a Pi in tmux deserves.**
+  - `botport check`, `botport gen-key`, `botport --version`.
+  - `/healthz`, `/api/status`, a rotating log file.
+  - `scripts/botport-tmux.sh` (start, status, logs, attach, restart, stop;
+    restart at boot).
+  - Environment overrides for every setting.
+  - The hub never silently moves to another port.
 
-- **The Admin console** — a layout of its own for setting the deck up and
-  looking after it, every page at `<deck>/console/<page>`: an **Overview**
-  (people, agents running, messages today, 30-day spend, requests to review, a
-  setup checklist, the machine's load), **Models** (tier sets as cards, publish
-  with "changed since published", team keys), **Archetypes**, **Connections**
-  (the deck-wide part above the admin's own), **Users**, **Usage & limits** and
-  **Settings**. Admins start there; *Switch to user view* goes to the kiosk.
-- **People in, the right way.** A **Users** page with Users · Invitations ·
-  Waitlist tabs, search and filters. **Invite by email** from the admin's own
-  Gmail or Outlook — the invitee picks their own password from a one-time link.
-  With sign-up closed, *No account?* leads to a **waitlist** under the deck's
-  name; approving an applicant creates the account and emails them the sign-in
-  link.
-- **Passwords.** Admins set a user's password (and sign them out everywhere);
-  an admin-set password must be changed at the first sign-in; everyone gets a
-  Password card in their Profile with "sign out my other devices".
-- **Your deck, your name.** An instance name, a logo and a short description on
-  a redesigned sign-in page, with a *Powered by Captain* footer an admin can
-  switch off.
-- **Daily plan limits.** Plans are *free*, *premium* and *enterprise* (*pro* is
-  renamed), each with messages and AI tokens per UTC day, counted where Flight
-  Deck relays a human turn (web, WhatsApp, Telegram, devices, the HUD) and
-  reported by agents for every LLM call — **prompt-cache reads don't count**.
-  The kiosk shows an allowance bar under the lane tabs and closes the composer
-  when it's spent. Admins grant **free resets**, up to a deck-wide cap; a user
-  spends one to start the day over.
-- **MCP servers are private to whoever added them.** One person's OAuth sign-in
-  (a CRM, a fund database) is no longer every user's: only the owner's agents
-  use a server and only the owner sees, calls or manages it. An admin can share
-  one with everyone (*deck-wide*), from Connections or **Admin → Integrations**.
-- **MCP OAuth sign-in.** Remote MCP servers that follow the MCP authorization
-  spec connect with discovery, **Dynamic Client Registration**, PKCE and a
-  resource indicator, in a popup — with refresh, sign-out and revocation.
-- **Public file links.** A Share button on any agent file publishes a snapshot
-  at `<deck>/s/<token>` (rendered without scripts, HTML sandboxed, views and
-  expiry shown, stop any time); the `public_link` tool lets an agent do the same
-  when you ask it to "share that file".
-- **The desktop app** opens straight into the Admin console or the locked
-  kiosk, signs in to Google and Microsoft through the system browser (RFC 8252
-  loopback), and no longer starts runaway agent servers.
+The whole road, from `pip install` on the Pi to the first request between two
+decks, is in [docs/botport-deployment.md](docs/botport-deployment.md).
 
-### Devices: StickS3, StopWatch and PaperColor
+### Add a Flight Deck in a minute, without a restart
 
-The StickS3 shipped in 0.8.0. Since then `firmware/device/` builds one tree for
-three devices, and all three grew up together:
+- **Decks** page on the hub's dashboard → **Add Flight Deck**. Choose:
+  - a display name;
+  - the deck's network name (suggested for you);
+  - a description of what's on it.
+- The hub makes the deck's key and shows it **once**:
+  - a **join code** (the address, name, key and secret in one line);
+  - the same values field by field;
+  - the `FD_BOTPORT_*` variables for a deck without a screen.
+- On the deck: **Admin console → BotPort → Join code**, paste, **Save**. The
+  hub's dialog turns green the moment the deck connects.
+- **Rotate** a secret or **Remove** a deck and it takes effect at once: the
+  deck using that key is disconnected, and its Status card says why
+  (*this deck's secret was replaced on the hub*).
+- The hub stores only a fingerprint of each secret. Keys in `botport.yaml`
+  keep working exactly as before. An empty `auth.keys` is now fine.
+- Display names and descriptions reach:
+  - the hub's map and drawers;
+  - every deck's **Network** card;
+  - the list your agents get.
 
-| | StickS3 | StopWatch | PaperColor |
-|---|---|---|---|
-| screen | 240×135 LCD | 466×466 round AMOLED, touch | 4" E Ink Spectra 6, 400×600, six inks |
-| talk | front button | yellow button (or the on-screen record button) | A (B build) / C (A build) |
-| extras | 18 animated characters | vibration, clock face, raise to wake, background picture | two RGB status lights, room temperature and humidity, RTC, microSD |
-| build | `pio run -e sticks3` | `pio run -e stopwatch` | `pio run -e papercolor_b` (or `papercolor`) |
-| firmware | 0.18.1 | 0.18.1 | 1.0.16 (B) · 0.18.1 (A) |
+### A dashboard built for the wall
 
-- **Updates over the air, signed.** `tools/publish.py` builds, signs (ECDSA
-  P-256, the private key never leaves your machine) and uploads a build to your
-  deck; devices take it from *Menu → Software update* or by themselves on USB
-  power, verify the SHA-256 and signature, and **roll back** if the new build
-  can't reach Wi-Fi and the deck within 90 s. Every firmware since 0.8.1 went
-  out this way.
-- **Press to talk, press again to send** — or stop talking: 2.5 s of quiet sends
-  the recording on every device, whatever its microphone's noise floor. A blip
-  starts a recording and a lower one ends it; a rising chime comes before the
-  spoken answer and a falling one after. On the PaperColor a press from sleep
-  starts recording at once, while Wi-Fi and the deck connect; on the StickS3
-  and the StopWatch a wake press only wakes it and the next press talks.
-- **Answers as they're written.** The deck forwards the model's text as it
-  streams; the device shows the answer sentence by sentence and **reads each
-  sentence aloud** while the rest is still being written, so the first words
-  are heard early. Only the answer streams — never the agent's own rephrasing,
-  titling or tool rewrites. On the StopWatch the sentence being spoken is lit
-  and the page turns with the voice; the StickS3's pages follow it too. Pause
-  and play, replay, and a **stop** button while the agent works.
-- **Voice notes offline.** Out of Wi-Fi, or with the deck down, talking keeps a
-  voice note (8 kHz ADPCM: about 13 minutes in the StopWatch's and PaperColor's
-  flash, 5½ on the StickS3, far more on the PaperColor's microSD); once the deck
-  is back the device asks, then sends them as one turn the agent reads in
-  order, with when each was recorded. With no
-  saved network in reach a device is an offline note-taker within seconds.
-- **Note-taking mode.** Hold the talk button (StopWatch: yellow, PaperColor B:
-  A) and every recording is kept as a note — written to flash or the card as
-  it's recorded, no length limit — until you hold it again and they all go to
-  the agent at once.
-- **The agent knows where you are.** Every question carries the device's
-  readings — battery, Wi-Fi, how it's held and moving, the room's temperature
-  and humidity, the local time — as a `[Context: …]` line, never as your words.
-  Battery time left (or until full) is learned across deep sleep and shown on
-  the watch face and status pages.
-- **Sound by voice.** "Volume up", "beep off" (English or Croatian) never reach
-  the agent: the deck catches them, the device changes and says the result.
-- **Robust on weak Wi-Fi.** A turn holds through a dropped link and the answer
-  is delivered after the reconnect; "new topic, how warm is it?" goes straight
-  to the answer.
-- **StopWatch** — idle it is a **clock face** with the agent's animated
-  character; raise your wrist to wake it. Send the agent a picture and ask for
-  it as the watch background (`watch_background` tool): it is cropped to the
-  circle and drawn, frosted, behind every screen; swipe right from the clock for
-  the picture alone, left for an **info page** (notes waiting, Wi-Fi, deck,
-  agent). Status as gauges, touch in every picker, haptics, two-level menu,
-  screens that slide and fade, a working ring that breathes — and smooth
-  playback (a 0.5 s stutter and a reboot on every send are fixed).
-- **PaperColor** — a voice-first e-paper that redraws only when it has been put
-  down. The **B** build treats the screen as a dashboard: clock, date, room
-  climate, battery with time left, notes waiting and room left, the links —
-  redrawn every five minutes — the last answer on B at the largest size that
-  fits, the options QR code on C, and the two **status lights** carrying the
-  turn (red recording, a blink per agent step, green with the voice, which side
-  is down when it's offline). microSD notes, hot-plugged; colours in all six
-  inks.
-- **StickS3** — 18 characters (Car, Matrix, Orc, Elf, Dwarf, C64, Amiga, Cat,
-  Dog, Dinosaur, Alien, Caveman, HAL 9000, KITT, Pac-Man, Captain, Bot, Bird),
-  three text sizes, a paged status page, screen-off and power-off timeouts,
-  press to talk and offline notes.
+- **Network** — the hub in the middle, every Flight Deck around it with its
+  shared agents, load and status. Every request is drawn as it travels: asker →
+  hub → agent, progress and the answer back the same way, failures in red.
+  Busy decks glow. Around the map:
+  - KPIs: decks online, shared agents, in flight, last 24 h, success rate and
+    median answer time;
+  - an in-flight rail with each agent's latest step;
+  - recent results;
+  - a live ticker.
+- **Kiosk mode** — the ⛶ button, **K**, or `?kiosk=1`. Full screen, scaled to
+  the display, cursor hidden when idle. Put it on a TV in the office and watch
+  your agents work with each other.
+- **Requests** — everything recent, filterable by state and deck, searchable;
+  a drawer with the route, the live step, the task and the whole conversation.
+- **Decks** — add, name, rotate and remove (above).
+- A real sign-in screen for the admin token. A phone layout. Swarm restyled.
 
-Buttons, setup, building and publishing: `firmware/device/README.md`. The
-design walk-through of the watch: `docs/stopwatch-ux-review.md`.
+### Everyone shares
 
-### One conversation across every channel
+- **Users share the agents they own** from the agent's menu, or the kiosk's
+  **⋯**. A network badge marks shared agents.
+- **"Share on network?"** is a designed dialog that tells the truth:
+  - what other decks can do with the agent;
+  - what stays out of their reach (your chats, your profile, sending email,
+    Flows, scheduled tasks, the terminal, whatever the admin blocks);
+  - what is worth knowing (it answers with its own files, datastore and
+    connected inbox, and its use counts toward this deck);
+  - which decks are on the network now.
+- **Admins stay in control.**
+  - *Let users share their own agents* (`FD_BOTPORT_USER_SHARING`).
+  - A Stop button on every owner's share.
+  - The admin's own *Exposed agents* list, as before.
+- A share lapses when the agent changes hands and goes with the agent when it
+  is removed.
 
-- **Every message knows its source** — `web`, `app`, `glasses`, `whatsapp`,
-  `telegram`, `device:<kind>`, `scheduled`, … with a label a person reads. The
-  model sees *"[via WhatsApp] …"* in its history; the kiosk shows *via M5Stack
-  StickS3 (desk)*.
-- **The owner's own Telegram joins the main conversation** — the one the web
-  chat, WhatsApp, glasses and devices already share — and holds the lane like
-  any other turn (`telegram.owner_in_main`, on).
-- **Telegram grew up.** One **team bot** per deck with admin approval (and
-  auto-approve); narration sent live, one message per blurb; voice notes,
-  audio, video, round videos and GIFs reach the agent (voice transcribed); a
-  read-only **Telegram inbox** the agents read like mail, sealed at rest, with
-  "3 new from Ana" in each turn's context; and agents in **Telegram groups**
-  through the bot's add-to-group link, answering @mentions with a group's own
-  limited session.
-- **Soniox keys live in Flight Deck** — each user's own, or a team key an admin
-  shares — and agents never hold one. The new **`audio`** tool transcribes a
-  file and speaks text to an MP3 that WhatsApp, Telegram and the devices
-  deliver.
+### Hardening
 
-### Agents
+- Flight Deck sends an agent's web token **only to that agent's own
+  address** (loopback, or a Docker agent's container names and IPs). The same
+  rule covers the WebSocket proxy, Flows, the glasses bridge and agent
+  notifications. Tokens are compared in constant time.
+- The hub:
+  - **Admin token** for the dashboard and REST API. Without one, the API
+    answers only the hub's own machine, opened by a loopback name (no DNS
+    rebinding).
+  - Constant-time key checks, and a failure limiter per address and key.
+  - Deck identity bound to its key.
+  - `X-Forwarded-For` believed only from `trusted_proxies`.
+  - Fixed: a swarm path traversal and a dashboard XSS. Gzip bodies are
+    bounded.
+  - Swarm disk quotas.
+  - Deck changes from the dashboard must be JSON (no cross-site form posts).
 
-- **Native vision.** A model that sees images gets the turn's pictures inline
-  instead of a separate vision model's description; tool screenshots (browser,
-  screen capture, `cv`) go to it too. `model.vision` auto / on / off, per agent
-  in Flight Deck; a server that refuses images is healed in the same call;
-  HEIC and TIFF uploads become JPEG.
-- **The everyday working set is always on** — shell, glob, web fetch and search,
-  the extract tools, insights, contacts, APIs, todo and `image_vision`,
-  whatever an archetype's list says.
-- **Jev keeps work going** — when a turn runs out of steps, Jev judges whether
-  it's still making progress and extends it; when a guard refuses a repeated
-  call, Jev picks the next step instead of a fixed message.
-- **No phantom placeholders.** A model's own just-written file is no longer
-  compacted before its next call (Claude Haiku had taken the marker for a
-  broken file and given up).
-- **Chats survive a deck restart** — they follow an agent to its new port,
-  refresh an expired token, and say *"Agent unreachable — reconnecting…"*
-  instead of a bubble per retry.
+### Devices
 
-### Payments (opt-in, off by default)
+- **Answers of any length.** The answer's voice now plays through a ring
+  instead of one buffer: a three-minute answer plays to the end. A long answer
+  arrives faster than it is spoken, so the device asks the deck to hold
+  (`audio_hold`) and to go on (`audio_go`); a pause holds it. Replay comes from
+  the ring while the whole clip is still there, otherwise from the deck.
+  Firmware **0.18.2** (StopWatch, StickS3, PaperColor A) and **1.0.17**
+  (PaperColor B).
+- **PaperColor: a white pass.** Six-ink paper that only ever goes from one
+  picture to the next loses colour and keeps faint shadows. Once an hour, and
+  once after a real restart, it goes all white before the dashboard. A screen
+  you asked for stays quick. Firmware **1.0.18** (PaperColor B).
 
-With `FD_PAYMENTS=1` and `pip install .[payments]`, Captain prepares bill
-payments it never makes: an **HUB3 / EPC QR barcode** from an invoice for your
-own bank app, a **Revolut Business draft** you send yourself, or a **pay-by-bank
-link** your bank approves with its own SCA (Enable Banking). It can buy from an
-online shop with a **one-time card** you approve (Stripe Link, a Revolut
-single-use card; ACP and AP2 checkout), confirm bills from a read-only **bank
-statement**, remind you before a bill is due, and spot **recurring bills**.
-Card numbers are scrubbed at every entry point, and only you clear a blocking
-warning. Plans and decisions: `docs/payments-phase0-plan.md` to
-`docs/payments-phase4-plan.md`.
+### Research reports with pictures
 
-### Also
+`web_fetch` and `web_fetch_batch` keep the pictures a page shows that could
+matter to the research:
 
-- A **one-click deploy** button (RepoCloud) and a local code-lookup MCP example,
-  both contributed — thank you.
-- The chat's daily allowance bar sits under the lane tabs.
-- The kiosk's agent menu lost Files and Data entries that repeated the Library
-  and Data tiles (agents the libraries can't index keep *Files & data*).
-- `image_vision` is always available, and a failed description no longer
-  forbids it.
-- The tool-call log drops injected keys and cuts long values (one agent's
-  `process.log` had reached 3.7 GB).
+- they keep pictures with a caption, telling alt text or a title, inside the
+  content;
+- they drop logos, icons, avatars, ads, navigation, "related" teasers and
+  repeats;
+- each kept picture is fitted for documents and listed with its caption,
+  section and source.
+
+Reports use them in each format:
+
+- **.md** links the original;
+- **.html** embeds it, so the file stands alone;
+- **.docx** places it with `python-docx`.
+
+`read` shows embedded pictures as short placeholders, so an HTML report never
+floods the context. Settings: `tools.web_fetch.save_images`, `images_per_page`
+(4), `images_per_batch` (16).
 
 ## Upgrading
 
-**Before you deploy**
+**Order matters: the hub first, then the decks.** A Flight Deck on 0.8.2
+refuses a hub older than protocol 2 and waits before retrying.
 
-1. **Daily plan limits are on.** On a deck with sign-in, every non-admin is
-   counted against their plan from the first day: **free** 30 messages and
-   300,000 tokens per UTC day, **premium** 300 and 3,000,000, **enterprise**
-   unlimited (0 = unlimited). Admins, the desktop app and decks without
-   sign-in are exempt. Check **Admin → Plans** (or *Console → Usage & limits*)
-   and each user's plan before your team's next morning. Users on *pro* move to
-   *premium* by themselves.
-2. **Pull, then `pip install .`** wherever Captain Claw is installed
-   non-editable (the deck serves the bundle from site-packages), **restart Flight
-   Deck, then every agent, then hard-refresh.** Agents need the restart for
-   topic dividers, source marks, device context lines, streamed device answers
-   and reasoning effort.
+1. **Hub** — `cd ~/captain-claw && git pull`, then
+   `~/botport-venv/bin/pip install ~/captain-claw/botport` and
+   `scripts/botport-tmux.sh restart`. Run `botport check -c ~/.botport/config.yaml`
+   first if you edited the config. Set `server.admin_token` if you will open
+   the dashboard from another machine.
+2. **Each Flight Deck** — pull, `pip install .` where Captain Claw is
+   installed non-editable, **restart Flight Deck, then every agent** (agents
+   on old code don't see remote agents), then hard-refresh.
+3. **Connect the decks** — on the hub's **Decks** page, **Add Flight Deck**
+   for each one and paste its join code into *Admin console → BotPort*. Decks
+   with keys in `botport.yaml` connect with those as before.
+4. **Devices** — publish the new firmware from `firmware/device` with
+   `python tools/publish.py <env> --deck https://<deck>`; devices take it from
+   *Menu → Software update* or by themselves.
 
-**After you deploy**
+**Changed**
 
-- **Kiosk mode** is now set in **Admin → Settings → Kiosk mode**;
-  `--simple-chat` / `FD_SIMPLE_CHAT` only seeds *Everyone* until you pick.
-- **Admins open in the Admin console.** The old "Where do you want to start?"
-  dialog is gone; the full Flight Deck is one click away.
-- **MCP servers** are private to their creator. On first start, servers you
-  signed in to with OAuth go to whoever signed in; other existing servers stay
-  deck-wide, as they behaved. Review them in **Admin → Integrations → MCP
-  servers**.
-- **Soniox:** an admin moves the server's key into Flight Deck with **Admin →
-  Integrations → Soniox → Move server key here** (`SONIOX_API_KEY` still works
-  as the last fallback). Flight Deck no longer passes the key to agents.
-- **Telegram:** the owner's private chat with their agent now continues the
-  main conversation. `telegram.owner_in_main: false` keeps it separate.
-- **Devices:** the StickS3 needs one last USB flash for over-the-air updates
-  (it moves back to two app slots; settings survive). Generate a signing key
-  once (`python tools/publish.py keygen` in `firmware/device`), then publish
-  each build with `python tools/publish.py <env> --deck https://<deck>` and an
-  admin token (`--token`, `FD_TOKEN`, or
-  `~/.captain-claw/firmware-signing/deck-token`). **PaperColor B
-  publishes as the `papercolor` kind**, so once a B build is on the deck every
-  PaperColor that takes updates moves to B.
-- **File library** previews of PDFs need `pypdfium2` (in `.[payments]`);
-  picture and recording summaries need a vision-capable model, a Soniox key and
-  `ffmpeg`.
-- **Telegram inbox** seals text with a key in `<FD home>/data_key` (or
-  `FD_DATA_KEY_FILE`); back it up with the database. `cryptography` is now a
-  declared dependency.
-
-**Removed and changed**
-
-- The kiosk's right-hand files/datastore column is gone — the File and Data
-  libraries and *Files & data* replace it.
-- The admin start picker is gone; admins start in the console.
-- The StickS3's Smiley character is gone (its users get the Captain).
-- The PaperColor's notes folder is `captain-notes` (moved from `claw-notes` at
-  start-up); only files the device named are ever read or removed.
-- Cache reads no longer count toward any token figure Flight Deck bills.
+- The per-agent BotPort link (the Spawner's *Direct BotPort link*) is now
+  **legacy and off** for new agents; remote work goes through the deck's link,
+  where the safeguards apply. Old links keep working; switch them off.
+- Without `server.admin_token`, the hub's dashboard and API answer only on the
+  hub's own machine, opened as `http://127.0.0.1:23180/` or
+  `http://localhost:23180/` (with auth on). With a token, nothing changes.
+- The hub makes dashboard keys only with `auth.enabled: true`; on an open hub,
+  any deck joins without one.
+- `auth.enabled: true` with an empty `auth.keys` is a warning now, not an
+  error.
 
 **New settings**
 
 | Setting | Default | What it does |
 |---|---|---|
-| `FD_PAYMENTS` / `FD_PAYMENTS_STATEMENTS` | off | Payments; read-only bank statements |
-| `FD_PAYMENTS_SYNC_TIMES` | two daily slots | When bank statements are read |
-| `FD_ENABLEBANKING_APP_ID` / `_KEY` | — | Pay-by-bank links and statements (Enable Banking) |
-| `FD_LINK_CLIENT_ID` / `_SECRET` / `FD_LINK_TEST` | — | Stripe Link one-time cards |
-| `FD_AP2` | off | AP2 protocol checkout |
-| `FD_PUBLIC_FILE_LINKS` / `FD_PUBLIC_FILE_LINK_MAX_MB` | on / `50` | Public file links; size cap |
-| `FD_AGENT_WS_WAIT_S` | `30` | How long a chat waits for a restarting agent |
-| `FD_DATA_KEY_FILE` | `<FD home>/data_key` | Key that seals the Telegram inbox |
-| `FD_DESKTOP` | — | Set by the desktop app (loopback sign-in) |
-| `DEVICE_VOICE_MALE` / `DEVICE_VOICE_FEMALE` | Adrian / Emma | Device voices |
-| `model.vision` | `auto` | Send pictures to the model itself (`on` for local Qwen builds) |
-| `context.inline_images` | 4 per call | Pictures per call, newest tool pictures, size cap |
-| `telegram.owner_in_main` | `true` | Owner's Telegram in the main conversation |
-| `telegram.groups` / `group_turns_per_hour` | `true` / `30` | Agents in Telegram groups |
-| `tools.jev.check_progress` / `review_blocks` | `true` | Jev extends working turns / reviews refused calls |
-| `STREAM_NARRATION` | on | `off` folds Telegram narration into one answer |
-| `~/.captain-claw/reasoning_effort.json` | — | Reasoning effort per source (also from agent Settings) |
+| `server.admin_token` (hub) | — | Token for the hub's dashboard and REST API |
+| `server.behind_proxy` / `trusted_proxies` | off / loopback | A TLS proxy or tunnel on the hub's host; whose `X-Forwarded-For` to believe |
+| `server.tls_cert` / `tls_key` | — | Serve `wss://` from the hub itself |
+| `server.data_dir` | `~/.botport` | Database, log and swarm files |
+| `server.swarm_workspace_mb` / `min_free_disk_mb` | `1024` / `512` | Swarm file quota; disk the hub never fills |
+| `auth.max_failures_per_minute` / `block_seconds` | `10` / `300` | Failed-registration limiter |
+| `concerns.reconnect_grace_seconds` / `result_retention_seconds` | `90` / `900` | Wait for a worker that dropped; keep answers for a requester that dropped |
+| `FD_BOTPORT_URL`, `_DECK_NAME`, `_KEY`, `_SECRET` | — | A deck's link, pinned by environment |
+| `FD_BOTPORT_EXPOSE`, `_ACCEPT_FROM`, `_ALLOW_OUTBOUND` | — / `*` / on | What it shares, whom it serves, whether its agents ask others |
+| `FD_BOTPORT_MAX_CONCURRENT`, `_DENY_TOOLS` | `4` / — | Remote tasks at once; extra tools remote requests may not use |
+| `FD_BOTPORT_USER_SHARING` | on | Users may share their own agents |
+| `FD_BOTPORT_ENABLED`, `FD_BOTPORT_NO_PROXY` | — | Switch the link off; ignore `HTTP(S)_PROXY` for it |
+| `tools.web_fetch.save_images` / `images_per_page` / `images_per_batch` | on / `4` / `16` | Pictures kept for research |
 
-New tables and databases (`file_library.db`, `data_library.db`, `payments.db`,
-`daily_usage`, `usage_reset_credits`, `scheduler_runs`, `telegram_links`,
-`telegram_inbox*`, `waitlist`, invitations, `public_shares`, …) create
-themselves on restart. No manual migration.
+The hub's new `decks` table creates itself on start; a deck's shares live in
+Flight Deck's settings. No manual migration.

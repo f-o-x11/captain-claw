@@ -191,7 +191,9 @@ async def test_config_is_admin_only_and_secret_never_returned(deck):
     raw = await deck.db.get_system_setting(bl.SETTING_KEY)
     assert "very-secret-value" not in raw
     assert deck.applied[-1]["secret"] == "very-secret-value"
-    assert set(status_user.json()) == {"enabled", "state", "deck_name", "remote_agents"}
+    assert set(status_user.json()) == {"enabled", "state", "deck_name", "remote_agents", "decks"}
+    # A user sees the decks online by the names the hub gives them, no more.
+    assert status_user.json()["decks"] == [{"name": "pi", "label": "Kitchen Pi"}]
 
 
 async def test_sign_in_off_deck_takes_link_settings_only_from_this_machine(deck, monkeypatch):

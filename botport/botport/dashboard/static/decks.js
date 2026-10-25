@@ -97,8 +97,28 @@
     }
   }
 
-  function localPage() {
-    return /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/i.test(location.hostname);
+  function loopbackHost(host) {
+    return /^(localhost|127\.0\.0\.1|\[::1\]|::1)$/i.test(host || "");
+  }
+
+  // What the hub-address field says under it, for the address in it now.
+  function urlHint(u) {
+    let host = "";
+    try {
+      host = new URL(/^[a-z]+:\/\//i.test(u) ? u : "ws://" + u).hostname;
+    } catch (e) {
+      return { warn: true, html: "That doesn't look like an address: <code>ws://host:port/ws</code> or <code>wss://name/ws</code>." };
+    }
+    if (loopbackHost(host)) {
+      return {
+        warn: true,
+        html: "Only a deck on this same machine reaches the hub at this address. For the others, put the one they use (its LAN or public name), e.g. <code>ws://192.168.1.20:23180/ws</code>.",
+      };
+    }
+    if (u === `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`) {
+      return { warn: false, html: "Taken from this page's address. Change it if decks reach the hub another way (a different host, port or a TLS proxy)." };
+    }
+    return { warn: false, html: "The deck connects to this address." };
   }
 
   function b64url(text) {
@@ -523,11 +543,7 @@
         <label class="dm-field">
           <span class="dm-lbl">Hub address <em>as the deck reaches it</em></span>
           <input class="field mono" data-url value="${esc(url)}" spellcheck="false" autocomplete="off">
-          <span class="dm-hint${localPage() ? " warn" : ""}" data-url-hint>${
-            localPage()
-              ? "This page is open on this machine's own address. Put the one other machines use (its LAN or public name), e.g. <code>ws://192.168.1.20:23790/ws</code>."
-              : "Taken from this page's address. Change it if decks reach the hub another way (a different host, port or a TLS proxy)."
-          }</span>
+          <span class="dm-hint" data-url-hint></span>
         </label>
 
         <details class="dm-more">
@@ -562,6 +578,10 @@
       const kvUrl = $("[data-kv='url']", el.card);
       if (kvUrl) kvUrl.textContent = u;
       $("[data-kv-copy='url']", el.card).dataset.value = u;
+      const hint = urlHint(u);
+      const box = $("[data-url-hint]", el.card);
+      box.innerHTML = hint.html;
+      box.classList.toggle("warn", hint.warn);
     };
     input.addEventListener("input", () => {
       fill();

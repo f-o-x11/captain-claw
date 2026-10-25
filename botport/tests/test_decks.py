@@ -277,3 +277,22 @@ async def test_loopback_only_api_refuses_a_rebound_domain(make_hub):
         assert r.status == 200
     async with hub.session.get(hub.url("/api/decks")) as r:
         assert r.status == 200  # 127.0.0.1:<port>
+
+
+async def test_a_removed_deck_leaves_the_map_at_once(make_hub):
+    hub = await make_hub(auth=[FILE_KEY])
+    _, body = await _add(hub, name="pi")
+    pi, _ = await _connect(hub, body["credentials"])
+    vps = await hub.deck("vps1", [], key=FILE_KEY["key"], secret=FILE_KEY["secret"])
+    async with hub.session.delete(hub.url("/api/decks/pi")) as r:
+        assert r.status == 200
+    await pi.expect("_closed")
+    async with hub.session.get(hub.url("/api/overview")) as r:
+        assert [i["name"] for i in (await r.json())["instances"]] == ["vps1"]
+    roster = await vps.expect("network")
+    while any(d["name"] == "pi" for d in roster["decks"]):
+        roster = await vps.expect("network")
+    # An offline deck that can come back stays on the map.
+    await vps.close()
+    async with hub.session.get(hub.url("/api/overview")) as r:
+        assert [(i["name"], i["status"]) for i in (await r.json())["instances"]] == [("vps1", "disconnected")]

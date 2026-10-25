@@ -104,6 +104,9 @@ async def botport_status(user: dict = Depends(get_current_user)):
         "state": full["state"],
         "deck_name": full["deck_name"],
         "remote_agents": [r["name"] for r in link.remote_agents()],
+        # The decks those agents run on, by what the hub's operator calls them.
+        "decks": [{"name": d.get("name", ""), "label": str(d.get("label") or "")}
+                  for d in full["network"].get("decks", []) if d.get("status") == "connected"],
     }
 
 

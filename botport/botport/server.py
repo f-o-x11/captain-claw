@@ -31,7 +31,7 @@ from botport.auth import FailureLimiter, match_credentials
 from botport.concern_manager import ConcernManager
 from botport.config import BotPortConfig, set_config
 from botport.connection_manager import CLOSE_SUPERSEDED, ConnectionManager
-from botport.decks import DECK_NAME_RE, DeckRegistry
+from botport.decks import DECK_NAME_RE, DeckRegistry, config_entry_for
 from botport.models import Concern, _utcnow_iso
 from botport.protocol import (
     ActivityMessage,
@@ -569,11 +569,20 @@ class BotPortServer:
         except RuntimeError:
             self._network_task = None
 
+    def can_return(self, info: Any) -> bool:
+        """Could this connection come back? A deck whose key was removed
+        cannot: once it is offline, it is not shown any more (the hub keeps it
+        a while only for its unfinished work)."""
+        if info.status == "connected" or not info.is_deck or not self.config.auth.enabled:
+            return True
+        rec = self.decks.get(info.name)
+        return (rec is not None and rec.has_key) or config_entry_for(info.name) is not None
+
     def network_for(self, instance_id: str) -> NetworkMessage:
         decks: list[dict[str, Any]] = []
         agents: list[dict[str, Any]] = []
         for info in self.connections.list_instances():
-            if info.id == instance_id:
+            if info.id == instance_id or not self.can_return(info):
                 continue
             if info.is_deck:
                 decks.append({
