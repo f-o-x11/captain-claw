@@ -18,6 +18,7 @@ import {
   MessagesSquare,
   FolderOpen,
   Database,
+  Folders,
   Settings,
   Plug,
   IdCard,
@@ -53,6 +54,7 @@ import { useFileLibraryStore } from '../../stores/fileLibraryStore'
 import { FileLibrary } from '../library/FileLibrary'
 import { useDataLibraryStore } from '../../stores/dataLibraryStore'
 import { DataLibrary } from '../library/DataLibrary'
+import { SharedFolders } from '../vfs/SharedFolders'
 import { isManagedAgent } from '../../utils/managedAgents'
 import { SHARED_PREFIX, sharedCaps, sharedContainerId } from '../../utils/sharedAgent'
 import { CHAT_ONLY_TEXT, workspaceVisible } from '../../utils/sharedWorkspace'
@@ -281,6 +283,12 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
   const dataAgent = useDataLibraryStore((s) => s.agentFilter)
   const openData = useDataLibraryStore((s) => s.openData)
   const closeData = useDataLibraryStore((s) => s.close)
+  // Shared folders: the files the agents keep together (vfs:<folder>/…).
+  const [foldersOpen, setFoldersOpen] = useState(false)
+  const openFolders = () => setFoldersOpen(true)
+  // Linking a folder from the deck's own disk is the deck operator's: an
+  // admin, or a deck nobody signs in to (the desktop app).
+  const canLinkFolders = useAuthStore((s) => s.authEnabled === false || s.user?.role === 'admin')
   useEffect(() => {
     if (authEnabled === true && !isAuthenticated) return
     fetchScheduled()
@@ -644,8 +652,14 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     return !!a && a.reachable && !booting.has(a.id) && !switching.has(a.id)
   }
   // What a phone's Back closes before it leaves a chat (or Flight Deck).
-  const phoneOverlayOpen = libraryOpen || dataOpen || !!filesData
-  const closePhoneOverlays = () => { closeLibrary(); closeData(); setFilesDataId(null) }
+  const phoneOverlayOpen = libraryOpen || dataOpen || foldersOpen || !!filesData
+  const closePhoneOverlays = () => { closeLibrary(); closeData(); setFoldersOpen(false); setFilesDataId(null) }
+  // Drive folders want the user's Google account: Connections, on its tab.
+  const foldersConnections = () => {
+    setFoldersOpen(false)
+    if (locked) { openConnections('google'); return }
+    useChatStore.setState({ chatFullscreen: false }); setLayoutMode('full'); setView('connections')
+  }
   const scheduledConnections = () => {
     closeScheduled()
     if (locked) { openConnections(); return }
@@ -731,6 +745,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
           onScheduled={() => { setSettingsOpen(false); openScheduled() }}
           onLibrary={() => { setSettingsOpen(false); openLibrary() }}
           onData={() => { setSettingsOpen(false); openData() }}
+          onFolders={() => { setSettingsOpen(false); openFolders() }}
         />
       )}
       {locked && infoOpen && (
@@ -773,6 +788,11 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
       {dataOpen && (
         <KioskWideDialog label="Data library" phone={isMobile} onClose={closeData} widest>
           <DataLibrary phone={isMobile} initialAgent={dataAgent} onClose={closeData} onOpenAgent={openLibraryAgent} />
+        </KioskWideDialog>
+      )}
+      {foldersOpen && (
+        <KioskWideDialog label="Shared folders" phone={isMobile} onClose={() => setFoldersOpen(false)} widest>
+          <SharedFolders phone={isMobile} canLink={canLinkFolders} onClose={() => setFoldersOpen(false)} onConnectGoogle={foldersConnections} />
         </KioskWideDialog>
       )}
       {locked && agentInfo && (
@@ -846,6 +866,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
           scheduledRunning={scheduledRunning}
           onLibrary={() => openLibrary()}
           onData={() => openData()}
+          onFolders={openFolders}
           menuFor={menuFor}
           locked={locked}
           adminSwitch={adminSwitch}
@@ -879,6 +900,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
         scheduledRunning={scheduledRunning}
         onLibrary={() => openLibrary()}
         onData={() => openData()}
+        onFolders={openFolders}
         menuFor={menuFor}
         locked={locked}
         adminSwitch={adminSwitch}
@@ -914,7 +936,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
 // the Getting started guide, and sign-out (how a shared kiosk hands the
 // screen to the next person).
 
-function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onProfile, onGuide, onScheduled, onLibrary, onData }: {
+function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onProfile, onGuide, onScheduled, onLibrary, onData, onFolders }: {
   /** The desktop app's admin in the users' kiosk: back to the Admin console. */
   onAdmin?: () => void
   onClose: () => void
@@ -925,6 +947,7 @@ function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onPro
   onScheduled: () => void
   onLibrary: () => void
   onData: () => void
+  onFolders: () => void
 }) {
   const { theme, toggle: toggleTheme } = useThemeStore()
   const authEnabled = useAuthStore((s) => s.authEnabled)
@@ -945,6 +968,7 @@ function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onPro
     { icon: AlarmClock, title: 'Scheduled tasks', detail: 'Your agents on a timer — results by chat or email', onClick: onScheduled },
     { icon: LibraryBig, title: 'File library', detail: 'Every file your agents made, summarised and searchable', onClick: onLibrary },
     { icon: Database, title: 'Data library', detail: 'Every table your agents keep, summarised and easy to read', onClick: onData },
+    { icon: Folders, title: 'Shared folders', detail: 'The folders your agents work in together — open, search, add files', onClick: onFolders },
     { icon: IdCard, title: 'Profile', detail: 'About you, your company, your preferences', onClick: onProfile },
     { icon: RefreshCw, title: 'Refresh agents', detail: 'Check every agent again', onClick: onRefresh },
     { icon: Compass, title: 'Getting started', detail: 'A short tour: agents, connections, Telegram and more', onClick: onGuide },
@@ -1084,7 +1108,7 @@ function KioskDialog({ label, onClose, children }: { label: string; onClose: () 
   )
 }
 
-// ── Scheduled tasks / File library in a dialog ───────────────────────
+// ── Scheduled tasks / the libraries / shared folders in a dialog ─────
 //
 // Wider than the other kiosk dialogs: a list beside the selected item's
 // detail (the library also has its filters). Escape is the component's
@@ -1111,17 +1135,24 @@ function KioskWideDialog({ label, phone, widest = false, onClose, children }: {
 }
 
 const toolTile = 'relative flex min-w-0 flex-col items-center gap-1 rounded-lg px-1 py-2 text-[11px] font-medium text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100'
+// Equal tiles, none narrower than its name: a narrow column gives the longer
+// names ("Scheduled") their width before the rest share what's left.
+const TILE_COLS: Record<number, string> = {
+  2: 'grid-cols-[repeat(2,minmax(max-content,1fr))]',
+  3: 'grid-cols-[repeat(3,minmax(max-content,1fr))]',
+  4: 'grid-cols-[repeat(4,minmax(max-content,1fr))]',
+}
 
 /** The agent column's row of tools — Scheduled tasks (how many are active,
- *  a pulse while one runs), the File library and the Data library — as
- *  three tiles, an icon over its name. */
-function ToolTiles({ onScheduled, scheduledCount, scheduledRunning, onLibrary, onData }: {
+ *  a pulse while one runs), the File library, the Data library and the
+ *  shared folders — as tiles, an icon over its name. */
+function ToolTiles({ onScheduled, scheduledCount, scheduledRunning, onLibrary, onData, onFolders }: {
   onScheduled?: () => void; scheduledCount: number; scheduledRunning: boolean
-  onLibrary?: () => void; onData?: () => void
+  onLibrary?: () => void; onData?: () => void; onFolders?: () => void
 }) {
-  const n = [onScheduled, onLibrary, onData].filter(Boolean).length
+  const n = [onScheduled, onLibrary, onData, onFolders].filter(Boolean).length
   return (
-    <div className={`grid gap-1 border-t border-zinc-800 p-2 pb-0 ${n === 3 ? 'grid-cols-3' : n === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+    <div className={`grid gap-0.5 border-t border-zinc-800 p-2 pb-0 ${TILE_COLS[n] ?? 'grid-cols-1'}`}>
       {onScheduled && (
         <button onClick={onScheduled} className={toolTile} title="Scheduled tasks — your agents on a timer">
           <span className="relative">
@@ -1146,6 +1177,12 @@ function ToolTiles({ onScheduled, scheduledCount, scheduledRunning, onLibrary, o
           <span className="max-w-full truncate">Data</span>
         </button>
       )}
+      {onFolders && (
+        <button onClick={onFolders} className={toolTile} title="Shared folders — the folders your agents work in together">
+          <Folders className="h-[18px] w-[18px] text-sky-600 dark:text-sky-400" />
+          <span className="max-w-full truncate">Folders</span>
+        </button>
+      )}
     </div>
   )
 }
@@ -1154,7 +1191,7 @@ function ToolTiles({ onScheduled, scheduledCount, scheduledRunning, onLibrary, o
 
 function AgentsColumn({
   agents, activeAgentId, sessionInfo, switching, booting, onOpen, onPower, onLeave, onRefresh, onSpawn, onOptions, onSettings, onInfo,
-  onScheduled, scheduledCount = 0, scheduledRunning = false, onLibrary, onData, menuFor, locked = false, adminSwitch = false,
+  onScheduled, scheduledCount = 0, scheduledRunning = false, onLibrary, onData, onFolders, menuFor, locked = false, adminSwitch = false,
 }: {
   agents: SimpleAgent[]
   activeAgentId: string | null
@@ -1182,6 +1219,8 @@ function AgentsColumn({
   onLibrary?: () => void
   /** Opens the Data library. */
   onData?: () => void
+  /** Opens the shared folders. */
+  onFolders?: () => void
   /** Kiosk only: what an agent's "⋯" offers (Info, Settings, Remove). */
   menuFor?: (a: SimpleAgent) => AgentMenuItem[]
   locked?: boolean
@@ -1273,7 +1312,7 @@ function AgentsColumn({
             <Plus className="h-4 w-4" />
           </button>
         </div>
-        {(onScheduled || onLibrary || onData) && (
+        {(onScheduled || onLibrary || onData || onFolders) && (
           <div className="flex flex-col items-center gap-0.5 border-t border-zinc-800 py-2">
             {onScheduled && (
               <button
@@ -1304,6 +1343,16 @@ function AgentsColumn({
                 className="flex h-10 w-10 items-center justify-center rounded-lg text-emerald-600 transition-colors hover:bg-zinc-800 dark:text-emerald-400"
               >
                 <Database className="h-5 w-5" />
+              </button>
+            )}
+            {onFolders && (
+              <button
+                onClick={onFolders}
+                title="Shared folders"
+                aria-label="Shared folders"
+                className="flex h-10 w-10 items-center justify-center rounded-lg text-sky-600 transition-colors hover:bg-zinc-800 dark:text-sky-400"
+              >
+                <Folders className="h-5 w-5" />
               </button>
             )}
           </div>
@@ -1530,13 +1579,14 @@ function AgentsColumn({
         </ul>
       </div>
 
-      {(onScheduled || onLibrary || onData) && (
+      {(onScheduled || onLibrary || onData || onFolders) && (
         <ToolTiles
           onScheduled={onScheduled}
           scheduledCount={scheduledCount}
           scheduledRunning={scheduledRunning}
           onLibrary={onLibrary}
           onData={onData}
+          onFolders={onFolders}
         />
       )}
 
@@ -1642,7 +1692,7 @@ function EmptyChat({ hasAgents, onSpawn, locked = false, onGuide }: {
         <p className="text-sm text-zinc-400">
           {hasAgents
             ? locked
-              ? 'Choose an agent on the left to start a conversation. What it saves for you lands in Library and Data, bottom left.'
+              ? 'Choose an agent on the left to start a conversation. What it saves for you lands in Library, Data and Folders, bottom left.'
               : 'Choose an agent on the left to start a conversation. Its files and data show up on the right.'
             : locked
               ? 'Create an agent from an archetype to start chatting.'
@@ -1862,7 +1912,7 @@ function KioskFilesDataDialog({ agentId, agentName, onClose }: { agentId: string
 
 function PhoneLayout({
   agents, activeAgent, activeAgentId, activeSessionName, sessionInfo, switching, booting,
-  onOpen, onPower, onLeave, onSpawn, onSettings, onInfo, onScheduled, scheduledRunning = false, onLibrary, onData, menuFor, locked, adminSwitch = false,
+  onOpen, onPower, onLeave, onSpawn, onSettings, onInfo, onScheduled, scheduledRunning = false, onLibrary, onData, onFolders, menuFor, locked, adminSwitch = false,
   overlayOpen = false, onCloseOverlays, chatOpens = 0,
 }: {
   agents: SimpleAgent[]
@@ -1882,12 +1932,13 @@ function PhoneLayout({
   scheduledRunning?: boolean
   onLibrary?: () => void
   onData?: () => void
+  onFolders?: () => void
   /** Kiosk only: what an agent's "⋯" offers (Info, Settings, Remove). */
   menuFor?: (a: SimpleAgent) => AgentMenuItem[]
   locked: boolean
   adminSwitch?: boolean
-  /** The File or Data library, or an agent's Files & data, is open (they
-   *  live a level up): Back closes them before anything else. */
+  /** The File or Data library, the shared folders or an agent's Files &
+   *  data is open (they live a level up): Back closes them before anything else. */
   overlayOpen?: boolean
   onCloseOverlays?: () => void
   /** Counts the chats opened (see SimpleLayout's handleOpen). */
@@ -2031,7 +2082,7 @@ function PhoneLayout({
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden bg-zinc-950">
       <header className="flex h-14 shrink-0 items-center gap-1 border-b border-zinc-800 pl-3 pr-1.5">
-        <div className="min-w-0 flex-1"><BrandMark connected={wsConnected} caption={adminSwitch ? 'User view' : undefined} /></div>
+        <div className="@container min-w-0 flex-1"><BrandMark connected={wsConnected} caption={adminSwitch ? 'User view' : undefined} compact /></div>
         {adminSwitch && (
           <button onClick={leaveKioskView} className={phoneBtn} aria-label="Switch to admin view" title="Switch to admin view">
             <ShieldCheck className="h-5 w-5 text-violet-600 dark:text-violet-400" />
@@ -2052,6 +2103,11 @@ function PhoneLayout({
         {onData && (
           <button onClick={onData} className={phoneBtn} aria-label="Data library" title="Data library">
             <Database className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+          </button>
+        )}
+        {onFolders && (
+          <button onClick={onFolders} className={phoneBtn} aria-label="Shared folders" title="Shared folders">
+            <Folders className="h-5 w-5 text-sky-600 dark:text-sky-400" />
           </button>
         )}
         {onInfo && (

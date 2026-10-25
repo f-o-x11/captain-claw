@@ -4,14 +4,16 @@ import { APP_VERSION, BUILD_DATE } from '../../version'
 // Top-left of the side panels: the deck's logo and name (Admin → Settings →
 // Branding; the Captain icon when no logo is set) with the version under it.
 // The logo carries the live-connection dot. `caption` replaces the version
-// line — the desktop app says which view this is ("User view").
-export function BrandMark({ connected, caption }: { connected: boolean; caption?: string }) {
+// line — the desktop app says which view this is ("User view"). `compact`:
+// a crowded header (the phone's) — the name and version show only while the
+// parent, a size container, has room for them; else the logo alone.
+export function BrandMark({ connected, caption, compact = false }: { connected: boolean; caption?: string; compact?: boolean }) {
   const name = useAuthStore((s) => s.branding.name)
   const logo = useAuthStore((s) => s.branding.logo)
   const status = connected ? 'Connected' : 'Not connected'
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="relative shrink-0" title={status}>
+      <span className="relative shrink-0" title={compact ? `${name} — ${status}` : status}>
         <img src={logo || DEFAULT_LOGO} alt="" className="h-7 w-7 rounded-md object-contain" />
         <span
           className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-zinc-900 ${
@@ -19,11 +21,11 @@ export function BrandMark({ connected, caption }: { connected: boolean; caption?
           }`}
         />
       </span>
-      <div className="min-w-0">
+      <div className={compact ? 'hidden min-w-0 @[6.5rem]:block' : 'min-w-0'}>
         <span className="block truncate text-sm font-semibold tracking-tight" title={name}>{name}</span>
         {caption
-          ? <div className="text-[11px] leading-none text-violet-600 dark:text-violet-400">{caption}</div>
-          : <div className="text-[9px] leading-none text-zinc-600">v{APP_VERSION} &middot; {BUILD_DATE}</div>}
+          ? <div className="truncate text-[11px] leading-none text-violet-600 dark:text-violet-400">{caption}</div>
+          : <div className="truncate text-[9px] leading-none text-zinc-600">v{APP_VERSION} &middot; {BUILD_DATE}</div>}
       </div>
     </div>
   )

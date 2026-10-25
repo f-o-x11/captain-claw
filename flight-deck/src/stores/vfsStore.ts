@@ -91,6 +91,16 @@ async function _authedFetch(url: string, init: RequestInit = {}): Promise<Respon
   return res
 }
 
+/** A refusal's message: FastAPI's JSON `detail`, else the body as it came. */
+async function _errorText(res: Response, fallback: string): Promise<string> {
+  const text = await res.text().catch(() => '')
+  try {
+    const d = JSON.parse(text)?.detail
+    if (typeof d === 'string' && d) return d
+  } catch { /* not JSON */ }
+  return text || fallback
+}
+
 const qp = (o: Record<string, string>) =>
   Object.entries(o)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
@@ -427,7 +437,7 @@ export const useVFSStore = create<VFSStore>((set, get) => ({
     const res = await _authedFetch(
       `/fd/vfs/drive/browse?${qp({ folder_id: folderId || 'root', ...(driveId ? { drive_id: driveId } : {}) })}`,
     )
-    if (!res.ok) throw new Error((await res.text()) || 'Drive browse failed')
+    if (!res.ok) throw new Error(await _errorText(res, 'Drive browse failed'))
     return res.json()
   },
 
@@ -439,7 +449,7 @@ export const useVFSStore = create<VFSStore>((set, get) => ({
       method: 'POST',
       body: JSON.stringify({ name, folder_id: folderId, clonemd, drive_id: driveId, path }),
     })
-    if (!res.ok || !res.body) throw new Error((await res.text().catch(() => '')) || 'mount failed')
+    if (!res.ok || !res.body) throw new Error(await _errorText(res, 'mount failed'))
     const reader = res.body.getReader()
     const dec = new TextDecoder()
     let buf = ''
