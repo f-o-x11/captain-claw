@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Cloud, Folder, ArrowLeft, X, Loader2, Sparkles, ChevronRight, Users } from 'lucide-react'
 import { useVFSStore, type DriveFolder, type DriveMountEvent } from '../../stores/vfsStore'
+import { uniqueMountName } from '../../utils/mountName'
 
 /** Connect a Google Drive folder as a read-only VFS mount.
  *
@@ -12,25 +13,6 @@ import { useVFSStore, type DriveFolder, type DriveMountEvent } from '../../store
 // A breadcrumb frame. `driveId` is the enclosing Shared Drive ('' = My Drive),
 // carried down so every listing/mount uses the right corpus.
 interface Frame { id: string; name: string; driveId: string }
-
-const cleanSeg = (s: string) =>
-  s.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^[-._]+|[-._]+$/g, '')
-
-/** Shortest suffix of the folder path that doesn't collide with an existing
- * project: "VC", else "Performance-VC", else "Startup-reports-Performance-VC",
- * … — a short but unambiguous default the user can still edit. */
-function uniqueMountName(segments: string[], taken: Set<string>): string {
-  const segs = segments.map(cleanSeg).filter(Boolean)
-  if (segs.length === 0) return 'drive'
-  for (let n = 1; n <= segs.length; n++) {
-    const cand = segs.slice(segs.length - n).join('-')
-    if (!taken.has(cand)) return cand
-  }
-  const base = segs.join('-')
-  let i = 2
-  while (taken.has(`${base}-${i}`)) i++
-  return `${base}-${i}`
-}
 
 export function DriveConnect({ onClose, onDone, onConnectGoogle }: {
   onClose: () => void

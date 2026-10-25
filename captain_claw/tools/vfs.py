@@ -173,10 +173,11 @@ class VfsTool(Tool):
                     # folder — a short name like "VC" alone is ambiguous.
                     note = ""
                     ent = links.get(proj)
-                    if isinstance(ent, dict) and ent.get("kind") == "gdrive":
+                    if isinstance(ent, dict) and ent.get("kind") in ("gdrive", "onedrive"):
+                        label = "OneDrive" if ent.get("kind") == "onedrive" else "Google Drive"
                         sp = str((ent.get("drive") or {}).get("source_path", "")).strip()
-                        note = (f"  ·  Google Drive: {sp.replace('/', ' / ')}"
-                                if sp else "  ·  Google Drive")
+                        note = (f"  ·  {label}: {sp.replace('/', ' / ')}"
+                                if sp else f"  ·  {label}")
                     lines.append(f"  {proj}  ({n} file{'s' if n != 1 else ''}){note}")
                 return ToolResult(success=True, content="Projects:\n" + "\n".join(lines) + pack_section)
 

@@ -7,7 +7,7 @@
  */
 
 import { useAuthStore, refreshAccessToken } from '../stores/authStore'
-import type { FsListing, VFSEntry, VFSProject } from '../stores/vfsStore'
+import type { DriveFolder, DriveMountEvent, FsListing, VFSEntry, VFSProject } from '../stores/vfsStore'
 import { api } from './fileLibraryApi'
 
 /** A folder as the routes name it: its name and, when someone shared it, its
@@ -49,6 +49,45 @@ function fileUrl(what: 'view' | 'download' | 'thumb', ref: FolderRef, path: stri
   })}`
 }
 
+/** POSTs a mount and reads its progress lines until the stream ends; an
+ *  `error` line (or a refused request) throws its detail. */
+async function streamMount(url: string, body: unknown, onProgress?: (ev: DriveMountEvent) => void): Promise<void> {
+  const send = () => {
+    const jwt = useAuthStore.getState().token
+    return fetch(url, {
+      method: 'POST', body: JSON.stringify(body), credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}) },
+    })
+  }
+  let r = await send()
+  if (r.status === 401 && useAuthStore.getState().authEnabled && (await refreshAccessToken())) r = await send()
+  if (!r.ok || !r.body) {
+    let detail = ''
+    try { const b = await r.json(); detail = typeof b?.detail === 'string' ? b.detail : '' } catch { /* not JSON */ }
+    throw new Error(detail || `${r.status} ${r.statusText}`)
+  }
+  const reader = r.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  let failed: string | null = null
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    let nl: number
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim()
+      buf = buf.slice(nl + 1)
+      if (!line) continue
+      let ev: DriveMountEvent
+      try { ev = JSON.parse(line) as DriveMountEvent } catch { continue }
+      if (ev.event === 'error') failed = ev.detail || 'Could not connect the folder.'
+      else if (ev.event === 'progress') onProgress?.(ev)
+    }
+  }
+  if (failed) throw new Error(failed)
+}
+
 export const vfsApi = {
   projects: () => api<{ projects: VFSProject[] }>('/fd/vfs/projects').then((r) => r.projects),
   list: (ref: FolderRef, path: string) =>
@@ -78,12 +117,23 @@ export const vfsApi = {
   exportToDrive: (ref: FolderRef, path: string) =>
     api<{ link?: string; name?: string }>('/fd/vfs/export-to-drive', json({ ...ref, path, folder_id: '' })),
 
+  // A Google Drive or OneDrive mount, either one.
   driveRefresh: (name: string) =>
-    api<{ files: number; cloned?: number; truncated?: boolean }>(`/fd/vfs/links/gdrive/${encodeURIComponent(name)}/refresh`, { method: 'POST' }),
+    api<{ files: number; cloned?: number; truncated?: boolean }>(`/fd/vfs/links/mount/${encodeURIComponent(name)}/refresh`, { method: 'POST' }),
   driveClone: (name: string, clonemd: boolean) =>
-    api<{ cloned?: number }>(`/fd/vfs/links/gdrive/${encodeURIComponent(name)}/clonemd`, json({ clonemd })),
+    api<{ cloned?: number }>(`/fd/vfs/links/mount/${encodeURIComponent(name)}/clonemd`, json({ clonemd })),
   driveUnmount: (name: string, keepCloned: boolean) =>
-    api(`/fd/vfs/links/gdrive/${encodeURIComponent(name)}?${qs({ keep_cloned: String(keepCloned) })}`, { method: 'DELETE' }),
+    api(`/fd/vfs/links/mount/${encodeURIComponent(name)}?${qs({ keep_cloned: String(keepCloned) })}`, { method: 'DELETE' }),
+
+  /** OneDrive folders under *folderId* for the mount picker; at the root also
+   *  the folders other people shared with the user (`shared`). */
+  oneDriveBrowse: (folderId: string) =>
+    api<{ folders: DriveFolder[]; shared: DriveFolder[]; truncated: boolean }>(
+      `/fd/vfs/onedrive/browse?${qs({ folder_id: folderId || 'root' })}`),
+  /** Mounts a OneDrive folder, reporting the walk as it goes (NDJSON). */
+  mountOneDrive: (name: string, folderId: string, clonemd: boolean, path: string,
+    onProgress?: (ev: DriveMountEvent) => void) =>
+    streamMount('/fd/vfs/links/onedrive/stream', { name, folder_id: folderId, clonemd, path }, onProgress),
 
   addLink: (name: string, path: string, mode: 'rw' | 'ro') => api('/fd/vfs/links', json({ name, path, mode })),
   browseFs: (path: string) => api<FsListing>(`/fd/vfs/browse-fs?${qs({ path })}`),

@@ -160,7 +160,7 @@ def _stats(root: Path, cap: int = 20000) -> tuple[int, int, float]:
 # mount: nothing here may create one or rename/move anything to one (a planted
 # manifest must not be able to pose as a mount, vfs_drive.find_mount).
 _DRIVE_RESERVED_FOLDED = frozenset({".drive", ".drive-manifest.json", ".drive-cache"})
-RESERVED_NAME_DETAIL = ("“{name}” is reserved for Google Drive mounts and can't be used "
+RESERVED_NAME_DETAIL = ("“{name}” is reserved for Drive and OneDrive mounts and can't be used "
                         "inside a folder")
 
 
@@ -279,8 +279,8 @@ async def list_projects(user: dict = Depends(get_current_user)):
         p["title"] = titles.get(p.get("run_id") or "", "")
     # Linked folders (external dirs) — not physical children of the user root.
     for name, ent in sorted(read_links_at(root).items()):
-        is_drive = ent.get("kind") == "gdrive"
-        kind = "gdrive" if is_drive else "link"
+        is_drive = _is_mount(ent)
+        kind = str(ent.get("kind")) if is_drive else "link"
         drive_meta = dict(ent.get("drive", {})) if is_drive else None
         if is_drive and drive_meta is not None:
             # Enrich with materialisation counts from the manifest so the panel
@@ -429,17 +429,26 @@ async def remove_link(name: str, user: dict = Depends(get_current_user)):
     return {"ok": True}
 
 
-# ── Google Drive mounts ───────────────────────────────────────────────
-# A Drive folder mounted as a read-only VFS folder: a real local tree of
-# placeholder files (see captain_claw/vfs_drive). The link entry uses the same
-# .vfs-links.json registry, so every resolver treats it as an ordinary folder.
+# ── Google Drive and OneDrive mounts ─────────────────────────────────
+# A Drive (or OneDrive) folder mounted as a read-only VFS folder: a real local
+# tree of placeholder files (see captain_claw/vfs_drive). The link entry uses
+# the same .vfs-links.json registry, so every resolver treats it as an ordinary
+# folder; its ``kind`` is the provider ("gdrive" / "onedrive").
+
+_MOUNT_KINDS = frozenset({"gdrive", "onedrive"})  # vfs_drive.DRIVE_KINDS
+
+
+def _is_mount(ent) -> bool:
+    return isinstance(ent, dict) and ent.get("kind") in _MOUNT_KINDS
 
 
 class DriveMountBody(BaseModel):
     name: str
     folder_id: str
     clonemd: bool = False
-    drive_id: str = ""  # set when the folder lives in a Shared (Team) Drive
+    # Google: set when the folder lives in a Shared (Team) Drive. OneDrive:
+    # the drive of a folder outside the user's own (one shared with them).
+    drive_id: str = ""
     path: str = ""  # human breadcrumb ("FRC3/Reporting/…/VC") for the sidebar
 
 
@@ -478,6 +487,36 @@ async def _drive_client(user_id: str):
     return make_client(_provider)
 
 
+async def _onedrive_client(user_id: str):
+    """A OneDriveClient scoped to *user_id*'s own Microsoft connection — each
+    user browses and mounts THEIR OneDrive. 400 when they haven't connected
+    Microsoft."""
+    from captain_claw.flight_deck.microsoft_oauth_routes import (
+        get_valid_microsoft_access_token, is_microsoft_connected,
+    )
+    from captain_claw.onedrive_client import make_client
+
+    if not await is_microsoft_connected(user_id):
+        raise HTTPException(400, "Connect your Microsoft account first (Connections → Microsoft).")
+
+    async def _provider() -> tuple[str, str]:
+        # Refreshed (and reloaded) per call, like the Google provider.
+        return (await get_valid_microsoft_access_token(user_id)) or "", ""
+
+    return make_client(_provider)
+
+
+async def _mount_client(user_id: str, provider: str):
+    """*user_id*'s client for a mount of *provider*."""
+    return await (_onedrive_client(user_id) if provider == "onedrive" else _drive_client(user_id))
+
+
+def _mount_clients(user_id: str):
+    """The ``client_factory`` the read hooks take: the mount's provider in,
+    *user_id*'s client for it out."""
+    return lambda provider: _mount_client(user_id, provider)
+
+
 def _stamp_synced(user_id: str, name: str) -> None:
     """Record the last-synced time on a mount's link entry (best-effort)."""
     import time
@@ -485,7 +524,7 @@ def _stamp_synced(user_id: str, name: str) -> None:
     root = _user_root(user_id)
     links = read_links_at(root)
     ent = links.get(name)
-    if isinstance(ent, dict) and ent.get("kind") == "gdrive":
+    if _is_mount(ent):
         ent.setdefault("drive", {})["synced_at"] = int(time.time())
         links[name] = ent
         _write_links(root, links)
@@ -525,12 +564,40 @@ async def drive_browse(folder_id: str = "root", drive_id: str = "",
             "shared_drives": shared, "truncated": truncated}
 
 
-async def _mount_core(user_id: str, body: "DriveMountBody", progress=None) -> dict:
-    """Mount a Drive folder + write its link entry; return ``{"name", **summary}``.
+@router.get("/onedrive/browse")
+async def onedrive_browse(folder_id: str = "root", drive_id: str = "",
+                          user: dict = Depends(get_current_user)):
+    """List OneDrive folders under *folder_id*, for the mount picker.
 
-    Shared by the plain JSON route and the streaming one. *progress* is forwarded
-    to the tree walk so the streaming route can report "what's happening".
-    Raises HTTPException on bad input / Drive errors.
+    Folders only, like the Drive picker. At the root of the user's own
+    OneDrive the response also carries the folders other people shared with
+    them (``shared``); their ids name their drive, so descending into one
+    needs nothing else.
+    """
+    from captain_claw.drive_client import FOLDER_MIME, DriveError
+
+    client = await _onedrive_client(user["id"])
+    try:
+        files, truncated = await client.list_folder(folder_id, drive_id=drive_id, max_files=500)
+        shared = []
+        if folder_id in ("", "root") and not drive_id:
+            shared = [{"id": f.id, "name": f.name} for f in await client.list_shared_folders()]
+    except DriveError as exc:
+        raise HTTPException(400, str(exc))
+    finally:
+        await client.close()
+    folders = [{"id": f.id, "name": f.name} for f in files if f.mime_type == FOLDER_MIME]
+    return {"folder_id": folder_id, "folders": folders, "shared": shared, "truncated": truncated}
+
+
+async def _mount_core(user_id: str, body: "DriveMountBody", progress=None,
+                      provider: str = "gdrive") -> dict:
+    """Mount a Drive or OneDrive folder + write its link entry; return
+    ``{"name", **summary}``.
+
+    Shared by the plain JSON routes and the streaming ones. *progress* is
+    forwarded to the tree walk so the streaming route can report "what's
+    happening". Raises HTTPException on bad input / Drive errors.
     """
     from captain_claw import vfs_drive
     from captain_claw.drive_client import DriveError
@@ -544,15 +611,16 @@ async def _mount_core(user_id: str, body: "DriveMountBody", progress=None) -> di
     if (root / name).exists():
         raise HTTPException(409, f"a physical project named '{name}' already exists")
     existing = read_links_at(root).get(name)
-    if existing and existing.get("kind") != "gdrive":
+    if existing and existing.get("kind") != provider:
         raise HTTPException(409, f"a link named '{name}' already exists")
 
     drive_id = body.drive_id.strip()
-    client = await _drive_client(user_id)
+    client = await _mount_client(user_id, provider)
     try:
         summary = await vfs_drive.create_mount(
             client, user_id, name, body.folder_id.strip(),
             clonemd=body.clonemd, shared_drive_id=drive_id, progress=progress,
+            provider=provider,
         )
     except DriveError as exc:
         raise HTTPException(400, str(exc))
@@ -565,7 +633,7 @@ async def _mount_core(user_id: str, body: "DriveMountBody", progress=None) -> di
     root.mkdir(parents=True, exist_ok=True)
     entry = vfs_drive.link_entry(user_id, name, body.folder_id.strip(),
                                  clonemd=body.clonemd, shared_drive_id=drive_id,
-                                 source_path=body.path.strip())
+                                 source_path=body.path.strip(), provider=provider)
     entry["drive"]["synced_at"] = int(time.time())
     links[name] = entry
     _write_links(root, links)
@@ -578,6 +646,18 @@ async def mount_drive(body: DriveMountBody, user: dict = Depends(get_current_use
     return {"ok": True, **(await _mount_core(user["id"], body))}
 
 
+@router.post("/links/onedrive")
+async def mount_onedrive(body: DriveMountBody, user: dict = Depends(get_current_user)):
+    """Mount a OneDrive folder as a read-only VFS folder and populate its tree."""
+    return {"ok": True, **(await _mount_core(user["id"], body, provider="onedrive"))}
+
+
+@router.post("/links/onedrive/stream")
+async def mount_onedrive_stream(body: DriveMountBody, user: dict = Depends(get_current_user)):
+    """Mount a OneDrive folder, streaming progress (see :func:`mount_drive_stream`)."""
+    return _mount_stream(user["id"], body, "onedrive")
+
+
 @router.post("/links/gdrive/stream")
 async def mount_drive_stream(body: DriveMountBody, user: dict = Depends(get_current_user)):
     """Mount a Drive folder, streaming progress as newline-delimited JSON.
@@ -588,13 +668,16 @@ async def mount_drive_stream(body: DriveMountBody, user: dict = Depends(get_curr
     tree is read/converted, then a final ``{"event":"done", …summary}`` or
     ``{"event":"error","detail":…}``.
     """
+    return _mount_stream(user["id"], body, "gdrive")
+
+
+def _mount_stream(uid: str, body: DriveMountBody, provider: str):
     import asyncio
     import json as _json
 
     from fastapi.responses import StreamingResponse
 
     queue: asyncio.Queue = asyncio.Queue()
-    uid = user["id"]
 
     async def run() -> None:
         # Called synchronously from the tree walk (same loop) — never blocks.
@@ -602,7 +685,7 @@ async def mount_drive_stream(body: DriveMountBody, user: dict = Depends(get_curr
             queue.put_nowait(("progress", ev))
 
         try:
-            core = await _mount_core(uid, body, on_progress)
+            core = await _mount_core(uid, body, on_progress, provider=provider)
             await queue.put(("done", core))
         except HTTPException as exc:
             await queue.put(("error", {"detail": str(exc.detail), "status": exc.status_code}))
@@ -626,8 +709,10 @@ async def mount_drive_stream(body: DriveMountBody, user: dict = Depends(get_curr
 
 
 @router.post("/links/gdrive/{name}/refresh")
+@router.post("/links/mount/{name}/refresh")
 async def refresh_drive(name: str, user: dict = Depends(get_current_user)):
-    """Re-walk a mount: new files appear, vanished ones are pruned locally."""
+    """Re-walk a mount (either provider — the gdrive path is the older name):
+    new files appear, vanished ones are pruned locally."""
     from captain_claw import vfs_drive
     from captain_claw.drive_client import DriveError
 
@@ -635,7 +720,7 @@ async def refresh_drive(name: str, user: dict = Depends(get_current_user)):
     ent = read_links_at(_user_root(user["id"])).get(key)
     if not vfs_drive.is_drive_link(ent):
         raise HTTPException(404, "not a Drive mount")
-    client = await _drive_client(user["id"])
+    client = await _mount_client(user["id"], str(ent.get("kind")))
     try:
         summary = await vfs_drive.sync(client, vfs_drive.mount_root(user["id"], key))
     except (DriveError, ValueError) as exc:
@@ -647,6 +732,7 @@ async def refresh_drive(name: str, user: dict = Depends(get_current_user)):
 
 
 @router.post("/links/gdrive/{name}/clonemd")
+@router.post("/links/mount/{name}/clonemd")
 async def toggle_clonemd(name: str, body: DriveToggleBody,
                          user: dict = Depends(get_current_user)):
     """Turn clonemd on/off for a mount.
@@ -675,7 +761,7 @@ async def toggle_clonemd(name: str, body: DriveToggleBody,
 
     summary: dict = {}
     if enabled:
-        client = await _drive_client(user["id"])
+        client = await _mount_client(user["id"], str(ent.get("kind")))
         try:
             summary = await vfs_drive.sync(client, mroot)
         except (DriveError, ValueError) as exc:
@@ -687,6 +773,7 @@ async def toggle_clonemd(name: str, body: DriveToggleBody,
 
 
 @router.delete("/links/gdrive/{name}")
+@router.delete("/links/mount/{name}")
 async def unmount_drive(name: str, keep_cloned: bool = True,
                         user: dict = Depends(get_current_user)):
     """Remove a Drive mount. Cloned Markdown is kept unless keep_cloned=false."""
@@ -742,7 +829,7 @@ async def read_file(project: str, path: str, owner: str = "",
     try:
         from captain_claw import vfs_drive
 
-        hydrated = await vfs_drive.read_through(target, client_factory=lambda: _drive_client(oid))
+        hydrated = await vfs_drive.read_through(target, client_factory=_mount_clients(oid))
         if hydrated is not None:
             return {"project": project, "path": path, "name": target.name,
                     "size": len(hydrated.encode("utf-8")), "binary": False,
@@ -782,9 +869,9 @@ async def _served_file(user_id: str, project: str, path: str, owner: str) -> tup
         from captain_claw.drive_client import DriveError
 
         try:
-            real = await vfs_drive.materialize(target, client_factory=lambda: _drive_client(oid))
+            real = await vfs_drive.materialize(target, client_factory=_mount_clients(oid))
         except DriveError as exc:
-            raise HTTPException(502, f"Could not fetch the original from Google Drive: {exc}")
+            raise HTTPException(502, f"Could not fetch the original from the mounted drive: {exc}")
         if real is not None:
             serve = real
             # A Google-native doc (no source extension) exports to .md/.xlsx/…;
@@ -1049,7 +1136,7 @@ async def export_to_drive(body: ExportDriveBody, user: dict = Depends(get_curren
     data: bytes | None = None
     try:
         from captain_claw import vfs_drive
-        real = await vfs_drive.materialize(target, client_factory=lambda: _drive_client(oid))
+        real = await vfs_drive.materialize(target, client_factory=_mount_clients(oid))
         if real is not None:
             data = real.read_bytes()
     except Exception as exc:
