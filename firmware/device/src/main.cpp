@@ -49,9 +49,9 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.18"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.19"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.18.2"
+#define FW_VERSION "0.18.3"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -237,6 +237,13 @@ static bool upAllowed = false;  // said yes, on this link
 static bool upAsked = false;    // asked, on this link
 static uint32_t askedMs = 0;
 RTC_DATA_ATTR static int notesDeclined = -1;  // how many were waiting at the no
+
+// The deck link is renewed on purpose now and then (keepAgentLink): for
+// 15 s after, the drop makes no fuss — no redraw, no offline lights, the
+// voice-notes question not asked again.
+static uint32_t quietRelinkMs = 0;
+static uint32_t linkUsedMs = 0;  // the link last came up or carried a turn
+static bool quietRelinking() { return quietRelinkMs && millis() - quietRelinkMs < 15000; }
 
 // A menu row to read aloud (e-paper), once the presses settle.
 static String sayText;
@@ -2191,9 +2198,11 @@ static void onWs(WStype_t type, uint8_t* payload, size_t length) {
       Serial.println("[claw] flight deck connected");
       wsUp = true;
       rttMs = -1;
+      linkUsedMs = millis();
       if (turnDropMs) turnRelinkMs = max<uint32_t>(millis(), 1);
       sendPrefs();
-      redraw();
+      if (!quietRelinking()) redraw();  // (a renewed link: "bound" redraws if anything changed)
+      quietRelinkMs = 0;
       break;
     case WStype_DISCONNECTED:
       if (wsUp) {
@@ -2212,7 +2221,7 @@ static void onWs(WStype_t type, uint8_t* payload, size_t length) {
           prerollSent = 0;
         }
         abortUpload(false);  // the notes go up again next time — asked first
-        upAllowed = upAsked = false;
+        if (!quietRelinking()) upAllowed = upAsked = false;  // (a renewed link: asked already)
         if (!prerollOn) tapRec = false;  // a tapped recording that streamed: gone with the mic
         if (mode == Mode::Waiting) {  // the deck keeps the answer: wait for the link (holdTurn)
           if (!turnDropMs) turnDropMs = max<uint32_t>(millis(), 1);
@@ -2222,7 +2231,7 @@ static void onWs(WStype_t type, uint8_t* payload, size_t length) {
         } else if (mode == Mode::Listening || mode == Mode::Ask) {
           mode = ui::hasReply() ? Mode::Reply : Mode::Idle;
         }
-        redraw();
+        if (!quietRelinking()) redraw();
       }
       break;
     case WStype_TEXT:
@@ -2638,7 +2647,7 @@ static uint32_t onlineSinceMs = 0;   // all up since
 // when it isn't. The B paper is redrawn once it has been down 30 s (the
 // dashboard's LINKS rows, the dots), and again once it's been back 10 s.
 static void trackLinks() {
-  const bool linked = WiFi.status() == WL_CONNECTED && wsUp && agentLinked;
+  const bool linked = (WiFi.status() == WL_CONNECTED && wsUp && agentLinked) || quietRelinking();
   if (linked) {
     offlineSinceMs = 0;
     if (!onlineSinceMs) onlineSinceMs = millis() ? millis() : 1;
@@ -3249,6 +3258,50 @@ static int spokenCharAt() {
 // A turn the link dropped in the middle of (see turnDropMs): over when the
 // answer or "thinking" comes back, or lost when the link stays away too long
 // or comes back without the deck picking the turn up (it restarted, say).
+// The deck link, kept fresh. With no agent behind it for a while — the
+// agent restarted on another port, or the deck's link to it died — the
+// link is dropped and made again, and the deck picks the agent afresh:
+// first after 30 s, then less often (up to every 10 min) while it stays
+// away. And a link that has sat unused for 20 min is renewed before anyone
+// talks into it. Never in the middle of anything (the library reconnects
+// by itself 3 s after the drop).
+static constexpr uint32_t kNoAgentRelinkMs = 30000;
+static constexpr uint32_t kIdleRelinkMs = 20 * 60000UL;
+
+static void keepAgentLink() {
+  static uint32_t noAgentSince = 0, noAgentWait = kNoAgentRelinkMs;
+  const uint32_t now = millis();
+  if (!wsUp) {
+    noAgentSince = 0;
+    return;
+  }
+  const bool busy = mode == Mode::Listening || mode == Mode::Waiting || mode == Mode::Ask ||
+                    mode == Mode::Agents || prerollOn || audio::playing() || audio::micActive() ||
+                    !upNotes.empty() || upAwaitAck || turnDropMs;
+  if (busy) {
+    linkUsedMs = now;
+    return;
+  }
+  if (agentLinked) {
+    noAgentSince = 0;
+    noAgentWait = kNoAgentRelinkMs;
+  } else if (!noAgentSince) {
+    noAgentSince = now ? now : 1;
+  }
+  const char* why = nullptr;
+  if (noAgentSince && now - noAgentSince > noAgentWait) {
+    why = "no agent";
+    noAgentWait = min<uint32_t>(noAgentWait * 2, 10 * 60000UL);
+  } else if (now - linkUsedMs > kIdleRelinkMs) {
+    why = "unused for 20 min";
+  }
+  if (!why) return;
+  Serial.printf("[claw] deck link %s: renewing it\n", why);
+  quietRelinkMs = now ? now : 1;
+  linkUsedMs = now;
+  ws.disconnect();
+}
+
 static void holdTurn() {
   if (!turnDropMs) return;
   if (mode != Mode::Waiting) {  // an answer, an error or a button ended it
@@ -3280,6 +3333,7 @@ void loop() {
   if (wsUp != wasUp) linkChangeMs = millis();
   holdTurn();
   paperAnswerPoll();
+  keepAgentLink();
   trackLinks();
   pollCard();
   // Raise to wake: a wrist raise lights a dark or dimmed screen; lowering
