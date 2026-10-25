@@ -1596,7 +1596,7 @@ app.include_router(share_router)
 # Public file links: owner API (port-addressed → the ownership guard above
 # covers it) + the account-free /s/{token} viewer. Before spa_catch_all.
 public_file_shares.configure(
-    data_dir=DATA_DIR, resolve_auth=lambda port: _resolve_agent_auth(port),
+    data_dir=DATA_DIR, resolve_auth=lambda port, host=None: _resolve_agent_auth(port, host=host),
     resolve_agent_endpoint=lambda token: _find_agent_endpoint_by_auth(token))
 app.include_router(public_file_shares.owner_router)
 app.include_router(public_file_shares.public_router)
@@ -4631,8 +4631,12 @@ async def agent_ws_proxy(ws: WebSocket, host: str, port: int, token: str = "", l
         speaker_id = str(payload.get("sub") or "")
 
     await ws.accept()
-    # Auto-resolve auth token if the caller didn't provide one
-    auth = token or (str(entry.get("web_auth") or "") if entry else "") or _resolve_agent_auth(port)
+    # Auto-resolve auth token if the caller didn't provide one — only for the
+    # agent's own address (a process agent's is loopback), never a host the
+    # caller named.
+    own_host = _norm_agent_host(host) in _AGENT_LOOPBACK_HOSTS
+    auth = (token or (str(entry.get("web_auth") or "") if entry and own_host else "")
+            or _resolve_agent_auth(port, host=host))
 
     key = agent_ws_quiet.target_key(host, path_port, agent)
     loop = asyncio.get_running_loop()
@@ -4845,8 +4849,39 @@ async def get_fleet(request: Request, include_remote: bool = False, user: dict |
     return fleet
 
 
-def _resolve_agent_auth(port: int) -> str:
-    """Look up the auth token for an agent by its web port from Docker labels or process registry."""
+# Where this deck reaches every agent it runs: process agents listen on
+# loopback, containers use host networking or publish their web port (what
+# /fd/fleet reports as the host).
+_AGENT_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _norm_agent_host(host: str) -> str:
+    return str(host or "").strip().strip("[]").rstrip(".").lower()
+
+
+def _container_hosts(c) -> set[str]:
+    """The names a container answers to besides loopback — its name, hostname,
+    network aliases and IPs — for a Flight Deck that shares its Docker network."""
+    attrs = c.attrs or {}
+    names = {c.name, (attrs.get("Config") or {}).get("Hostname", "")}
+    for net in ((attrs.get("NetworkSettings") or {}).get("Networks") or {}).values():
+        net = net or {}
+        names.update(net.get("Aliases") or [])
+        names.add(net.get("IPAddress") or "")
+    return {_norm_agent_host(n) for n in names if n}
+
+
+def _resolve_agent_auth(port: int, host: str | None = None) -> str:
+    """Look up the auth token for an agent by its web port from Docker labels or process registry.
+
+    ``host`` is where the caller will send the token (a proxy route's
+    ``{host}``). The lookup is by port only, so with a host the token comes
+    back only when that host is this deck's own address for the agent —
+    loopback, or one of the container's names (`_container_hosts`) — else "".
+    Internal callers that always connect to loopback pass no host.
+    """
+    want = None if host is None else _norm_agent_host(host)
+    loopback = want is None or want in _AGENT_LOOPBACK_HOSTS
     # Check Docker containers
     try:
         client = get_docker()
@@ -4854,10 +4889,14 @@ def _resolve_agent_auth(port: int) -> str:
             labels = c.labels or {}
             wp = labels.get("flight-deck.web-port", "")
             if wp and int(wp) == port:
+                if not loopback and want not in _container_hosts(c):
+                    return ""
                 return labels.get("flight-deck.web-auth", "")
     except Exception:
         pass
 
+    if not loopback:
+        return ""
     # Check process registry. Multiple (stale) entries can share a web_port, so
     # prefer the one whose process is actually alive before falling back to any.
     registry = _load_process_registry()
@@ -5968,7 +6007,7 @@ async def _transfer_file_to_agent(host: str, port: int, abs_path: str) -> tuple[
     except Exception as exc:
         log.warning("agent file transfer failed: %s", exc)
         return [], []
-    return await _upload_to_agent(host, port, _resolve_agent_auth(port), p.name, blob)
+    return await _upload_to_agent(host, port, _resolve_agent_auth(port, host=host), p.name, blob)
 
 
 # ── Peer consult / delegate: who may drive which agent ──
@@ -5997,12 +6036,15 @@ def _agent_record_by_auth(token: str) -> dict | None:
     """This deck's agent holding web_auth ``token`` — ``{kind, slug, port,
     auth, owner}`` — or None (unknown or empty token). Same records as
     `_resolve_agent_owner_by_auth` (process registry, labelled containers);
-    when legacy clones share a token, a match with a recorded owner wins."""
-    if not token:
+    when legacy clones share a token, a match with a recorded owner wins.
+    Constant-time compare (`_token_eq`): ``token`` is whatever arrived in an
+    X-Agent-Auth header."""
+    if not token or not isinstance(token, str):
         return None
     found: dict | None = None
     for slug, entry in _load_process_registry().items():
-        if entry.get("web_auth") == token:
+        wa = str(entry.get("web_auth") or "")
+        if wa and _token_eq(wa, token):
             rec = {"kind": "process", "slug": slug, "port": int(entry.get("web_port") or 0),
                    "auth": token, "owner": str(entry.get("owner") or "")}
             if rec["owner"]:
@@ -6011,7 +6053,8 @@ def _agent_record_by_auth(token: str) -> dict | None:
     try:
         for c in _deck_containers():  # never another deck's (forgeable) labels
             labels = c.labels or {}
-            if labels.get("flight-deck.web-auth", "") == token:
+            wa = str(labels.get("flight-deck.web-auth", "") or "")
+            if wa and _token_eq(wa, token):
                 wp = str(labels.get("flight-deck.web-port", ""))
                 rec = {"kind": "docker", "slug": c.name, "port": int(wp) if wp.isdigit() else 0,
                        "auth": token, "owner": str(labels.get(OWNER_LABEL, "") or "")}
@@ -6842,7 +6885,7 @@ async def agent_datastore_tables(
 ):
     """List datastore tables from a CC agent (proxied)."""
     import httpx
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/datastore/tables{params}"
     try:
@@ -6869,7 +6912,7 @@ async def agent_datastore_rows(
 ):
     """Query rows from a datastore table on a CC agent (proxied)."""
     import httpx
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"token={auth}&" if auth else ""
     qs += f"limit={limit}&offset={offset}"
     if order_by:
@@ -6900,7 +6943,7 @@ async def agent_datastore_export(
     from fastapi.responses import Response as FastAPIResponse
     if format not in ("csv", "json", "xlsx"):
         raise HTTPException(400, f"Unsupported format: {format}")
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"token={auth}&" if auth else ""
     qs += f"format={format}"
     url = f"http://{host}:{port}/api/datastore/tables/{table_name}/export?{qs}"
@@ -6925,7 +6968,7 @@ async def agent_rephrase(
 ):
     """Proxy a rephrase request to a CC agent's LLM."""
     import httpx
-    auth = _resolve_agent_auth(port)
+    auth = _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/llm/complete{params}"
     body = await request.json()
@@ -6965,7 +7008,7 @@ async def agent_files(host: str, port: int, token: str = "", since: str = "", re
     import httpx
     registered: list[dict] = []
     # Auto-resolve auth token if the caller didn't provide one
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qparts = []
     if auth:
         qparts.append(f"token={auth}")
@@ -7034,7 +7077,7 @@ async def _proxy_agent_intentions(
     from fastapi.responses import JSONResponse
 
     params = dict(query or {})
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     if auth:
         params["token"] = auth
     url = f"http://{host}:{port}{path}"
@@ -7408,7 +7451,7 @@ async def agent_file_download(host: str, port: int, path: str, token: str = "", 
     """Proxy file download from a CC agent."""
     import httpx
     import urllib.parse
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"path={urllib.parse.quote(path)}"
     if auth:
         params += f"&token={urllib.parse.quote(auth)}"
@@ -7445,7 +7488,7 @@ async def agent_file_view(host: str, port: int, path: str, token: str = "", requ
     """Proxy file view from a CC agent (inline, no download header)."""
     import httpx
     import urllib.parse
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"path={urllib.parse.quote(path)}"
     if auth:
         params += f"&token={urllib.parse.quote(auth)}"
@@ -7481,7 +7524,7 @@ async def agent_file_upload(host: str, port: int, token: str = "", file: UploadF
     """Proxy file upload to a CC agent."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/file/upload{params}"
     content = await file.read()
@@ -7511,7 +7554,7 @@ async def agent_file_save(host: str, port: int, token: str = "", request: Reques
     the same path-sandbox + token auth as its read endpoints."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/files/content{params}"
     body = await request.json()
@@ -7533,7 +7576,7 @@ async def agent_file_save(host: str, port: int, token: str = "", request: Reques
 async def agent_usage(host: str, port: int, token: str = "", period: str = "today", request: Request = None, user: dict | None = _required_user_dep):
     """Proxy /api/usage from a CC agent."""
     import httpx
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"?period={period}"
     if auth:
         params += f"&token={auth}"
@@ -7568,7 +7611,7 @@ async def proxy_prepare_tasks(
     """Proxy prepare-tasks to a CC agent's orchestrator."""
     import httpx
 
-    auth = _resolve_agent_auth(port)
+    auth = _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/orchestrator/prepare-tasks{params}"
     body = await request.body()
@@ -7594,7 +7637,7 @@ async def proxy_run_tasks(
     """
     import httpx
 
-    auth = _resolve_agent_auth(port)
+    auth = _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/orchestrator/run-tasks{params}"
     body = await request.body()
@@ -7616,7 +7659,7 @@ async def proxy_workspace_snapshot(
     """Proxy workspace snapshot from a CC agent's orchestrator."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/orchestrator/workspace{params}"
     try:
@@ -7637,7 +7680,7 @@ async def proxy_traces(
     """Proxy trace spans from a CC agent's orchestrator."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     params = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/orchestrator/traces{params}"
     try:
@@ -7680,7 +7723,7 @@ async def proxy_memory_export(
     import httpx
     from fastapi.responses import Response
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs_parts = []
     if auth:
         qs_parts.append(f"token={auth}")
@@ -7738,7 +7781,7 @@ async def proxy_memory_import(
     """
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs_parts = []
     if auth:
         qs_parts.append(f"token={auth}")
@@ -7775,7 +7818,7 @@ async def proxy_list_imported_reflections(
     """List imported (staged) reflections on a CC agent for the merge picker."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/memory/reflections/imported{qs}"
 
@@ -7804,7 +7847,7 @@ async def proxy_merge_reflection(
     """
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/memory/reflections/merge{qs}"
     body = await request.body()
@@ -7835,7 +7878,7 @@ async def proxy_list_semantic_imports(
     """List imported semantic sources on a CC agent."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/memory/semantic/labels{qs}"
 
@@ -7858,7 +7901,7 @@ async def proxy_delete_semantic_import(
     """Purge one imported semantic source on a CC agent."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/memory/semantic/labels/{label}{qs}"
 
@@ -7886,7 +7929,7 @@ async def proxy_list_pending_insights(
     """List the agent's staged insight conflicts awaiting review."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs_parts = []
     if auth:
         qs_parts.append(f"token={auth}")
@@ -7914,7 +7957,7 @@ async def proxy_count_pending_insights(
     """Cheap poll for the UI badge."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/insights/pending/count{qs}"
 
@@ -7938,7 +7981,7 @@ async def proxy_approve_pending_insight(
     """Promote a staged insight into the live table."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs_parts = []
     if auth:
         qs_parts.append(f"token={auth}")
@@ -7967,7 +8010,7 @@ async def proxy_reject_pending_insight(
     """Drop a staged insight without promoting it."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/insights/pending/{pending_id}/reject{qs}"
 
@@ -7987,7 +8030,7 @@ async def proxy_reject_pending_insight(
 async def _proxy_get_json(host: str, port: int, path: str, token: str = "", timeout: float = 15.0):
     """Helper: GET an agent endpoint and return parsed JSON or raise HTTPException."""
     import httpx
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     sep = "&" if "?" in path else "?"
     url = f"http://{host}:{port}{path}"
     if auth:
@@ -8069,7 +8112,7 @@ async def proxy_install_skill(
     """Install a skill on a CC agent from a GitHub URL."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/skills/install{qs}"
     body = await request.body()
@@ -8095,7 +8138,7 @@ async def proxy_install_skill_upload(
     """Install a skill on a CC agent from an uploaded .md or .zip file."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/skills/install-upload{qs}"
     body = await request.body()
@@ -8122,7 +8165,7 @@ async def proxy_toggle_skill(
     """Enable or disable a skill on a CC agent."""
     import httpx
 
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     qs = f"?token={auth}" if auth else ""
     url = f"http://{host}:{port}/api/skills/toggle{qs}"
     body = await request.body()
@@ -8146,7 +8189,7 @@ async def _proxy_post_json(
 ):
     """Helper: POST a JSON body to an agent endpoint and return parsed JSON."""
     import httpx
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     sep = "&" if "?" in path else "?"
     url = f"http://{host}:{port}{path}"
     if auth:
@@ -8169,7 +8212,7 @@ async def _proxy_delete_json(
 ):
     """Helper: DELETE an agent endpoint and return parsed JSON."""
     import httpx
-    auth = token or _resolve_agent_auth(port)
+    auth = token or _resolve_agent_auth(port, host=host)
     sep = "&" if "?" in path else "?"
     url = f"http://{host}:{port}{path}"
     if auth:

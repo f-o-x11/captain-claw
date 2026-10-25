@@ -56,15 +56,16 @@ _EXPIRY_DAYS = (0, 1, 7, 30)        # 0 = no expiry
 _PREVIEW_MAX_BYTES = 2 * 1024 * 1024  # text/markdown rendered inline up to this
 
 _data_dir: Path | None = None
-_resolve_auth: Callable[[int], str] = lambda _port: ""  # noqa: E731
+_resolve_auth: Callable[..., str] = lambda _port, host=None: ""  # noqa: E731
 _resolve_agent_endpoint: Callable[[str], dict | None] = lambda _token: None  # noqa: E731
 
 
-def configure(*, data_dir: Path, resolve_auth: Callable[[int], str],
+def configure(*, data_dir: Path, resolve_auth: Callable[..., str],
               resolve_agent_endpoint: Callable[[str], dict | None] | None = None) -> None:
     """Wire the deck's data dir (snapshots live beside its DB), the agent auth
-    resolver the download proxy uses, and — for the agent routes — the lookup
-    from an agent's web_auth to ``{"port", "agent_ref", "name"}``."""
+    resolver the download proxy uses (``resolve_auth(port, host=...)``: "" when
+    ``host`` isn't the agent's own address), and — for the agent routes — the
+    lookup from an agent's web_auth to ``{"port", "agent_ref", "name"}``."""
     global _data_dir, _resolve_auth, _resolve_agent_endpoint
     _data_dir = Path(data_dir)
     _resolve_auth = resolve_auth
@@ -329,8 +330,10 @@ async def create_agent_file_share(host: str, port: int, req: ShareRequest, reque
     """Copy the file out of the agent and publish it (or refresh the copy and
     expiry of the caller's existing link to it — the URL stays the same)."""
     await note_browser_origin(request, user["id"])
+    # A resolved token only for the agent's own address, never a host the caller named.
+    agent_auth = req.agent_auth or _resolve_auth(port, host=host)
     row = await _publish(owner=user["id"], agent_ref=req.agent_ref, agent_name=req.agent_name,
-                         host=host, port=port, agent_auth=req.agent_auth or _resolve_auth(port),
+                         host=host, port=port, agent_auth=agent_auth,
                          path=req.path, expires_days=req.expires_days, via="ui")
     return {"share": _owner_view(row), **_config()}
 
