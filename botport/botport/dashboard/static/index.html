@@ -2,103 +2,184 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#060912">
   <title>BotPort</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app.css">
   <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
-  <header>
-    <h1><a href="#/" class="header-link">BotPort</a></h1>
-    <div id="header-stats">
-      <span id="stat-instances" class="stat-badge" title="Connected instances">0 instances</span>
-      <span id="stat-active" class="stat-badge" title="Active concerns">0 active</span>
-      <span id="stat-success" class="stat-badge" title="Success rate">--% success</span>
-      <span id="stat-version" class="stat-badge dim">--</span>
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="BotPort network">
+      <img src="/icon.svg" alt="">
+      <span class="brand-name">BotPort</span>
+      <span class="brand-tag" id="hub-version">hub</span>
+    </a>
+    <nav class="tabs" aria-label="Views">
+      <a class="tab" href="#/" data-route="network">Network</a>
+      <a class="tab" href="#/requests" data-route="requests">Requests</a>
+      <a class="tab" href="#/swarm" data-route="swarm">Swarm</a>
+    </nav>
+    <div class="topbar-right">
+      <span class="live" id="live" data-state="connecting" title="Connecting to the hub">
+        <span class="live-dot"></span><span class="live-label">Connecting</span>
+      </span>
+      <span class="uptime" id="uptime" title="Hub uptime"></span>
+      <time class="clock" id="clock"></time>
+      <button class="icon-btn" id="kiosk-btn" type="button" title="Kiosk mode (K)" aria-label="Kiosk mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+      <button class="icon-btn" id="signout-btn" type="button" title="Forget the admin token on this browser" aria-label="Sign out" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      </button>
     </div>
   </header>
 
-  <!-- Homepage -->
-  <div id="page-home" class="page hidden">
-    <div class="home-grid">
-      <a href="#/activity" class="home-card">
-        <div class="home-card-icon">&#x26A1;</div>
-        <div class="home-card-title">Activity</div>
-        <div class="home-card-desc">Monitor connected instances, active concerns, and task routing in real time.</div>
-        <div class="home-card-stats">
-          <span id="home-stat-instances">0 instances</span>
-          <span id="home-stat-active">0 active</span>
-        </div>
-      </a>
-      <a href="#/swarm" class="home-card">
-        <div class="home-card-icon">&#x1F41D;</div>
-        <div class="home-card-title">Swarm</div>
-        <div class="home-card-desc">Orchestrate multi-agent workflows and coordinate swarm intelligence across instances.</div>
-        <div class="home-card-stats">
-          <span id="home-stat-projects">0 projects</span>
-          <span id="home-stat-swarms">0 swarms</span>
-        </div>
-      </a>
-    </div>
-  </div>
+  <main>
+    <!-- Network: the live map -->
+    <section class="page" id="page-network" hidden>
+      <div class="kpis">
+        <div class="kpi" data-k="decks"><div class="kpi-label">Decks online</div><div class="kpi-value">0</div><div class="kpi-sub">&nbsp;</div></div>
+        <div class="kpi" data-k="agents"><div class="kpi-label">Shared agents</div><div class="kpi-value">0</div><div class="kpi-sub">&nbsp;</div></div>
+        <div class="kpi" data-k="inflight"><div class="kpi-label">In flight</div><div class="kpi-value">0</div><div class="kpi-sub">&nbsp;</div></div>
+        <div class="kpi" data-k="today"><div class="kpi-label">Last 24 hours</div><div class="kpi-value">0</div><div class="kpi-sub">&nbsp;</div></div>
+        <div class="kpi" data-k="success"><div class="kpi-label">Success</div><div class="kpi-value">&ndash;</div><div class="kpi-sub">&nbsp;</div></div>
+        <div class="kpi" data-k="median"><div class="kpi-label">Median answer</div><div class="kpi-value">&ndash;</div><div class="kpi-sub">&nbsp;</div></div>
+      </div>
 
-  <!-- Activity page (current dashboard) -->
-  <div id="page-activity" class="page hidden">
-    <main>
-      <section id="instances-panel" class="panel">
-        <h2>Connected Instances</h2>
-        <div id="instances-list" class="card-list">
-          <p class="empty-state">No instances connected</p>
+      <div class="stage">
+        <div class="map panel" id="map">
+          <div class="map-head"><h2>Network</h2><p id="map-sub">Waiting for the hub&hellip;</p></div>
+          <svg class="map-svg" aria-hidden="true">
+            <defs>
+              <radialGradient id="g-request"><stop offset="0" stop-color="#cffafe" stop-opacity=".95"/><stop offset=".35" stop-color="#22d3ee" stop-opacity=".55"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></radialGradient>
+              <radialGradient id="g-progress"><stop offset="0" stop-color="#ede9fe" stop-opacity=".9"/><stop offset=".4" stop-color="#a78bfa" stop-opacity=".45"/><stop offset="1" stop-color="#a78bfa" stop-opacity="0"/></radialGradient>
+              <radialGradient id="g-answer"><stop offset="0" stop-color="#d1fae5" stop-opacity=".95"/><stop offset=".35" stop-color="#34d399" stop-opacity=".55"/><stop offset="1" stop-color="#34d399" stop-opacity="0"/></radialGradient>
+              <radialGradient id="g-fail"><stop offset="0" stop-color="#ffe4e6" stop-opacity=".95"/><stop offset=".35" stop-color="#fb7185" stop-opacity=".55"/><stop offset="1" stop-color="#fb7185" stop-opacity="0"/></radialGradient>
+              <radialGradient id="g-warn"><stop offset="0" stop-color="#fef3c7" stop-opacity=".95"/><stop offset=".35" stop-color="#fbbf24" stop-opacity=".55"/><stop offset="1" stop-color="#fbbf24" stop-opacity="0"/></radialGradient>
+              <radialGradient id="g-ended"><stop offset="0" stop-color="#e2e8f0" stop-opacity=".8"/><stop offset=".4" stop-color="#94a3b8" stop-opacity=".35"/><stop offset="1" stop-color="#94a3b8" stop-opacity="0"/></radialGradient>
+            </defs>
+            <g id="edges"></g>
+            <g id="particles"></g>
+          </svg>
+          <div class="map-nodes" id="map-nodes">
+            <div class="hub" id="hub">
+              <span class="hub-ring r3"></span>
+              <span class="hub-ring"></span>
+              <span class="hub-ring r2"></span>
+              <span class="hub-core">
+                <svg viewBox="0 0 64 64" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><path d="M32 32V12M32 32l17.3 10M32 32l-17.3 10"/></g><circle cx="32" cy="32" r="8" fill="currentColor"/><circle cx="32" cy="11" r="5.5" fill="currentColor"/><circle cx="50.2" cy="42.5" r="5.5" fill="currentColor"/><circle cx="13.8" cy="42.5" r="5.5" fill="currentColor"/></svg>
+              </span>
+              <span class="hub-label"><b>BotPort</b><span id="hub-sub">hub</span></span>
+            </div>
+          </div>
+          <div class="map-empty" id="map-empty" hidden>
+            <b>Waiting for Flight Decks</b>
+            Each Flight Deck connects from <em>Admin console &rarr; BotPort</em> with a key made by <code>botport gen-key &lt;deck&gt;</code>.
+          </div>
+          <div class="legend" aria-hidden="true">
+            <span><i class="k-request"></i>Request</span>
+            <span><i class="k-progress"></i>Progress</span>
+            <span><i class="k-answer"></i>Answer</span>
+            <span><i class="k-fail"></i>Failed</span>
+          </div>
         </div>
-      </section>
 
-      <section id="concerns-panel" class="panel">
-        <h2>Active Concerns</h2>
-        <div id="concerns-list" class="card-list">
-          <p class="empty-state">No active concerns</p>
+        <aside class="rail">
+          <section class="panel rail-section inflight-sec">
+            <header class="sec-head"><h2>In flight</h2><span class="count zero" id="inflight-count">0</span></header>
+            <div class="scroll" id="inflight"></div>
+          </section>
+          <section class="panel rail-section recent-sec">
+            <header class="sec-head"><h2>Recent</h2><a class="link" href="#/requests">All requests &rarr;</a></header>
+            <div class="scroll" id="recent"></div>
+          </section>
+        </aside>
+      </div>
+
+      <div class="ticker"><span class="ticker-label">Live</span><div class="ticks" id="ticks"></div></div>
+    </section>
+
+    <!-- Requests: everything recent, searchable -->
+    <section class="page" id="page-requests" hidden>
+      <div class="req-head">
+        <div>
+          <h1>Requests</h1>
+          <p>Work the Flight Decks asked of each other, newest first.</p>
         </div>
-      </section>
-
-      <section id="history-panel" class="panel">
-        <h2>Recent History</h2>
-        <div id="history-list" class="card-list">
-          <p class="empty-state">No concerns yet</p>
-        </div>
-      </section>
-    </main>
-  </div>
-
-  <!-- Swarm page -->
-  <div id="page-swarm" class="page hidden">
-    <div class="swarm-layout">
-      <aside id="swarm-sidebar">
-        <div id="swarm-project-list"></div>
-        <div id="swarm-swarm-list"></div>
-      </aside>
-      <div id="swarm-main">
-        <div class="swarm-empty-main">
-          <p class="empty-state">Select or create a project to get started</p>
+        <div class="toolbar">
+          <div class="seg" role="group" aria-label="Filter by state">
+            <button type="button" data-filter="all" aria-pressed="true">All<span class="n" data-n="all"></span></button>
+            <button type="button" data-filter="live" aria-pressed="false">In flight<span class="n" data-n="live"></span></button>
+            <button type="button" data-filter="done" aria-pressed="false">Answered<span class="n" data-n="done"></span></button>
+            <button type="button" data-filter="failed" aria-pressed="false">Failed<span class="n" data-n="failed"></span></button>
+          </div>
+          <select class="field" id="req-deck" aria-label="Filter by deck"><option value="">All decks</option></select>
+          <label class="search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input class="field" id="req-search" type="search" placeholder="Search tasks, decks, agents" autocomplete="off" aria-label="Search requests">
+          </label>
         </div>
       </div>
-    </div>
-
-    <!-- Swarm modal (create project/swarm/task) -->
-    <div id="swarm-modal" class="modal hidden">
-      <div class="modal-backdrop" onclick="closeSwarmModal()"></div>
-      <div class="modal-content">
-        <button class="modal-close" onclick="closeSwarmModal()">&times;</button>
-        <h3 id="swarm-modal-title"></h3>
-        <div id="swarm-modal-body"></div>
+      <div class="panel table">
+        <div class="trow th" aria-hidden="true"><span>State</span><span>Route</span><span>Task</span><span>Mode</span><span>Started</span><span class="num">Took</span></div>
+        <div id="req-rows"></div>
       </div>
-    </div>
+    </section>
+
+    <!-- Swarm (swarm.js) -->
+    <section class="page" id="page-swarm" hidden>
+      <div class="swarm-layout">
+        <aside id="swarm-sidebar">
+          <div id="swarm-project-list"></div>
+          <div id="swarm-swarm-list"></div>
+        </aside>
+        <div id="swarm-main">
+          <div class="swarm-empty-main">
+            <p class="empty-state">Select or create a project to get started</p>
+          </div>
+        </div>
+      </div>
+
+      <div id="swarm-modal" class="modal hidden">
+        <div class="modal-backdrop" onclick="closeSwarmModal()"></div>
+        <div class="modal-content">
+          <button class="modal-close" type="button" onclick="closeSwarmModal()" aria-label="Close">&times;</button>
+          <h3 id="swarm-modal-title"></h3>
+          <div id="swarm-modal-body"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Detail drawer (a request or a deck) -->
+  <div class="drawer-root" id="drawer" hidden>
+    <div class="drawer-backdrop" data-close></div>
+    <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <header class="drawer-head">
+        <div class="drawer-titles">
+          <div class="kicker" id="drawer-kicker"></div>
+          <h2 id="drawer-title"></h2>
+        </div>
+        <button class="icon-btn close" type="button" data-close aria-label="Close" title="Close (Esc)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </header>
+      <div class="drawer-body" id="drawer-body"></div>
+    </aside>
   </div>
 
-  <div id="concern-modal" class="modal hidden">
-    <div class="modal-backdrop"></div>
-    <div class="modal-content">
-      <button class="modal-close">&times;</button>
-      <h3 id="modal-title">Concern Detail</h3>
-      <div id="modal-body"></div>
-    </div>
+  <!-- Admin token -->
+  <div class="signin" id="signin" hidden>
+    <form class="signin-card" id="signin-form">
+      <img src="/icon.svg" alt="">
+      <h2>BotPort hub</h2>
+      <p>Enter the hub's admin token (<code>server.admin_token</code>).</p>
+      <input class="field" id="signin-token" type="password" autocomplete="current-password" placeholder="Admin token" aria-label="Admin token">
+      <button class="btn-main" type="submit">Open the dashboard</button>
+      <div class="signin-err" id="signin-err" role="alert"></div>
+    </form>
   </div>
 
   <script src="/auth.js"></script>

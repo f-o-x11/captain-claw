@@ -46,9 +46,12 @@ async def notify_source_agent(
     from captain_claw.flight_deck.server import _resolve_agent_auth
     if not source_port:
         return
-    auth = _resolve_agent_auth(int(source_port))
+    host = source_host or "localhost"
+    # The host comes from the request that started the run: the token found
+    # by port only goes to that agent's own address.
+    auth = _resolve_agent_auth(int(source_port), host=host)
     params = f"?token={auth}" if auth else ""
-    url = f"ws://{source_host or 'localhost'}:{source_port}/ws{params}"
+    url = f"ws://{host}:{source_port}/ws{params}"
     verb = "finished successfully" if ok else "ran into an error"
     callback_msg = (
         f"[{kind} '{title}' {verb}] This is the RESULT of the autonomous {kind} "

@@ -203,3 +203,146 @@ async def test_sign_in_off_deck_takes_link_settings_only_from_this_machine(deck,
     assert far.status_code == 403 and far_get.status_code == 403
     assert "from this machine" in far.json()["detail"]
     assert near.status_code == 200 and near.json()["deck_name"] == "pi"
+
+
+# ── Users share their own agents ─────────────────────────────────
+
+
+@pytest.fixture
+async def fleet(deck, monkeypatch):
+    """Alice's and Bob's agents, plus a Flight Deck worker, wired into the link."""
+    bob = await deck.db.create_user("bob@x.test", "h", "Bob")
+    registry = {
+        "alice-agent": {"name": "Planner", "web_port": ALICE_PORT, "web_auth": "tok-alice", "owner": deck.alice["id"]},
+        "bob-agent": {"name": "Coder", "web_port": 24112, "web_auth": "tok-bob", "owner": bob["id"]},
+        "dubina-run-1": {"name": "Worker", "web_port": 24113, "web_auth": "tok-w", "owner": deck.alice["id"],
+                         "description": "Dubina ephemeral worker"},
+    }
+    monkeypatch.setattr(fd_server, "_load_process_registry", lambda: registry)
+    deck.link._fleet = fd_server._fleet_snapshot
+    sent: list[dict] = []
+
+    async def fake_send(frame):
+        sent.append(frame)
+
+    deck.link._send = fake_send  # type: ignore[method-assign]
+    return types.SimpleNamespace(bob=bob, registry=registry, sent=sent)
+
+
+async def _ads(link) -> list[str]:
+    return sorted(a["name"] for a in await link._ads())
+
+
+async def test_a_user_shares_their_own_agent_on_the_network(deck, fleet):
+    async with _client(REMOTE) as c:
+        r = await c.get("/fd/botport/shares", headers=_bearer(deck.alice))
+        assert r.status_code == 200
+        view = r.json()
+        assert view["can_share"] and view["user_sharing"] and view["deck_name"] == "vps1"
+        assert [a["slug"] for a in view["agents"]] == ["alice-agent", "dubina-run-1"], "only her own agents"
+        assert all(a["mine"] for a in view["agents"]) and view["admin"] is False
+        assert not view["agents"][0]["exposed"]
+        assert not view["agents"][1]["shareable"], "a Flight Deck worker is never shareable"
+
+        r = await c.put("/fd/botport/shares/alice-agent", headers=_bearer(deck.alice), json={"shared": True})
+        assert r.status_code == 200, r.text
+        mine = r.json()["agents"][0]
+        assert mine["exposed"] and mine["by_owner"] and not mine["by_admin"]
+    assert await _ads(deck.link) == ["Planner"]
+    await asyncio.sleep(0)  # the link re-advertises in the background
+    assert fleet.sent and fleet.sent[-1]["type"] == "deck_agents"
+    assert [a["name"] for a in fleet.sent[-1]["agents"]] == ["Planner"]
+    stored = bl.parse_shares(await deck.db.get_system_setting(bl.SHARES_KEY))
+    assert stored[f"process:alice-agent|{deck.alice['id']}"]["owner"] == deck.alice["id"]
+
+    async with _client(REMOTE) as c:
+        r = await c.put("/fd/botport/shares/alice-agent", headers=_bearer(deck.alice), json={"shared": False})
+    assert r.status_code == 200 and not r.json()["agents"][0]["exposed"]
+    assert await _ads(deck.link) == []
+
+
+async def test_users_cannot_share_what_is_not_theirs(deck, fleet):
+    async with _client(REMOTE) as c:
+        r = await c.put("/fd/botport/shares/bob-agent", headers=_bearer(deck.alice), json={"shared": True})
+        assert r.status_code == 403
+        r = await c.put("/fd/botport/shares/dubina-run-1", headers=_bearer(deck.alice), json={"shared": True})
+        assert r.status_code == 400
+        r = await c.put("/fd/botport/shares/nope", headers=_bearer(deck.alice), json={"shared": True})
+        assert r.status_code == 404
+        # An admin offers others' agents through the Exposed list, not as their owner...
+        r = await c.put("/fd/botport/shares/bob-agent", headers=_bearer(deck.admin), json={"shared": True})
+        assert r.status_code == 403 and "Exposed agents" in r.json()["detail"]
+        # ...but may stop an owner's share.
+        assert (await c.put("/fd/botport/shares/bob-agent", headers=_bearer(fleet.bob),
+                            json={"shared": True})).status_code == 200
+        assert await _ads(deck.link) == ["Coder"]
+        view = (await c.get("/fd/botport/shares", headers=_bearer(deck.admin))).json()
+        coder = next(a for a in view["agents"] if a["slug"] == "bob-agent")
+        assert view["admin"] and coder["by_owner"] and not coder["mine"]
+        r = await c.put("/fd/botport/shares/bob-agent", headers=_bearer(deck.admin), json={"shared": False})
+        assert r.status_code == 200
+        # Alice cannot stop Bob's share either.
+        await c.put("/fd/botport/shares/bob-agent", headers=_bearer(fleet.bob), json={"shared": True})
+        r = await c.put("/fd/botport/shares/bob-agent", headers=_bearer(deck.alice), json={"shared": False})
+        assert r.status_code == 403
+    assert await _ads(deck.link) == ["Coder"]
+
+
+async def test_the_admin_can_turn_sharing_by_users_off(deck, fleet):
+    async with _client(REMOTE) as c:
+        assert (await c.put("/fd/botport/shares/alice-agent", headers=_bearer(deck.alice),
+                            json={"shared": True})).status_code == 200
+        r = await c.put("/fd/botport/config", headers=_bearer(deck.admin), json={
+            "enabled": True, "url": "hub:23180", "deck_name": "vps1", "user_sharing": False})
+        assert r.status_code == 200 and r.json()["user_sharing"] is False
+        assert await _ads(deck.link) == [], "existing shares stop counting"
+        r = await c.put("/fd/botport/shares/alice-agent", headers=_bearer(deck.alice), json={"shared": True})
+        assert r.status_code == 403
+        view = (await c.get("/fd/botport/shares", headers=_bearer(deck.alice))).json()
+        assert not view["can_share"]
+        # The admin's own agents too: with sharing by users off, the Exposed list decides.
+        deck.link._fleet = lambda: [{"name": "Ops", "slug": "ops", "kind": "process", "status": "running",
+                                     "owner": deck.admin["id"]}]
+        r = await c.put("/fd/botport/shares/ops", headers=_bearer(deck.admin), json={"shared": True})
+        assert r.status_code == 403 and "Exposed agents" in r.json()["detail"]
+        deck.link._fleet = fd_server._fleet_snapshot
+        # The admin's own list still works next to it.
+        await c.put("/fd/botport/config", headers=_bearer(deck.admin), json={"expose": ["Planner"]})
+        mine = (await c.get("/fd/botport/shares", headers=_bearer(deck.alice))).json()["agents"][0]
+        assert mine["exposed"] and mine["by_admin"]
+
+
+async def test_a_share_lapses_when_the_agent_changes_hands_or_is_removed(deck, fleet):
+    async with _client(REMOTE) as c:
+        await c.put("/fd/botport/shares/alice-agent", headers=_bearer(deck.alice), json={"shared": True})
+    assert await _ads(deck.link) == ["Planner"]
+    fleet.registry["alice-agent"]["owner"] = fleet.bob["id"]
+    assert await _ads(deck.link) == [], "Bob never agreed to share it"
+    fleet.registry["alice-agent"]["owner"] = deck.alice["id"]
+    assert await _ads(deck.link) == ["Planner"]
+
+    from captain_claw.flight_deck.botport_routes import forget_share
+
+    await forget_share("process", "alice-agent", fleet.bob["id"])
+    assert await _ads(deck.link) == ["Planner"], "only that owner's share goes"
+    await forget_share("process", "alice-agent", deck.alice["id"])
+    assert await _ads(deck.link) == []
+    assert bl.parse_shares(await deck.db.get_system_setting(bl.SHARES_KEY)) == {}
+
+
+async def test_sharing_needs_a_connected_network(deck, fleet):
+    deck.link.settings = bl.LinkSettings.from_dict({"enabled": False})
+    async with _client(REMOTE) as c:
+        r = await c.put("/fd/botport/shares/alice-agent", headers=_bearer(deck.alice), json={"shared": True})
+        assert r.status_code == 409
+        assert not (await c.get("/fd/botport/shares", headers=_bearer(deck.alice))).json()["can_share"]
+
+
+async def test_an_exact_slug_wins_over_another_agents_name(deck, fleet):
+    fleet.registry["alice-agent"]["name"] = "beta"   # renamed: its name is another agent's slug
+    fleet.registry["beta"] = {"name": "Beta", "web_port": 24114, "web_auth": "tok-beta", "owner": deck.alice["id"]}
+    async with _client(REMOTE) as c:
+        r = await c.put("/fd/botport/shares/beta?kind=process", headers=_bearer(deck.alice), json={"shared": True})
+    assert r.status_code == 200
+    assert await _ads(deck.link) == ["Beta"]
+    assert list(bl.parse_shares(await deck.db.get_system_setting(bl.SHARES_KEY))) == [f"process:beta|{deck.alice['id']}"]

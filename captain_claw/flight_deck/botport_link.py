@@ -3,7 +3,8 @@
 The deck dials OUT to a BotPort hub over one WebSocket (NAT-friendly: only the
 hub needs to be reachable) and keeps it up. Over it the deck:
 
-* advertises the agents an admin chose to expose (``expose``),
+* advertises the agents an admin chose to expose (``expose``) and those
+  their owners shared themselves (``user_sharing``, see ``SHARES_KEY``),
 * receives the ``network`` roster — the other decks and their agents,
 * serves ``dispatch`` from other decks by proxying them to its own agent with
   the same in-process primitive ``/fd/consult-peer`` uses
@@ -44,6 +45,9 @@ log = get_logger(__name__)
 
 SETTING_KEY = "fd:botport-link"
 DECK_ID_KEY = "fd:botport-deck-id"
+# Agents their owners shared on the network themselves:
+# {"agents": {share_key: {"owner": user_id, "by": user_id, "at": iso}}} (see share_key).
+SHARES_KEY = "fd:botport-shares"
 PROTOCOL = 2
 _MAX_FRAME = 16 * 1024 * 1024
 _HEARTBEAT_SECONDS = 25.0
@@ -92,6 +96,7 @@ _ENV = {
     "allow_outbound": "FD_BOTPORT_ALLOW_OUTBOUND",
     "max_concurrent": "FD_BOTPORT_MAX_CONCURRENT",
     "deny_tools": "FD_BOTPORT_DENY_TOOLS",
+    "user_sharing": "FD_BOTPORT_USER_SHARING",
 }
 
 
@@ -130,6 +135,8 @@ class LinkSettings:
     # Extra tools remote turns may not use (e.g. shell, scripts, write) — on
     # top of LOOP_GUARD_TOOLS, which are always denied.
     deny_tools: list[str] = field(default_factory=list)
+    # Users may share the agents they own themselves (next to the admin's list).
+    user_sharing: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> LinkSettings:
@@ -152,6 +159,7 @@ class LinkSettings:
         except (TypeError, ValueError):
             s.max_inbound_timeout = 900.0
         s.deny_tools = _as_list(d.get("deny_tools", []))
+        s.user_sharing = _as_bool(d.get("user_sharing", True))
         return s
 
     def to_dict(self) -> dict[str, Any]:
@@ -206,6 +214,36 @@ def env_overrides() -> dict[str, Any]:
     if "url" in out and "enabled" not in out:
         out["enabled"] = "true"
     return out
+
+
+def agent_key(agent: dict[str, Any]) -> str:
+    """How exposure lists name an agent: its slug, else its name (lower case)."""
+    return str(agent.get("slug") or agent.get("name") or "").strip().lower()
+
+
+def share_key(agent: dict[str, Any]) -> str:
+    """An owner's share names the agent by kind, slug and owner: a docker and
+    a process agent of one name stay apart, and a share lapses by itself when
+    the agent changes hands (its key no longer matches)."""
+    return f"{str(agent.get('kind') or '').lower()}:{agent_key(agent)}|{agent.get('owner') or ''}"
+
+
+def parse_shares(raw: str | None) -> dict[str, dict[str, str]]:
+    """The stored user shares (``SHARES_KEY``); anything malformed is dropped."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return {}
+    agents = data.get("agents") if isinstance(data, dict) else None
+    out: dict[str, dict[str, str]] = {}
+    for key, rec in (agents or {}).items() if isinstance(agents, dict) else ():
+        if isinstance(key, str) and key.strip() and isinstance(rec, dict):
+            out[key.strip()[:300]] = {k: str(rec.get(k) or "")[:128] for k in ("owner", "by", "at")}
+    return out
+
+
+def dump_shares(shares: dict[str, dict[str, str]]) -> str:
+    return json.dumps({"agents": shares}, sort_keys=True)
 
 
 def valid_deck_name(name: str) -> bool:
@@ -311,6 +349,7 @@ class BotPortLink:
         self._outbox: OrderedDict[str, dict[str, Any]] = OrderedDict()  # result frames awaiting hub ack
         self._done: OrderedDict[str, None] = OrderedDict()   # finished outbound ids (dedupe)
         self._advertised: list[dict[str, Any]] = []
+        self.user_shares: dict[str, dict[str, str]] = {}   # see SHARES_KEY
         self._recent: deque[dict[str, Any]] = deque(maxlen=_RECENT)
         self.counters: dict[str, int] = {
             "connects": 0, "disconnects": 0, "outbound": 0, "outbound_ok": 0, "outbound_failed": 0,
@@ -438,23 +477,58 @@ class BotPortLink:
                 })
         return out
 
-    async def local_agents(self) -> list[dict[str, Any]]:
-        """This deck's agents for the expose picker: name, slug, kind, status, exposed."""
+    async def local_agents(self, owner: str | None = None) -> list[dict[str, Any]]:
+        """This deck's agents (only ``owner``'s when given) with how each is
+        shared: ``exposed`` (on the network), ``by_admin`` (the admin's list
+        covers it), ``by_owner`` (its owner shared it), ``shareable`` (its
+        owner may share it: not a Flight Deck worker)."""
         try:
             fleet = await asyncio.to_thread(self._fleet) or []
         except Exception:
             fleet = []
-        exposed = {(a.get("slug") or a.get("name") or "").lower() for a in await self._exposed()}
+        exposed = {agent_key(a) for a in await self._exposed()}
+        multi_user, is_managed = _deck_rules()
         out = []
         for a in fleet:
             if a.get("kind") == "remote":
                 continue
+            if owner is not None and multi_user and str(a.get("owner") or "") != owner:
+                continue
+            key = agent_key(a)
+            managed = is_managed(str(a.get("slug") or ""), str(a.get("description") or ""))
             out.append({
                 "name": a.get("name", ""), "slug": a.get("slug", ""), "kind": a.get("kind", ""),
                 "status": a.get("status", ""), "description": a.get("description", ""),
-                "exposed": (a.get("slug") or a.get("name") or "").lower() in exposed,
+                "owner": str(a.get("owner") or ""),
+                "exposed": key in exposed,
+                "by_admin": not managed and self._admin_lists(a, multi_user),
+                "by_owner": self._owner_shared(a, multi_user),
+                "shareable": not managed,
             })
         return out
+
+    def set_user_shares(self, shares: dict[str, dict[str, str]]) -> None:
+        """Owners' own shares changed: keep them and re-advertise."""
+        self.user_shares = dict(shares)
+        self.notify_fleet_changed()
+
+    def _admin_lists(self, a: dict[str, Any], multi_user: bool) -> bool:
+        """Does the admin's ``expose`` list cover this agent?"""
+        want = {x.strip().lower() for x in self.settings.expose if x.strip()}
+        name = str(a.get("name") or "").strip().lower()
+        slug = str(a.get("slug") or "").strip().lower()
+        if name in want or (slug and slug in want):
+            return True
+        # "*" on a multi-user deck: only agents someone owns (an orphan
+        # from before sign-in has nobody who agreed to its exposure).
+        return "*" in want and not (multi_user and not a.get("owner"))
+
+    def _owner_shared(self, a: dict[str, Any], multi_user: bool) -> bool:
+        """Did this agent's current owner share it? (The key carries the owner,
+        so a share made by an earlier owner no longer matches.)"""
+        if share_key(a) not in self.user_shares:
+            return False
+        return not multi_user or bool(a.get("owner"))
 
     def _note(self, direction: str, peer: str, agent: str, ok: bool | None, detail: str = "") -> None:
         self._recent.append({
@@ -465,11 +539,12 @@ class BotPortLink:
     # ── agents this deck exposes ─────────────────────────────────
 
     async def _exposed(self) -> list[dict[str, Any]]:
-        """The fleet agents admins chose to expose (running or not)."""
-        want = {x.strip().lower() for x in self.settings.expose if x.strip()}
-        if not want:
+        """The fleet agents on the network (running or not): those the admin
+        chose to expose and, unless the admin turned it off, those their
+        owners shared themselves."""
+        owners = self.settings.user_sharing and bool(self.user_shares)
+        if not any(x.strip() for x in self.settings.expose) and not owners:
             return []
-        everything = "*" in want
         out: list[dict[str, Any]] = []
         seen: set[str] = set()
         try:
@@ -478,15 +553,7 @@ class BotPortLink:
         except Exception as exc:
             log.warning("botport link: fleet lookup failed", error=str(exc))
             fleet = []
-        try:
-            from captain_claw.flight_deck.agent_sharing import is_managed_agent
-            from captain_claw.flight_deck.auth import _fd_auth_enabled
-
-            multi_user = _fd_auth_enabled()
-        except Exception:  # pragma: no cover - import guard
-            def is_managed_agent(slug: str, description: str) -> bool:  # type: ignore[misc]
-                return False
-            multi_user = False
+        multi_user, is_managed_agent = _deck_rules()
         for a in fleet:
             name = str(a.get("name") or "").strip()
             slug = str(a.get("slug") or "").strip()
@@ -495,14 +562,9 @@ class BotPortLink:
             # Flight Deck's own managed workers are internal: never exposed.
             if is_managed_agent(slug, str(a.get("description") or "")):
                 continue
-            named = name.lower() in want or (slug and slug.lower() in want)
-            if not (everything or named):
+            if not (self._admin_lists(a, multi_user) or (owners and self._owner_shared(a, multi_user))):
                 continue
-            # "*" on a multi-user deck: only agents someone owns (an orphan
-            # from before sign-in has nobody who agreed to its exposure).
-            if everything and not named and multi_user and not a.get("owner"):
-                continue
-            key = (slug or name).lower()
+            key = agent_key(a)
             if key in seen:
                 continue
             seen.add(key)
@@ -1055,6 +1117,17 @@ def _progress_data(kind: str, data: dict[str, Any]) -> dict[str, Any]:
     if kind in ("monitor", "tool_stream"):
         return {"tool_name": str(data.get("tool_name") or data.get("tool") or "")[:80]}
     return {"status": str(data.get("status") or data.get("text") or "")[:200]}
+
+
+def _deck_rules() -> tuple[bool, Callable[[str, str], bool]]:
+    """(sign-in on, "is this a Flight Deck–managed worker?") for this deck."""
+    try:
+        from captain_claw.flight_deck.agent_sharing import is_managed_agent
+        from captain_claw.flight_deck.auth import _fd_auth_enabled
+
+        return _fd_auth_enabled(), is_managed_agent
+    except Exception:  # pragma: no cover - import guard
+        return False, lambda slug, description: False
 
 
 def _describe(exc: Exception) -> str:

@@ -53,7 +53,7 @@ def env(tmp_path, monkeypatch):
                         lambda **kw: real(transport=httpx.MockTransport(agent), **kw))
     endpoints = {"tok-A": {"port": 24123, "agent_ref": "proc-secret-agent", "name": "Secret Agent"},
                  "tok-B": {"port": 24124, "agent_ref": "proc-other", "name": "Other"}}
-    pfs.configure(data_dir=tmp_path, resolve_auth=lambda port: "agent-secret-token",
+    pfs.configure(data_dir=tmp_path, resolve_auth=lambda port, host=None: "agent-secret-token",
                   resolve_agent_endpoint=endpoints.get)
 
     app = FastAPI()

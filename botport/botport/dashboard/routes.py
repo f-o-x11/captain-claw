@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -10,43 +11,79 @@ from aiohttp import web
 from botport import __version__
 
 if TYPE_CHECKING:
+    from botport.models import Concern, InstanceInfo
     from botport.server import BotPortServer
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# The dashboard's files (no build step). Anything else is not served.
+_STATIC_FILES = {
+    "app.css": "text/css",
+    "dashboard.css": "text/css",
+    "dashboard.js": "application/javascript",
+    "auth.js": "application/javascript",
+    "swarm.js": "application/javascript",
+    "icon.svg": "image/svg+xml",
+}
+
+
+def _concern_view(c: Concern, live: dict[str, Any] | None = None,
+                  counts: dict[str, int] | None = None) -> dict[str, Any]:
+    """A concern without its message bodies — what lists and the map need.
+    ``counts`` (messages by direction) stands in for messages the store did
+    not load."""
+    meta = c.metadata or {}
+    if counts is None:
+        counts = {}
+        for m in c.messages:
+            counts[m.direction] = counts.get(m.direction, 0) + 1
+    return {
+        "id": c.id,
+        "status": c.status,
+        "mode": c.mode,
+        "from": c.from_instance,
+        "from_name": c.from_instance_name,
+        "from_agent": c.from_agent,
+        "to": c.assigned_instance or "",
+        "to_name": c.assigned_instance_name,
+        "target_deck": c.target_deck,
+        "target_agent": c.target_agent,
+        "task": (c.task or "")[:600],
+        "expertise_tags": list(c.expertise_tags)[:8],
+        "created_at": c.created_at,
+        "updated_at": c.updated_at,
+        "messages": sum(counts.values()),
+        "answered": counts.get("response", 0) > 0,
+        "persona_name": meta.get("persona_name", ""),
+        "error": str(meta.get("error") or meta.get("fail_reason") or "")[:500],
+        "end_reason": str(meta.get("close_reason") or meta.get("timeout_reason") or "")[:80],
+        "live": live or None,
+    }
+
+
+def _instance_view(i: InstanceInfo) -> dict[str, Any]:
+    d = i.to_dict()
+    d["remote_addr"] = getattr(i, "remote_addr", "") or ""
+    return d
 
 
 def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
     """Register dashboard routes on the aiohttp application."""
 
-    async def index(request: web.Request) -> web.Response:
+    async def index(request: web.Request) -> web.StreamResponse:
         index_path = STATIC_DIR / "index.html"
         if index_path.is_file():
-            return web.FileResponse(index_path)
+            return web.FileResponse(index_path, headers={"Cache-Control": "no-cache"})
         return web.Response(text="Dashboard not found", status=404)
 
-    async def dashboard_css(request: web.Request) -> web.Response:
-        css_path = STATIC_DIR / "dashboard.css"
-        if css_path.is_file():
-            return web.FileResponse(css_path, headers={"Content-Type": "text/css"})
-        return web.Response(text="", content_type="text/css")
-
-    async def dashboard_js(request: web.Request) -> web.Response:
-        js_path = STATIC_DIR / "dashboard.js"
-        if js_path.is_file():
-            return web.FileResponse(js_path, headers={"Content-Type": "application/javascript"})
-        return web.Response(text="", content_type="application/javascript")
-
-    async def auth_js(request: web.Request) -> web.Response:
-        js_path = STATIC_DIR / "auth.js"
-        if js_path.is_file():
-            return web.FileResponse(js_path, headers={"Content-Type": "application/javascript"})
-        return web.Response(text="", content_type="application/javascript")
-
-    async def swarm_js(request: web.Request) -> web.Response:
-        js_path = STATIC_DIR / "swarm.js"
-        if js_path.is_file():
-            return web.FileResponse(js_path, headers={"Content-Type": "application/javascript"})
-        return web.Response(text="", content_type="application/javascript")
+    async def static_file(request: web.Request) -> web.StreamResponse:
+        name = request.match_info["name"]
+        ctype = _STATIC_FILES.get(name)
+        path = STATIC_DIR / name
+        if ctype is None or not path.is_file():
+            raise web.HTTPNotFound()
+        # no-cache: revalidate (cheap 304s), so an upgraded hub never runs old JS.
+        return web.FileResponse(path, headers={"Content-Type": ctype, "Cache-Control": "no-cache"})
 
     async def api_instances(request: web.Request) -> web.Response:
         instances = server.connections.list_instances()
@@ -62,10 +99,13 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
 
     async def api_concern_detail(request: web.Request) -> web.Response:
         concern_id = request.match_info.get("id", "")
-        concern = await server.store.load_concern(concern_id)
+        # A running concern's in-memory copy is the newest one.
+        concern = server.concerns.get_concern(concern_id) or await server.store.load_concern(concern_id)
         if concern is None:
             return web.json_response({"error": "Not found"}, status=404)
-        return web.json_response(concern.to_dict())
+        data = concern.to_dict()
+        data["live"] = server.live_progress.get(concern.id)
+        return web.json_response(data)
 
     async def api_stats(request: web.Request) -> web.Response:
         stats = await server.concerns.get_stats()
@@ -89,9 +129,30 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
         ]
         return web.json_response(snap)
 
+    async def api_overview(request: web.Request) -> web.Response:
+        """Everything the live view draws, in one request: the hub, every
+        connection, running concerns (with their latest progress) and the
+        most recent ones."""
+        try:
+            limit = max(1, min(int(request.query.get("limit", "60")), 200))
+        except ValueError:
+            limit = 60
+        active = server.concerns.get_active_concerns()
+        active_ids = {c.id for c in active}
+        recent = [c for c in await server.store.list_concerns(limit=limit) if c.id not in active_ids]
+        counts = await server.store.message_counts([c.id for c in recent])
+        return web.json_response({
+            "now": datetime.now(timezone.utc).isoformat(),
+            "hub": server.status_snapshot(),
+            "stats": await server.concerns.get_stats(),
+            "instances": [_instance_view(i) for i in server.connections.list_instances()],
+            "active": [_concern_view(c, server.live_progress.get(c.id)) for c in active],
+            "recent": [_concern_view(c, counts=counts.get(c.id, {})) for c in recent],
+        })
+
     async def dashboard_ws(request: web.Request) -> web.StreamResponse:
         """Live events for dashboards (instance_connected/_disconnected,
-        activity, concern_created, concern_result). Read-only."""
+        activity, concern_created, concern_progress, concern_result). Read-only."""
         ws = web.WebSocketResponse(heartbeat=30.0, max_msg_size=64 * 1024)
         await ws.prepare(request)
         server.dashboard_sockets.add(ws)
@@ -127,11 +188,9 @@ def setup_dashboard_routes(app: web.Application, server: BotPortServer) -> None:
 
     # Routes.
     app.router.add_get("/", index)
-    app.router.add_get("/dashboard.css", dashboard_css)
-    app.router.add_get("/dashboard.js", dashboard_js)
-    app.router.add_get("/auth.js", auth_js)
-    app.router.add_get("/swarm.js", swarm_js)
+    app.router.add_get("/{name:[a-z]+\\.(?:css|js|svg)}", static_file)
     app.router.add_get("/ws/dashboard", dashboard_ws)
+    app.router.add_get("/api/overview", api_overview)
     app.router.add_get("/api/status", api_status)
     app.router.add_get("/api/instances", api_instances)
     app.router.add_get("/api/concerns", api_concerns)

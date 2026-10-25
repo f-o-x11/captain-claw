@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Cable, Share2, Save, Stethoscope, Lock, Trash2, Loader2, CheckCircle2, XCircle, Bot } from 'lucide-react'
+import { Cable, Share2, Save, Stethoscope, Lock, Trash2, Loader2, CheckCircle2, XCircle, Bot, Globe } from 'lucide-react'
 import {
-  getBotportConfig, saveBotportConfig, getBotportAgents, probeBotport, botportEnvVar,
+  getBotportConfig, saveBotportConfig, getBotportAgents, probeBotport, botportEnvVar, setBotportShare,
   type BotportConfig, type BotportConfigPatch, type BotportLocalAgent, type BotportProbe,
 } from '../../services/botportLink'
+import { useNetworkShareStore } from '../../stores/networkShareStore'
 import { Switch } from '../admin/Switch'
 import { Card, SettingRow, Segmented, Notice, Button, Field, Pill, Dot, inputCls } from './parts'
 
@@ -54,8 +55,10 @@ export function NetworkSettings({ onSaved }: { onSaved: () => void }) {
     const next = await saveBotportConfig(patch)
     setConfig(next)
     onSaved()
-    // Which agents count as exposed follows the saved list.
-    if (patch.expose) loadAgents()
+    // Agent cards show what is on the network: let them catch up.
+    void useNetworkShareStore.getState().fetch(true)
+    // Which agents count as exposed follows the saved list (and users' shares).
+    if (patch.expose || patch.user_sharing !== undefined) loadAgents()
     return next
   }, [onSaved, loadAgents])
 
@@ -70,7 +73,7 @@ export function NetworkSettings({ onSaved }: { onSaved: () => void }) {
   return (
     <>
       <ConnectionCard config={config} save={save} />
-      <ExposeCard config={config} agents={agents} save={save} />
+      <ExposeCard config={config} agents={agents} save={save} reloadAgents={loadAgents} />
     </>
   )
 }
@@ -321,6 +324,7 @@ interface ExposeDraft {
   maxConcurrent: string
   timeout: string
   denyTools: string
+  userSharing: boolean
 }
 
 const exposeDraft = (c: BotportConfig): ExposeDraft => ({
@@ -331,6 +335,7 @@ const exposeDraft = (c: BotportConfig): ExposeDraft => ({
   maxConcurrent: String(c.max_concurrent),
   timeout: String(Math.round(c.max_inbound_timeout)),
   denyTools: c.deny_tools.join(', '),
+  userSharing: c.user_sharing ?? true,
 })
 
 /** Does an `expose` entry name this agent (by slug or name, any case)? */
@@ -344,10 +349,11 @@ function intIn(s: string, lo: number, hi: number): number | null {
   return Number.isInteger(n) && n >= lo && n <= hi ? n : null
 }
 
-function ExposeCard({ config, agents, save }: {
+function ExposeCard({ config, agents, save, reloadAgents }: {
   config: BotportConfig
   agents: BotportLocalAgent[] | null
   save: Save
+  reloadAgents: () => void
 }) {
   const [d, setD] = useState(() => exposeDraft(config))
   const { busy, error, flash, run } = useSaving(save)
@@ -366,6 +372,7 @@ function ExposeCard({ config, agents, save }: {
   if (timeout !== null && timeout !== Math.round(config.max_inbound_timeout)) patch.max_inbound_timeout = timeout
   const deny = splitList(d.denyTools)
   if (!sameList(deny, config.deny_tools)) patch.deny_tools = deny
+  if (d.userSharing !== (config.user_sharing ?? true)) patch.user_sharing = d.userSharing
   const dirty = Object.keys(patch).length > 0
   const invalid = maxConcurrent === null || timeout === null
 
@@ -389,6 +396,25 @@ function ExposeCard({ config, agents, save }: {
     set('all', !d.all)
   }
 
+  // An owner shared it themselves: the admin may take it off the network.
+  const [revoking, setRevoking] = useState('')
+  const [revokeError, setRevokeError] = useState('')
+  const revoke = async (a: BotportLocalAgent) => {
+    const name = a.name || a.slug
+    if (!confirm(`Take '${name}' off the network? Its owner shared it; they can share it again unless you turn sharing by users off.`)) return
+    setRevoking(a.slug || a.name)
+    setRevokeError('')
+    try {
+      await setBotportShare(a.slug || a.name, false, a.kind)
+      reloadAgents()
+      void useNetworkShareStore.getState().fetch(true)
+    } catch (e) {
+      setRevokeError(errText(e))
+    } finally {
+      setRevoking('')
+    }
+  }
+
   // With "every agent" saved, the server says which ones it really exposes.
   const shownChecked = (a: BotportLocalAgent) => (d.all ? (config.expose.includes('*') ? a.exposed : true) : isPicked(a))
   const exposeLocked = locked('expose')
@@ -405,6 +431,16 @@ function ExposeCard({ config, agents, save }: {
           hint={exposeLocked ? <LockHint field="expose" /> : 'Every agent on this deck, now and later. Off: only the ones ticked below.'}
         >
           <Switch on={d.all} disabled={exposeLocked} label="Expose every agent" onToggle={toggleAll} />
+        </SettingRow>
+
+        <SettingRow
+          title="Let users share their own agents"
+          hint={locked('user_sharing') ? <LockHint field="user_sharing" /> : (d.userSharing
+            ? 'Each user can put the agents they own on the network from the agent\'s menu (Share on network), next to the ones you pick here.'
+            : 'Off: only the list below decides. Users\' shares are kept but don\'t count until you turn this back on.')}
+        >
+          <Switch on={d.userSharing} disabled={locked('user_sharing')} label="Let users share their own agents"
+            onToggle={() => set('userSharing', !d.userSharing)} />
         </SettingRow>
 
         <div className="space-y-1.5">
@@ -438,6 +474,22 @@ function ExposeCard({ config, agents, save }: {
                       <span className="flex items-center gap-1 text-[11px] text-zinc-500">
                         <Dot tone={a.status === 'running' ? 'on' : 'off'} />{a.status || 'unknown'}
                       </span>
+                      {a.by_owner && (
+                        <>
+                          <Pill tone={config.user_sharing ? 'sky' : 'zinc'} icon={Globe}
+                            title={config.user_sharing ? 'Its owner shared it on the network' : 'Its owner shared it, but sharing by users is off'}>
+                            shared by owner{config.user_sharing ? '' : ' (off)'}
+                          </Pill>
+                          <button
+                            type="button"
+                            disabled={revoking === (a.slug || a.name)}
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); void revoke(a) }}
+                            className="rounded-md px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-red-600 disabled:opacity-50 dark:hover:text-red-400"
+                          >
+                            {revoking === (a.slug || a.name) ? 'Stopping…' : 'Stop'}
+                          </button>
+                        </>
+                      )}
                     </span>
                     {a.description && <span className="mt-0.5 block truncate text-xs text-zinc-500" title={a.description}>{a.description}</span>}
                   </span>
@@ -466,6 +518,7 @@ function ExposeCard({ config, agents, save }: {
           {d.all && (
             <p className="text-[11px] text-zinc-500">Every agent is exposed. Flight Deck's own workers never are.</p>
           )}
+          {revokeError && <Notice tone="red">{revokeError}</Notice>}
         </div>
 
         <div className="space-y-2 border-t border-zinc-800/80 pt-5">
@@ -530,8 +583,9 @@ function ExposeCard({ config, agents, save }: {
         <Field
           label="Tools remote requests may not use"
           hint={locked('deny_tools') ? undefined : <>
-            Comma-separated, e.g. <code className="text-zinc-400">shell, scripts, write, edit</code>. On top of flight_deck,
-            consult_peer and botport, which a remote request never gets.
+            Comma-separated, e.g. <code className="text-zinc-400">shell, scripts, write, edit</code>. On top of the
+            network tools and the tools bound to the owner's own session and memory (cron, sessions, history,
+            personality, …), which a remote request never gets.
           </>}
         >
           <input

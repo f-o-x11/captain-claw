@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Box, Play, Square, RotateCcw, Trash2, ScrollText, ChevronDown, ChevronUp, MessageSquare, Loader2, FolderOpen, Database, Target, Clock, Pencil, Check, X, RefreshCw, Copy, MoreVertical, Minimize2, Maximize2, Settings, Leaf, Feather, Download, Upload, Brain, Inbox, ShieldAlert, Eraser, Gift, Bug, Users, Layers } from 'lucide-react'
+import { Box, Play, Square, RotateCcw, Trash2, ScrollText, ChevronDown, ChevronUp, MessageSquare, Loader2, FolderOpen, Database, Target, Clock, Pencil, Check, X, RefreshCw, Copy, MoreVertical, Minimize2, Maximize2, Settings, Leaf, Feather, Download, Upload, Brain, Inbox, ShieldAlert, Eraser, Gift, Bug, Users, Layers, Globe } from 'lucide-react'
 import { useAgentMemoryTransfer } from '../../hooks/useAgentMemoryTransfer'
 import { ReflectionMergeModal } from './ReflectionMergeModal'
 import { PendingInsightsModal } from './PendingInsightsModal'
@@ -23,6 +23,8 @@ import { useAuthStore } from '../../stores/authStore'
 import { queueSave, registerHydrator } from '../../services/settingsSync'
 import { ShareModal } from '../common/ShareModal'
 import { SharedCountBadge } from './SharedCountBadge'
+import { NetworkBadge, useNetworkShare, type NetworkShareAction } from './NetworkShare'
+import { dockerShareKey } from '../../stores/networkShareStore'
 import { useSharedAgentStore } from '../../stores/sharedAgentStore'
 import { dockerSlug, isManagedAgent } from '../../utils/managedAgents'
 import { ownerShareNote } from '../../utils/sharedAgent'
@@ -172,6 +174,8 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
 
   const isRunning = container.status === 'running'
   const agentName = container.agent_name || container.name
+  // On this deck's BotPort network (its owner may share it; see NetworkShare).
+  const network = useNetworkShare(dockerShareKey(agentName), agentName)
   const [showShare, setShowShare] = useState(false)
   // Sharing: only on decks that share agents, never a Flight Deck–managed
   // worker, and only once the agent has a stable ref (it has an access token).
@@ -248,6 +252,7 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
 
   const actionProps = {
     isRunning,
+    network,
     actionLoading,
     onStart: () => doAction('start', () => startContainer(container.id)),
     onStop: () => doAction('stop', () => stopContainer(container.id)),
@@ -443,6 +448,7 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
                     <Pencil className="h-2.5 w-2.5" />
                   </button>
                   <SharedCountBadge agentRef={container.agent_ref} />
+                  <NetworkBadge shareKey={dockerShareKey(agentName)} />
                 </>
               )}
             </div>
@@ -639,6 +645,7 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
                       <Pencil className="h-3 w-3" />
                     </button>
                     <SharedCountBadge agentRef={container.agent_ref} />
+                    <NetworkBadge shareKey={dockerShareKey(agentName)} />
                   </>
                 )}
               </div>
@@ -1053,8 +1060,9 @@ export function ContainerCard({ container, onBrowseFiles, onDragStart, isDraggin
   )
 }
 
-function ActionsDropdown({ isRunning, actionLoading, onStart, onStop, onRestart, onRebuild, onShare, canShare, onPacks, canPacks, onClone, onRemove, onConfig, onExportMemory, onExportFullMemory, onImportMemory, onImportStageMemory, onMergeReflection, onReviewPending, freebie, onRefreshFreeModels, memoryState, memoryBusy, canMemory, iconOnly }: {
+function ActionsDropdown({ isRunning, network, actionLoading, onStart, onStop, onRestart, onRebuild, onShare, canShare, onPacks, canPacks, onClone, onRemove, onConfig, onExportMemory, onExportFullMemory, onImportMemory, onImportStageMemory, onMergeReflection, onReviewPending, freebie, onRefreshFreeModels, memoryState, memoryBusy, canMemory, iconOnly }: {
   isRunning: boolean
+  network: NetworkShareAction
   actionLoading: string | null
   onStart: () => void
   onStop: () => void
@@ -1122,6 +1130,7 @@ function ActionsDropdown({ isRunning, actionLoading, onStart, onStop, onRestart,
     { icon: RefreshCw, label: 'Rebuild', onClick: onRebuild, loading: actionLoading === 'rebuild' },
     { icon: Users,     label: 'Share…',  onClick: onShare,   show: canShare },
     { icon: Layers,    label: PACKS_MENU_LABEL, onClick: onPacks, show: canPacks },
+    { icon: Globe,     label: network.label || 'Share on network…', onClick: network.onClick, show: network.show, disabled: network.disabled },
     { icon: Copy,      label: 'Clone',   onClick: onClone,   loading: actionLoading === 'clone' },
     { icon: Trash2,    label: 'Remove',  onClick: onRemove,  loading: actionLoading === 'remove',  danger: true },
   ]

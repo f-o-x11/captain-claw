@@ -32,7 +32,7 @@ from botport.auth import FailureLimiter, match_credentials
 from botport.concern_manager import ConcernManager
 from botport.config import BotPortConfig, set_config
 from botport.connection_manager import CLOSE_SUPERSEDED, ConnectionManager
-from botport.models import Concern
+from botport.models import Concern, _utcnow_iso
 from botport.protocol import (
     ActivityMessage,
     BaseMessage,
@@ -111,6 +111,8 @@ class BotPortServer:
         self._pending_dispatch: dict[str, DispatchMessage] = {}
         self._last_progress: dict[str, float] = {}
         self._pending_progress: dict[str, ProgressMessage] = {}
+        # What each running concern's agent did last (for the dashboard only).
+        self.live_progress: dict[str, dict[str, Any]] = {}
         self._network_task: asyncio.Task[None] | None = None
         self._roster_gen = 0
         self._bg_tasks: set[asyncio.Task[Any]] = set()
@@ -770,7 +772,7 @@ class BotPortServer:
                 return
 
         self.counters["concerns_routed"] += 1
-        self._dashboard_event({"type": "concern_created", "concern_id": concern.id})
+        self._dashboard_event(self._concern_event("concern_created", concern))
         log.info(
             "Concern %s routed: %s%s -> %s (persona: %s, reason: %s)",
             concern.id[:8], f"{concern.from_agent}@" if concern.from_agent else "", from_name,
@@ -812,6 +814,10 @@ class BotPortServer:
 
     async def _relay_progress(self, concern: Concern, frame: ProgressMessage) -> None:
         self._last_progress[concern.id] = time.monotonic()
+        text = _progress_text(frame.event, frame.data)
+        if text:
+            self.live_progress[concern.id] = {"event": frame.event, "text": text, "at": _utcnow_iso()}
+        self._dashboard_event(self._concern_event("concern_progress", concern, event=frame.event, text=text))
         if self.connections.is_connected(concern.from_instance):
             await self.connections.send_to(concern.from_instance, frame)
 
@@ -850,16 +856,16 @@ class BotPortServer:
 
         self._release(concern)
         self._pending_dispatch.pop(concern.id, None)
-        self._last_progress.pop(concern.id, None)
-        self._pending_progress.pop(concern.id, None)
+        self._forget_progress(concern.id)
 
         if not msg.ok:
+            concern.metadata["error"] = (msg.error or "The remote agent failed")[:500]
             await self.concerns.fail_concern(concern.id, reason=msg.error or "agent_error")
             await self._deliver_result(concern, ConcernResultMessage(
                 concern_id=concern.id, ok=False, error=msg.error or "The remote agent failed",
                 from_instance_name=concern.assigned_instance_name, target_agent=concern.target_agent,
             ))
-            self._dashboard_event({"type": "concern_result", "concern_id": concern.id})
+            self._dashboard_event(self._concern_event("concern_result", concern))
             return
 
         # Store persona name in concern metadata for dashboard.
@@ -888,7 +894,7 @@ class BotPortServer:
             await self.concerns.close_concern(concern.id, reason="completed")
 
         self.counters["results_relayed"] += 1
-        self._dashboard_event({"type": "concern_result", "concern_id": concern.id})
+        self._dashboard_event(self._concern_event("concern_result", concern))
         log.info(
             "Result relayed: concern=%s %s -> %s (%d chars)",
             concern.id[:8], concern.assigned_instance_name, concern.from_instance_name,
@@ -939,6 +945,11 @@ class BotPortServer:
             if not box:
                 self._outbox.pop(iid, None)
 
+    def _forget_progress(self, concern_id: str) -> None:
+        self._last_progress.pop(concern_id, None)
+        self._pending_progress.pop(concern_id, None)
+        self.live_progress.pop(concern_id, None)
+
     def _release(self, concern: Concern) -> None:
         """Give the assignee's capacity slot back (exactly once)."""
         if concern.counted_active and concern.assigned_instance:
@@ -950,8 +961,8 @@ class BotPortServer:
         """Fail a concern and tell the originator (and optionally the assignee)."""
         self._release(concern)
         self._pending_dispatch.pop(concern.id, None)
-        self._last_progress.pop(concern.id, None)
-        self._pending_progress.pop(concern.id, None)
+        self._forget_progress(concern.id)
+        concern.metadata["error"] = error[:500]
         await self.concerns.fail_concern(concern.id, reason=reason)
         await self._deliver_result(concern, ConcernResultMessage(
             concern_id=concern.id, ok=False, error=error,
@@ -961,26 +972,25 @@ class BotPortServer:
             await self.connections.send_to(concern.assigned_instance, ConcernClosedMessage(
                 concern_id=concern.id, reason=reason,
             ))
-        self._dashboard_event({"type": "concern_result", "concern_id": concern.id})
+        self._dashboard_event(self._concern_event("concern_result", concern))
 
     async def _close_and_release(self, concern: Concern, *, reason: str, notify_assignee: bool) -> None:
         self._release(concern)
         self._pending_dispatch.pop(concern.id, None)
-        self._last_progress.pop(concern.id, None)
-        self._pending_progress.pop(concern.id, None)
+        self._forget_progress(concern.id)
         await self.concerns.close_concern(concern.id, reason=reason)
         if notify_assignee and concern.assigned_instance:
             await self.connections.send_to(concern.assigned_instance, ConcernClosedMessage(
                 concern_id=concern.id, reason=reason,
             ))
+        self._dashboard_event(self._concern_event("concern_result", concern, reason=reason))
 
     async def _on_concern_expired(self, concern: Concern, reason: str) -> None:
         """The concern manager ended a concern (idle, deadline, assignee gone)."""
         self.counters["timeouts"] += 1
         self._release(concern)
         self._pending_dispatch.pop(concern.id, None)
-        self._last_progress.pop(concern.id, None)
-        self._pending_progress.pop(concern.id, None)
+        self._forget_progress(concern.id)
         cfg = self.config.concerns
         target = concern.assigned_instance_name or "the remote agent"
         if reason == "assignee_disconnected":
@@ -989,6 +999,8 @@ class BotPortServer:
             error = f"{target} did not finish in time"
         else:
             error = f"No activity from {target} for {cfg.idle_timeout_seconds}s — gave up"
+        concern.metadata["error"] = error[:500]
+        await self.concerns.persist(concern)
         await self._deliver_result(concern, ConcernResultMessage(
             concern_id=concern.id, ok=False, error=error,
             from_instance_name=concern.assigned_instance_name, target_agent=concern.target_agent,
@@ -1002,7 +1014,7 @@ class BotPortServer:
             await self.connections.send_to(concern.assigned_instance, ConcernClosedMessage(
                 concern_id=concern.id, reason=reason,
             ))
-        self._dashboard_event({"type": "concern_result", "concern_id": concern.id})
+        self._dashboard_event(self._concern_event("concern_result", concern))
         log.warning("Concern %s ended (%s): %s", concern.id[:8], reason, error)
 
     # ── Follow-ups ───────────────────────────────────────────────
@@ -1250,6 +1262,16 @@ class BotPortServer:
 
     # ── Dashboard live events ────────────────────────────────────
 
+    def _concern_event(self, kind: str, concern: Concern, **extra: Any) -> dict[str, Any]:
+        return {
+            "type": kind, "concern_id": concern.id, "status": concern.status,
+            "from": concern.from_instance, "from_name": concern.from_instance_name,
+            "from_agent": concern.from_agent, "to": concern.assigned_instance or "",
+            "to_name": concern.assigned_instance_name, "target_agent": concern.target_agent,
+            "mode": concern.mode, "answered": any(m.direction == "response" for m in concern.messages),
+            **extra,
+        }
+
     def _dashboard_event(self, event: dict[str, Any]) -> None:
         if not self.dashboard_sockets:
             return
@@ -1282,6 +1304,8 @@ class BotPortServer:
             self._last_progress.pop(cid, None)
         for cid in [c for c in self._pending_progress if c not in live]:
             self._pending_progress.pop(cid, None)
+        for cid in [c for c in self.live_progress if c not in live]:
+            self.live_progress.pop(cid, None)
 
     def status_snapshot(self) -> dict[str, Any]:
         decks = self.connections.list_decks(connected_only=False)
@@ -1353,6 +1377,22 @@ async def _safe_send(ws: web.WebSocketResponse, text: str) -> None:
         await asyncio.wait_for(ws.send_str(text), timeout=5.0)
     except Exception:
         pass
+
+
+def _progress_text(event: str, data: dict[str, Any]) -> str:
+    """One line describing a progress frame, for the dashboard ("" for heartbeats)."""
+    if event == "heartbeat":
+        return ""
+    if event == "accepted":
+        return "accepted the task"
+    if event == "tool":
+        name = str(data.get("tool_name") or data.get("tool") or "").strip()
+        return f"using {name}"[:160] if name else ""
+    if event == "thinking":
+        text = str(data.get("text") or "").strip()
+        tool = str(data.get("tool") or "").strip()
+        return (text or (f"thinking about {tool}" if tool else "thinking"))[:160]
+    return str(data.get("status") or data.get("text") or "").strip()[:160]
 
 
 def _clip_data(data: dict[str, Any], limit: int = 4000) -> dict[str, Any]:
