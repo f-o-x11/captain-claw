@@ -303,6 +303,9 @@ class MicrosoftMailTool(Tool):
         "is already drafted or sent, don't create another: report it (update_draft revises a draft). "
         "create_draft refuses a repeat itself ('Not created — repeat of …'): that is not a failure, "
         "don't retry; pass allow_repeat=true only if the user explicitly wants another copy. "
+        "A new edition of a recurring email (a scheduled or weekly report) is not a repeat: give "
+        "it its date in the subject (e.g. 'Weekly report — <today's date>') so it never repeats "
+        "the last one. "
         "Replies pass reply_to_message_id (reply_all=true for reply-all) so the draft stays in the "
         "conversation. ATTACHMENTS: read_message lists them numbered; get_attachment saves them and "
         "names the tool that reads each. ATTACHING FILES: create_draft / update_draft take "
@@ -465,7 +468,8 @@ class MicrosoftMailTool(Tool):
                 "type": "boolean",
                 "description": (
                     "create_draft: true ONLY when the user explicitly asked for another copy of an "
-                    "email already drafted or sent. Default false."
+                    "email already drafted or sent. Default false. Not for the next edition of a "
+                    "recurring report — date its subject instead."
                 ),
             },
             "max_results": {"type": "number", "description": "Maximum results (default 10, max 50)."},
@@ -1136,8 +1140,7 @@ class MicrosoftMailTool(Tool):
         return (
             f"Not created {gmail_compose.REPEAT_MARK}{desc}{more}. This email is already drafted "
             f"or sent, so no new copy was made. Tell the user, with that Draft ID or sent date.{todo}"
-            " Don't retry. Only if the user explicitly asks for another, separate copy, call "
-            "again with allow_repeat=true."
+            + gmail_compose.repeat_way_past(reply=bool(conversation_id))
         )
 
     async def _find_repeats(

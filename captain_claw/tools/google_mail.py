@@ -325,7 +325,9 @@ class GoogleMailTool(Tool):
         "email (then pass allow_repeat=true). Different recipients are not repeats. "
         "create_draft and send also refuse a repeat themselves ('Not created — repeat of …', "
         "'… not sent — repeat of …'): that is not a failure — report the existing email, don't "
-        "retry. "
+        "retry. A new edition of a recurring email (a scheduled or weekly report) is not a "
+        "repeat: give it its date in the subject (e.g. 'Weekly report — <today's date>') so it "
+        "never repeats the last one. "
         "ATTACHMENTS: read_message lists them numbered; get_attachment (message_id + attachment "
         "number/name, or 'all') saves them and tells you which tool reads each — open an "
         "attachment before answering questions about its contents. "
@@ -556,7 +558,8 @@ class GoogleMailTool(Tool):
                     "for another copy of an email that is already drafted or sent. "
                     "Default false — the tool then refuses a repeat (same recipient and "
                     "subject already in Drafts or recently in Sent; for a reply, a draft "
-                    "or a sent reply already in the thread)."
+                    "or a sent reply already in the thread). Not for the next edition of a "
+                    "recurring report — date its subject instead."
                 ),
             },
             "label": {
@@ -2079,7 +2082,8 @@ class GoogleMailTool(Tool):
             thread_id=thread_id, after_ms=after_ms,
             days=get_config().tools.google_mail.repeat_check_days,
         )
-        return gmail_compose.repeat_refusal(matches, lead=lead) if matches else ""
+        return gmail_compose.repeat_refusal(
+            matches, lead=lead, reply=bool(thread_id)) if matches else ""
 
     async def _action_create_draft(
         self,
