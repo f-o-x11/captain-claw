@@ -124,6 +124,7 @@ from captain_claw.flight_deck.glasses_bridge import (
     _check_token,
     _ensure_agent_binding,
     _get_or_create_channel,
+    await_agent_link,
     broadcast_deck_control,
     step_deck_and_wait,
 )
@@ -949,6 +950,9 @@ async def _upload_file_to_agent(
     params = {"extract": "0"}
     if auth:
         params["token"] = auth
+    from captain_claw.flight_deck import agent_idle
+
+    await agent_idle.wake_port(port, host)  # asleep for being idle: the file wakes it
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
             if isinstance(data, (bytes, bytearray)):
@@ -1436,11 +1440,7 @@ async def _sender_worker(ch: Any, st: _AgentState) -> None:
                     await asyncio.sleep(0.3)  # let a turn that just ended settle
                 if ch.agent_ws is None:
                     await _rebind(ch)
-                    for _ in range(20):
-                        if ch.agent_ws is not None:
-                            break
-                        await asyncio.sleep(0.1)
-                    if ch.agent_ws is None:
+                    if not await await_agent_link(ch, 2.0):
                         await asyncio.sleep(1.0)
                         continue  # still down: try again (bounded by _TURN_MAX_WAIT)
                 # Every await above may have let an earlier turn's late refusal
@@ -1528,11 +1528,7 @@ async def _send_turn(
         st.enqueue(turn)
         _ensure_sender(ch, st)
         return True
-    for _ in range(_AGENT_WS_WAIT_TICKS):
-        if ch.agent_ws is not None:
-            break
-        await asyncio.sleep(0.1)
-    if ch.agent_ws is None:
+    if not await await_agent_link(ch, _AGENT_WS_WAIT_TICKS / 10):
         _restore_pending(waid, turn.items)
         await _notify_direct(waid, "Agent not ready, try again.")
         if turn.items:
@@ -2748,6 +2744,9 @@ async def _classify_reaction(
         "max_tokens": _REACTION_MAX_TOKENS,
     }
     params = {"token": token} if token else {}
+    from captain_claw.flight_deck import agent_idle
+
+    await agent_idle.wake_port(agent_port, agent_host)  # the message wakes it anyway
     try:
         async with httpx.AsyncClient(timeout=_reaction_timeout()) as client:
             r = await client.post(
@@ -3185,6 +3184,9 @@ async def _upload_image_to_agent(
     """POST image bytes to the agent's /api/image/upload; return saved path."""
     params = {"token": auth} if auth else {}
     files = {"file": (filename, blob, "image/jpeg")}
+    from captain_claw.flight_deck import agent_idle
+
+    await agent_idle.wake_port(port, host)  # asleep for being idle: the picture wakes it
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(

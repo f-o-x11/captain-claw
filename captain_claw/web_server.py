@@ -269,6 +269,17 @@ class SpeakerSessionLimitError(Exception):
 class WebServer:
     """Captain Claw web UI server."""
 
+    # Every turn on the main lane flips _busy; the last flip is when this agent
+    # was last at work (GET /api/activity — Flight Deck's idle controller).
+    @property
+    def _busy(self) -> bool:
+        return self._busy_flag
+
+    @_busy.setter
+    def _busy(self, value: bool) -> None:
+        self._busy_flag = value
+        self._last_active_at = time.time()
+
     def __init__(self, config: Config):
         self.config = config
         self.agent: Agent | None = None
@@ -1503,6 +1514,17 @@ class WebServer:
         return await revert_instruction(self, request)
 
     # Config / Sessions / Commands
+    async def _get_activity(self, request: web.Request) -> web.Response:
+        """Whether this agent is at work now, and when it last was. Flight
+        Deck asks before it puts an idle agent to sleep (agent_idle.py)."""
+        busy = bool(self._busy) or (self._active_task is not None and not self._active_task.done())
+        if not busy:
+            lanes = [*self._lane_agents.values(), *self._speaker_agents.values()]
+            busy = any(getattr(a, "_lane_busy", False) or getattr(a, "_public_busy", False) for a in lanes)
+        if busy:
+            self._last_active_at = time.time()
+        return web.json_response({"busy": busy, "last_active_at": self._last_active_at})
+
     async def get_config_summary(self, request: web.Request) -> web.Response:
         from captain_claw.web.rest_config import get_config_summary
         return await get_config_summary(self, request)
@@ -3128,6 +3150,7 @@ class WebServer:
         app.router.add_put("/api/instructions/{name}", self.put_instruction)
         app.router.add_delete("/api/instructions/{name}", self.revert_instruction)
         app.router.add_get("/api/config", self.get_config_summary)
+        app.router.add_get("/api/activity", self._get_activity)
         app.router.add_get("/api/settings/schema", self._get_settings_schema)
         app.router.add_get("/api/settings", self._get_settings_values)
         app.router.add_put("/api/settings", self._put_settings)

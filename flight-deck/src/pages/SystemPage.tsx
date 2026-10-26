@@ -424,6 +424,9 @@ export function SystemPage() {
               Only mine
             </label>
           )}
+          {summary && !!summary.asleep && (
+            <span className="text-xs text-zinc-600" title="Put to sleep for being idle — they wake when needed">{summary.asleep} asleep</span>
+          )}
           {summary && summary.stopped > 0 && (
             <span className="text-xs text-zinc-600">{summary.stopped} stopped agent(s)</span>
           )}

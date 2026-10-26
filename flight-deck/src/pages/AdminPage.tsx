@@ -19,6 +19,7 @@ import { SharedTelegramBotAdmin } from '../components/admin/SharedTelegramBotAdm
 import { SharedCredentialsAdmin } from '../components/admin/SharedCredentialsAdmin'
 import { BrandingAdmin } from '../components/admin/BrandingAdmin'
 import { Switch } from '../components/admin/Switch'
+import { IdleAgentsSetting, IDLE_AGENTS_HINT, IDLE_AGENTS_TITLE } from '../components/admin/IdleAgentsSetting'
 import {
   adminHeaders, CONFIG_DEFAULTS, fetchConfig, fetchPlans, openUsersTab, saveConfig, waitlistName,
   type KioskMode, type PlanLimits, type SystemConfig,
@@ -216,6 +217,7 @@ export function AdminPage() {
   const [tab, setTab] = useState<AdminTab>(takeRequestedTab)
   const [plans, setPlans] = useState<Record<string, PlanLimits>>({})
   const [config, setConfig] = useState<SystemConfig>({ ...CONFIG_DEFAULTS })
+  const [idleSaving, setIdleSaving] = useState(false)
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({})
   const [providerKeysDraft, setProviderKeysDraft] = useState<Record<string, string>>({})
   const [keySaveFlash, setKeySaveFlash] = useState<string | null>(null)
@@ -496,6 +498,26 @@ export function AdminPage() {
                   }`} />
                 </button>
               </label>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm text-zinc-300">{IDLE_AGENTS_TITLE}</div>
+                  <div className="text-xs text-zinc-500 mt-0.5">{IDLE_AGENTS_HINT}</div>
+                </div>
+                <IdleAgentsSetting
+                  minutes={config.agent_idle_stop_minutes}
+                  busy={idleSaving}
+                  onSave={async (m) => {
+                    setIdleSaving(true)
+                    try {
+                      setConfig(await saveConfig({ agent_idle_stop_minutes: m }))
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : 'Failed to save config')
+                    } finally {
+                      setIdleSaving(false)
+                    }
+                  }}
+                />
+              </div>
             </div>
 
             {/* Kiosk mode (simple chat) */}

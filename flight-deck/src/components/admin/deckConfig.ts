@@ -32,13 +32,15 @@ export interface SystemConfig {
   instance_description: string
   // "Powered by Captain" (captain-claw.com · GitHub) in the sign-in page's footer.
   show_powered_by: boolean
+  // A process agent idle this many minutes is put to sleep (0 = never).
+  agent_idle_stop_minutes: number
 }
 
 export const CONFIG_DEFAULTS: SystemConfig = {
   docker_spawn_enabled: true, kiosk_mode: 'off', kiosk_new_users: false,
   waitlist_enabled: true, waitlist_cohort: '',
   instance_name: 'Captain', instance_description: 'Agent Management Console',
-  show_powered_by: true,
+  show_powered_by: true, agent_idle_stop_minutes: 0,
 }
 
 // What applicants join: the waitlist name an admin set, else the instance name.

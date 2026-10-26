@@ -54,6 +54,7 @@ from captain_claw.flight_deck import context_packs
 from captain_claw.flight_deck import speaker_grants
 from captain_claw.flight_deck import shared_workspace
 from captain_claw.flight_deck import usage_quota
+from captain_claw.flight_deck import agent_idle
 
 
 # ── Console logging: timestamps + ANSI colors ──────────────────────────
@@ -672,8 +673,10 @@ def _reattach_processes():
     stagger_s = float(os.environ.get("FD_REATTACH_STAGGER_S", "0.3"))
     first_launch = True
     for slug, entry in registry.items():
-        # Skip agents that were intentionally stopped by the user
-        if entry.get("stopped"):
+        # Skip agents that were intentionally stopped by the user — and the
+        # ones the idle controller put to sleep (agent_idle): they wake when
+        # something needs them.
+        if entry.get("stopped") or entry.get("asleep"):
             skipped.append(slug)
             continue
         pid = entry.get("pid")
@@ -974,6 +977,12 @@ async def lifespan(app: FastAPI):
         app.state.scheduler_stop = _sched_stop
         app.state.scheduler_task = asyncio.create_task(_sched_loop(_sched_stop))
         print("Flight Deck: scheduler started")
+    # ── Agent controller: idle process agents go to sleep, and wake 5 min
+    # before a scheduled run or when something needs them (agent_idle.py).
+    # Inert until an admin sets a time (Settings → Agents). ──
+    _idle_stop = asyncio.Event()
+    app.state.agent_idle_stop = _idle_stop
+    app.state.agent_idle_task = asyncio.create_task(agent_idle.controller_loop(_idle_stop))
     # ── Payments loop (FD_PAYMENTS): expiry, bank statement syncs (Phase 4). ──
     if payments_routes.enabled():
         from captain_claw.flight_deck.payments_jobs import payments_loop as _pay_loop
@@ -1214,6 +1223,12 @@ async def lifespan(app: FastAPI):
                 await asyncio.wait_for(app.state.scheduler_task, timeout=5.0)
             except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                 pass
+    if hasattr(app.state, "agent_idle_stop"):
+        app.state.agent_idle_stop.set()
+        try:
+            await asyncio.wait_for(app.state.agent_idle_task, timeout=5.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
     if hasattr(app.state, "payments_stop"):
         app.state.payments_stop.set()
         try:
@@ -2657,6 +2672,14 @@ async def list_containers(request: Request, user: dict | None = _agent_manager_d
     return infos
 
 
+def _port_reserved(port: int, slug: str) -> bool:
+    """``port`` is another registered process agent's (running, stopped or asleep)."""
+    for other, entry in _load_process_registry().items():
+        if other != slug and int(entry.get("web_port") or 0) == port:
+            return True
+    return False
+
+
 def _is_port_available(port: int) -> bool:
     """Check if a TCP port is available on localhost."""
     import socket
@@ -2912,8 +2935,10 @@ async def spawn_agent(config: AgentConfig, request: Request, user: dict | None =
     # removed agent's (process or container) that isn't the caller's.
     _refuse_other_owners_folder(slug, owner_id)
 
-    # Ensure port is available; find a free one if not
-    if config.web_enabled and (config.web_port <= 0 or not _is_port_available(config.web_port)):
+    # Ensure port is available; find a free one if not. A stopped or sleeping
+    # agent's port is free on the host but still its own: it comes back on it.
+    if config.web_enabled and (config.web_port <= 0 or not _is_port_available(config.web_port)
+                               or _port_reserved(config.web_port, slug)):
         config.web_port = _find_available_port(config.web_port if config.web_port > 0 else 24080)
 
     # Auto-generate auth token if none provided — prevents unauthenticated
@@ -4696,6 +4721,16 @@ def _process_chat_target(agent: str) -> dict | None:
     return _load_process_registry().get(agent[len("proc-"):])
 
 
+def _is_wake_frame(text: str) -> bool:
+    """``{"type": "fd_wake"}``: the chat asks Flight Deck to wake a sleeping agent."""
+    if '"fd_wake"' not in text:
+        return False
+    try:
+        return json.loads(text).get("type") == "fd_wake"
+    except (ValueError, AttributeError):
+        return False
+
+
 def _agent_ws_retryable(exc: BaseException) -> bool:
     """A connect failure that waiting can fix: nothing listening yet, a
     handshake cut short, a 5xx while the agent boots. A 4xx is a real answer."""
@@ -4729,6 +4764,10 @@ async def agent_ws_proxy(ws: WebSocket, host: str, port: int, token: str = "", l
     answering, the proxy holds the socket for up to FD_AGENT_WS_WAIT_S seconds
     and tells the client once (``fd_agent_waiting``). If the agent comes back
     on a new port, the client hears it (``fd_agent_endpoint``).
+
+    An agent put to sleep for being idle (agent_idle) is woken by the client's
+    first frame — a message, or ``fd_wake`` — not by the connect itself, so a
+    chat left open doesn't keep it awake: the client hears ``fd_agent_asleep``.
     """
     import websockets
 
@@ -4780,7 +4819,57 @@ async def agent_ws_proxy(ws: WebSocket, host: str, port: int, token: str = "", l
     held: list[str] = []
     told_waiting = False
     agent_ws = None
+    slug = agent[len("proc-"):] if entry is not None else ""
+
+    async def hold_while_asleep() -> bool:
+        """The agent is asleep (agent_idle): keep the socket without waking it
+        until the client says something — a message typed, or ``fd_wake``
+        (sent when the chat is opened). A chat that only reconnected leaves it
+        asleep. False when the socket is done (the client left, or the agent
+        couldn't be woken)."""
+        nonlocal from_client, entry, port, deadline
+        # A frame the client sent while the proxy waited asks for it already.
+        if not held:
+            try:
+                await ws.send_text(json.dumps({"type": "fd_agent_asleep"}))
+            except Exception:
+                from_client.cancel()
+                return False
+        while not held:
+            try:
+                msg = await from_client
+            except Exception:
+                return False
+            if msg.get("type") == "websocket.disconnect":
+                return False
+            from_client = asyncio.create_task(ws.receive())
+            text = msg.get("text")
+            if text is None:
+                continue
+            if not _is_wake_frame(text):
+                held.append(text)
+            break
+        # The word that woke it waits in `held` for the agent's link.
+        if not await agent_idle.wake(slug) and agent_idle.is_asleep(slug):
+            # It didn't start: said once, as for an agent that stays away.
+            from_client.cancel()
+            try:
+                await ws.send_text(json.dumps({"type": "error", "code": "agent_unreachable",
+                                               "message": "Couldn't wake the agent"}))
+                await ws.close()
+            except Exception:
+                pass
+            return False
+        fresh = _process_chat_target(agent)
+        if fresh and fresh.get("web_port"):
+            entry, port = fresh, int(fresh["web_port"])
+        deadline = loop.time() + _AGENT_WS_WAIT_S
+        return True
+
     while agent_ws is None:
+        if slug and agent_idle.is_asleep(slug):
+            if not await hold_while_asleep():
+                return
         try:
             # ping_interval/ping_timeout keep the upstream link alive through any
             # intermediaries and surface dead peers fast — without these the proxy
@@ -4823,7 +4912,7 @@ async def agent_ws_proxy(ws: WebSocket, host: str, port: int, token: str = "", l
                 return
             if msg.get("type") == "websocket.disconnect":
                 return
-            if msg.get("text") is not None:
+            if msg.get("text") is not None and not _is_wake_frame(msg["text"]):
                 held.append(msg["text"])
             from_client = asyncio.create_task(ws.receive())
         # The agent may have announced a new port meanwhile.
@@ -4845,6 +4934,9 @@ async def agent_ws_proxy(ws: WebSocket, host: str, port: int, token: str = "", l
                 pass
 
         async def forward(data: str) -> None:
+            if _is_wake_frame(data):
+                return  # Flight Deck's own (hold_while_asleep): not the agent's
+            agent_idle.touch(slug)
             # A chat message counts against the speaker's plan allowance for
             # today; over it, the turn is refused and the client told why.
             ok, reply = await usage_quota.screen_chat_frame(speaker_id, data)
@@ -4871,6 +4963,7 @@ async def agent_ws_proxy(ws: WebSocket, host: str, port: int, token: str = "", l
         async def agent_to_client():
             try:
                 async for msg in agent_ws:
+                    agent_idle.touch(slug)
                     await ws.send_text(msg if isinstance(msg, str) else msg.decode())
             except Exception:
                 pass
@@ -4945,7 +5038,8 @@ def _fleet_snapshot() -> list[dict[str, Any]]:
             "kind": "process",
             "host": "localhost",
             "port": entry.get("web_port", 0),
-            "status": "running" if alive else "stopped",
+            # asleep: stopped for being idle (agent_idle) — a consult wakes it.
+            "status": "running" if alive else "asleep" if agent_idle.is_asleep(slug, entry) else "stopped",
             "description": entry.get("description", ""),
             "owner": entry.get("owner", ""),
         })
@@ -5243,7 +5337,8 @@ def _running_agents() -> list[dict[str, Any]]:
             "name": entry.get("name", slug),
             "host": "localhost",
             "port": entry.get("web_port", 0),
-            "status": "running" if _process_is_alive(slug) else "stopped",
+            "status": ("running" if _process_is_alive(slug)
+                       else "asleep" if agent_idle.is_asleep(slug, entry) else "stopped"),
             "description": entry.get("description", ""),
             # Carry the auth from the SAME entry so the consult uses a token that
             # matches THIS agent — port-keyed re-resolution can collide when stale
@@ -6441,6 +6536,8 @@ async def _consult_peer_events(
         return
     _active_consults[port] = source_name
     try:
+        if await agent_idle.wake_port(port, host):
+            yield {"event": "status", "data": {"status": f"Agent on port {port} was asleep — woke it"}}
         # Loopback to FD's own agent: never through an HTTP(S)_PROXY, and room
         # for a long session's welcome replay (it arrives as one frame).
         from captain_claw.flight_deck.botport_link import ws_proxy_kwargs
@@ -6582,6 +6679,7 @@ async def consult_peer(req: ConsultPeerRequest, request: Request, user: dict | N
         # Transfer the attached file to the target (FD holds its auth).
         _img, _fil = list(req.image_paths), list(req.file_paths)
         if attachment is not None:
+            await agent_idle.wake_port(req.port, _PEER_AGENT_HOST)  # asleep: the upload needs it up
             _ti, _tf = await _upload_to_agent(_PEER_AGENT_HOST, req.port, auth, *attachment)
             _img += _ti
             _fil += _tf
@@ -6685,6 +6783,7 @@ async def delegate_peer(req: DelegatePeerRequest, request: Request, user: dict |
         target_url = f"ws://{_PEER_AGENT_HOST}:{target_port}/ws{t_params}"
         response_text = ""
         relay_level = ""  # PR D: the target marked its reply member-private
+        await agent_idle.wake_port(target_port, _PEER_AGENT_HOST)
         try:
             async with websockets.connect(target_url, max_size=4 * 1024 * 1024) as ws:
                 welcome = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
@@ -6809,6 +6908,8 @@ async def _deliver_delegate_result(req: "DelegatePeerRequest", source_port: int,
         callback_msg = _private_relay_header(relay_level) + "\n" + callback_msg
     log.info("delegate_background: delivering result to source",
              source=req.source_name, source_port=source_port, result_len=len(response_text))
+    # A long delegation can outlast the source's idle time (agent_idle).
+    await agent_idle.wake_port(source_port, _PEER_AGENT_HOST)
     try:
         async with websockets.connect(source_url, open_timeout=10, close_timeout=5) as ws:
             welcome = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
@@ -8388,6 +8489,9 @@ class ProcessInfo(BaseModel):
     fleet_instructions: str = ""
     # Stable id of this agent for sharing (agent_sharing): "process:<slug>:<instance>".
     agent_ref: str = ""
+    # Stopped for being idle (agent_idle), not by its owner: still on, and it
+    # wakes when its chat is opened or something needs it. status is "stopped".
+    asleep: bool = False
 
 
 class ProcessActionResult(BaseModel):
@@ -8432,6 +8536,7 @@ async def list_processes(request: Request, user: dict | None = _agent_manager_de
             model=entry.get("model", ""),
             freebie=bool(entry.get("freebie", False)),
             agent_ref=agent_sharing.process_ref(slug, entry),
+            asleep=not alive and bool(entry.get("asleep")) and not entry.get("stopped"),
         ))
     return result
 
@@ -8485,8 +8590,10 @@ async def _spawn_process_locked(config: AgentConfig, request: Request, user: dic
     if _process_is_alive(slug):
         raise HTTPException(400, f"Process '{slug}' is already running. Stop it first or use a different name.")
 
-    # Ensure port is available; find a free one if not
-    if config.web_enabled and (config.web_port <= 0 or not _is_port_available(config.web_port)):
+    # Ensure port is available; find a free one if not. A stopped or sleeping
+    # agent's port is free on the host but still its own: it comes back on it.
+    if config.web_enabled and (config.web_port <= 0 or not _is_port_available(config.web_port)
+                               or _port_reserved(config.web_port, slug)):
         config.web_port = _find_available_port(config.web_port if config.web_port > 0 else 24080)
 
     # Auto-generate auth token if none provided — prevents unauthenticated
@@ -8635,6 +8742,7 @@ async def _spawn_process_locked(config: AgentConfig, request: Request, user: dic
         raise HTTPException(500, f"Failed to start process: {exc}")
 
     _processes[slug] = proc
+    agent_idle.touch(slug)
 
     # Stamp the live PID. Read-modify-write so we don't clobber a port the
     # child may have already announced between Popen and now.
@@ -8737,6 +8845,13 @@ def _verify_process_owner(slug: str, user_id: str) -> dict:
 def _do_stop_process(slug: str) -> ProcessActionResult:
     """Internal helper to stop a process agent (no auth check)."""
     if not _process_is_alive(slug):
+        # Asleep (agent_idle): switched off for good now.
+        registry = _load_process_registry()
+        if registry.get(slug, {}).get("asleep"):
+            registry[slug].pop("asleep", None)
+            registry[slug].pop("asleep_at", None)
+            registry[slug]["stopped"] = True
+            _save_process_registry(registry)
         return ProcessActionResult(ok=True, slug=slug, message="Already stopped")
 
     # Our handle only while it is the live process: an agent restarted through
@@ -8756,6 +8871,9 @@ def _do_stop_process(slug: str) -> ProcessActionResult:
     if slug in registry:
         registry[slug]["pid"] = None
         registry[slug]["stopped"] = True
+        # Off is off: no longer asleep (nothing wakes it).
+        registry[slug].pop("asleep", None)
+        registry[slug].pop("asleep_at", None)
         _save_process_registry(registry)
 
     _processes.pop(slug, None)
@@ -8775,8 +8893,11 @@ def _do_start_process(slug: str) -> ProcessActionResult:
     if not (DATA_DIR / slug).is_dir():
         raise HTTPException(404, f"Agent directory not found: {DATA_DIR / slug}")
 
-    # Clear stopped flag — user is intentionally starting this agent
+    # Clear stopped flag — user is intentionally starting this agent (or the
+    # idle controller is waking it).
     entry.pop("stopped", None)
+    entry.pop("asleep", None)
+    entry.pop("asleep_at", None)
 
     if not _start_registered_process(slug, entry):
         raise HTTPException(500, "Failed to start process (captain-claw-web not found?)")
@@ -8790,7 +8911,10 @@ def _do_start_process(slug: str) -> ProcessActionResult:
     else:
         f["pid"] = entry.get("pid")
         f.pop("stopped", None)
+        f.pop("asleep", None)
+        f.pop("asleep_at", None)
     _save_process_registry(fresh)
+    agent_idle.touch(slug)
 
     return ProcessActionResult(ok=True, slug=slug, message=f"Started (PID {entry.get('pid', '?')})")
 

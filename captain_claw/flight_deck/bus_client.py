@@ -44,12 +44,13 @@ def activity_text(text: str, limit: int = 120) -> str:
 
 
 def running_agents(user_id: str) -> list[dict]:
-    """The owner's agents that are up and can take chat."""
+    """The owner's agents that are up and can take chat — asleep ones too
+    (agent_idle): the first message wakes them."""
     from captain_claw.flight_deck.mcp_server_routes import _user_agents
 
     return [
         a for a in _user_agents(user_id)
-        if a.get("port") and str(a.get("status", "")).lower() in ("running", "up")
+        if a.get("port") and str(a.get("status", "")).lower() in ("running", "up", "asleep")
     ]
 
 
@@ -320,11 +321,8 @@ class BusClient:
         if ch is None:
             await self.send_json({"type": "error", "text": "No agent bound."})
             return False
-        for _ in range(50):  # the first send after binding waits for the link
-            if ch.agent_ws is not None:
-                break
-            await asyncio.sleep(0.1)
-        if ch.agent_ws is None:
+        # The first send after binding waits for the link (a sleeping agent wakes).
+        if not await gb.await_agent_link(ch):
             await self.send_json({"type": "error", "text": "Agent isn't reachable."})
             return False
         allowed, quota = await usage_quota.admit_message(self.user_id, text)

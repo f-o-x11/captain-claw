@@ -713,7 +713,10 @@ class FlowRunner:
     # ── agent pool selection ───────────────────────────────────────────
 
     def _pool(self) -> list[dict[str, Any]]:
-        return [a for a in self.get_agents() if str(a.get("status", "")).lower() in ("running", "")]
+        # A sleeping agent (agent_idle) counts — the consult wakes it — after
+        # the running ones, so a pick that takes the first takes one that's up.
+        pool = [a for a in self.get_agents() if str(a.get("status", "")).lower() in ("running", "", "asleep")]
+        return sorted(pool, key=lambda a: str(a.get("status", "")).lower() == "asleep")
 
     def _owned_by(self, agent: dict[str, Any], user_id: str) -> bool:
         """Does *agent* belong to *user_id*, per FD's spawn records? An agent with

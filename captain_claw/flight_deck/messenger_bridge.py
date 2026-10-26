@@ -68,6 +68,7 @@ from captain_claw.flight_deck.glasses_bridge import (
     _broadcast,
     _ensure_agent_binding,
     _get_or_create_channel,
+    await_agent_link,
 )
 from captain_claw.flight_deck.meta_webhook_bridge import (
     now_iso as _now_iso,
@@ -296,11 +297,7 @@ async def _handle_message(psid: str, message: dict[str, Any]) -> None:
         return
 
     # 6. Send to the agent. Same shape as glasses_bridge's /glasses/send.
-    for _ in range(50):  # up to ~5s for first-time bind
-        if ch.agent_ws is not None:
-            break
-        await asyncio.sleep(0.1)
-    if ch.agent_ws is None:
+    if not await await_agent_link(ch):  # up to ~5s for first-time bind
         await _send_messenger_text(psid, "Agent not ready, try again.")
         return
 
@@ -412,6 +409,9 @@ async def _forward_image_to_agent(host: str, port: int, blob: bytes) -> str:
         auth = ""
     params = {"token": auth} if auth else {}
     target = f"http://{host}:{port}/api/image/upload"
+    from captain_claw.flight_deck import agent_idle
+
+    await agent_idle.wake_port(port, host)  # asleep for being idle: the picture wakes it
 
     # Use a random-ish filename so the agent's storage doesn't collide on
     # identical-name uploads from multiple chats.

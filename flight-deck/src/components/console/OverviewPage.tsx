@@ -182,7 +182,10 @@ export function OverviewPage() {
           icon={Boxes} tone="emerald" label="Agents running"
           value={f.system?.available ? f.system.summary.agents : '—'}
           loading={loading && f.system === undefined}
-          sub={f.system?.available && f.system.summary.stopped ? `${f.system.summary.stopped} stopped` : accounts ? 'across every user' : undefined}
+          sub={f.system?.available && (f.system.summary.stopped || f.system.summary.asleep)
+            ? [f.system.summary.asleep ? `${f.system.summary.asleep} asleep` : '', f.system.summary.stopped ? `${f.system.summary.stopped} stopped` : '']
+              .filter(Boolean).join(' · ')
+            : accounts ? 'across every user' : undefined}
         />
         <StatTile
           icon={MessageSquare} tone="cyan" label="Messages today" value={f.messagesToday !== undefined ? fmtNumber(f.messagesToday) : '—'}

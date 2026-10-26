@@ -133,6 +133,11 @@ export class AgentChatWS {
   // has been away.
   private _lastAuthRefresh = 0
   private _unsubAuth: (() => void) | null = null
+  // Asleep (Flight Deck's agent controller stopped it for being idle): the
+  // proxy holds the socket until we say something. A chat the user opens
+  // (connect) wakes it at once; one that only reconnected leaves it asleep.
+  private _wakeOnAsleep = false
+  private _asleep = false
 
   constructor(agentId: string, host: string, port: number, auth: string, lane: string = '', opts?: { sharedRef?: string }) {
     this.agentId = agentId
@@ -147,6 +152,9 @@ export class AgentChatWS {
   }
 
   get connected() { return this._connected }
+
+  /** The agent is asleep and this socket is held for it (see wake). */
+  get asleep() { return this._asleep }
 
   /** A socket is open (or opening) but not yet usable: it becomes usable on
    *  the agent's `welcome`. Flight Deck's proxy opens the socket first and
@@ -163,6 +171,7 @@ export class AgentChatWS {
   connect() {
     if (this.ws) this._teardownSocket()
     this._shouldReconnect = true
+    this._wakeOnAsleep = true
     // An explicit (re)connect is a fresh start for the one-refresh budget.
     this._authRetried = false
     if (this.sharedRef) this._watchToken()
@@ -210,6 +219,7 @@ export class AgentChatWS {
     this.ws.onclose = (ev) => {
       const wasConnected = this._connected
       this._connected = false
+      this._asleep = false
       this.ws = null
       this.emit('_disconnected', { wasConnected, code: ev.code })
       if (!this._shouldReconnect) return
@@ -238,11 +248,18 @@ export class AgentChatWS {
         const type = data.type || 'unknown'
         if (type === 'welcome' && !this._connected) {
           this._connected = true
+          this._asleep = false
           this._reconnectAttempt = 0
           this.emit('_connected', {})
         } else if (type === 'fd_agent_endpoint' && Number(data.port) > 0) {
           // The agent came back on another port: reconnect there next time.
           this.port = Number(data.port)
+        } else if (type === 'fd_agent_asleep') {
+          this._asleep = true
+          if (this._wakeOnAsleep) {
+            this.wake()
+            data.waking = true
+          }
         }
         this.emit(type, data)
         this.emit('_any', data)
@@ -326,6 +343,7 @@ export class AgentChatWS {
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null
       if (!this._shouldReconnect) return
+      this._wakeOnAsleep = false
       this._openSocket()
     }, delay)
   }
@@ -380,6 +398,14 @@ export class AgentChatWS {
       ...(opts?.reasoningEffort ? { reasoning_effort: opts.reasoningEffort } : {}),
     }))
     return clientMsgId
+  }
+
+  /** Ask Flight Deck to wake the sleeping agent this socket is held for. */
+  wake() {
+    this._wakeOnAsleep = false
+    if (!this._asleep || !this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this._asleep = false
+    this.ws.send(JSON.stringify({ type: 'fd_wake' }))
   }
 
   sendBtw(content: string) {

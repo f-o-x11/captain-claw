@@ -590,8 +590,12 @@ async def route_update(db, update: dict[str, Any]) -> str:
             return "over_limit"
 
     slug = str(link["agent_slug"])
+    from captain_claw.flight_deck import agent_idle
+
+    # Asleep for being idle: enqueue wakes it, and it answers in a moment.
+    asleep = agent_idle.is_asleep(slug)
     box = enqueue(slug, update)
-    if not box.online():
+    if not box.online() and not asleep:
         name = link.get("agent_name") or slug
         await _notice(chat_id, tg_user, "offline", (
             f"⏸ {name} isn't running right now — start it in Flight Deck. Your "
@@ -605,6 +609,11 @@ def enqueue(slug: str, update: dict[str, Any]) -> _Box:
     box = _box(slug)
     box.expire()
     box.queue.append((time.monotonic(), update))
+    # Asleep for being idle (agent_idle): it polls again once woken.
+    from captain_claw.flight_deck import agent_idle
+
+    agent_idle.touch(slug)
+    agent_idle.wake_soon(slug)
     for fid in _file_ids(update, []):
         _remember(box.files, fid)
     cbq = update.get("callback_query")
