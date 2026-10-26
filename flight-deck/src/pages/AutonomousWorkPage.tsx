@@ -11,9 +11,10 @@ const LEVEL_LABEL: Record<string, string> = {
   off: 'Off', propose: 'Propose only', act_low_risk: 'Act (low risk)', act: 'Act (all)',
 }
 const RISK_LEVELS = ['low', 'normal', 'high']
-// Reset leaves server-owned keys alone, and the WhatsApp nudge binding, which
-// lives on the Connections card.
-const RESET_SKIP = new Set(['max_autonomy_level', 'db_path', 'notify_waid', 'nudge_to_whatsapp'])
+// Reset leaves server-owned keys alone, and the WhatsApp nudge binding and
+// notification switches, which live on the Connections cards.
+const RESET_SKIP = new Set(['max_autonomy_level', 'db_path', 'notify_waid', 'nudge_to_whatsapp',
+  'notify_telegram', 'notify_devices'])
 const JUDGE_MODES = [
   { v: 'auto', label: 'Auto (LLM judges)' },
   { v: 'human', label: 'Human only' },

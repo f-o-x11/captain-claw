@@ -179,6 +179,14 @@ int main(int argc, char** argv) {
   ui::showHome(home);
   save("10_dashboard_note_mode");
 
+  // Proposals wait in Flight Deck: a row after the device's (main.cpp homeNow()).
+  home.noteMode = false;
+  home.rows.insert(home.rows.begin() + 1, {"Waiting", "2 in Flight Deck", kRed});
+  ui::setWaiting(2);
+  ui::drawNow();
+  ui::showHome(home);
+  save("11_dashboard_waiting");
+
   // (Asleep: the dashboard goes by the clock's five-minute marks — the Mac's
   // real clock here, so a jump of the stand-in millis() doesn't make it due.)
   return 0;

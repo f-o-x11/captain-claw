@@ -1,5 +1,5 @@
 import { useState, type ComponentType, type ReactNode } from 'react'
-import { Plug, Mail, LayoutGrid, Sparkles, MessageCircle, Database, Scale, Send, Mic, Cable, Smartphone } from 'lucide-react'
+import { Plug, Mail, LayoutGrid, Sparkles, MessageCircle, Database, Scale, Send, Mic, Cable, Smartphone, Bell } from 'lucide-react'
 import GoogleConnection from '../components/connections/GoogleConnection'
 import MicrosoftConnection from '../components/connections/MicrosoftConnection'
 import CodexConnection from '../components/connections/CodexConnection'
@@ -9,6 +9,7 @@ import MCPAgentAccess from '../components/connections/MCPAgentAccess'
 import AgentLinksConnection, { type LinksStatus } from '../components/connections/AgentLinksConnection'
 import TypesenseConnection from '../components/connections/TypesenseConnection'
 import WhatsAppNudgeConnection from '../components/connections/WhatsAppNudgeConnection'
+import NotificationsConnection from '../components/connections/NotificationsConnection'
 import JevConnection from '../components/connections/JevConnection'
 import SonioxConnection from '../components/connections/SonioxConnection'
 import TelegramConnection from '../components/connections/TelegramConnection'
@@ -21,7 +22,7 @@ import { useMCPStore } from '../stores/mcpStore'
 import { useJevStore } from '../stores/jevStore'
 import { useSonioxStore } from '../stores/sonioxStore'
 
-export type TabId = 'google' | 'microsoft' | 'telegram' | 'whatsapp_web' | 'codex' | 'antigravity' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'whatsapp' | 'typesense'
+export type TabId = 'google' | 'microsoft' | 'telegram' | 'whatsapp_web' | 'codex' | 'antigravity' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'notify' | 'whatsapp' | 'typesense'
 
 interface TabDef {
   id: TabId
@@ -47,6 +48,8 @@ const TABS: TabDef[] = [
   { id: 'jev', label: 'Jev', icon: Scale },
   // Speech-to-text / voice — the user's own key (else the team's); kiosk users connect theirs too.
   { id: 'soniox', label: 'Soniox', icon: Mic },
+  // Where Autonomous Work's nudges and waiting proposals reach the user.
+  { id: 'notify', label: 'Notifications', icon: Bell, deckOnly: true },
   { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, deckOnly: true },
   { id: 'typesense', label: 'Deep memory', icon: Database, deckOnly: true },
 ]
@@ -188,6 +191,7 @@ export default function ConnectionsPage({ kiosk = false, initialTab }: { kiosk?:
         {panel('systems', <AgentLinksConnection active={active === 'systems'} onStatus={setSystems} />)}
         {panel('jev', <JevConnection />)}
         {panel('soniox', <SonioxConnection />)}
+        {panel('notify', <NotificationsConnection />)}
         {panel('whatsapp', <WhatsAppNudgeConnection />)}
         {panel('typesense', <TypesenseConnection />)}
       </div>

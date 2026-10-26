@@ -22,6 +22,7 @@ void setBoost(uint8_t db);
 void beep();  // short tone at the current volume (feedback for volume changes)
 void cue();   // two-tone "about to speak" chime
 void cueEnd(); // the same two tones the other way round: "done speaking"
+void chime();  // two rising tones, wider apart: something new waits in Flight Deck
 // Recording sounds — single notes, unlike the two-note speech chimes:
 void talkStart(); // a short high blip as a recording begins; returns 0.25 s later, the blip played
 void talkEnd();   // a short lower blip when it's let go (sent, or kept offline)

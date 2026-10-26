@@ -1214,6 +1214,12 @@ class AutonomousWorkConfig(BaseModel):
     # without auth pushes to every allowlisted number; with auth, nowhere.
     nudge_to_whatsapp: bool = True
     notify_waid: str = ""
+    # The other channels nudges — and proposals waiting for approval — reach
+    # (WhatsApp above is one of them, for both): the user's own chat with the
+    # deck's shared Telegram bot, and their connected devices, which beep and
+    # show how many proposals wait (the text stays in Flight Deck). owner_notify.py.
+    notify_telegram: bool = False
+    notify_devices: bool = True
 
     # ── #5 Grounded verification — confirm a side effect actually landed ──
     # After a catalog action with a verify spec runs, read it back; if it's

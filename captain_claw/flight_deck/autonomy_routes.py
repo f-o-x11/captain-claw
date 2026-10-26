@@ -8,6 +8,7 @@ Scoped to the logged-in user. Phase 1 surface:
   * GET     /fd/autonomy/reliability   — learned per-kind weights
   * POST    /fd/autonomy/nudge         — force one arbiter pass (no-op until Phase 2)
   * GET/PUT /fd/autonomy/whatsapp      — this user's WhatsApp nudge number (+ POST …/test)
+  * GET/PUT /fd/autonomy/notify        — which channels nudges and waiting proposals reach (+ POST …/test)
 
 Approve/reject already move ledger rows; wiring them through to ``follow_through``
 (intentions) and dispatch lands with Topics 1–3.
@@ -83,16 +84,17 @@ async def put_config_route(
     """Save per-user overrides. Body is a partial config dict; unknown and
     server-owned keys (the ceiling) are ignored. Returns the new effective config.
 
-    The WhatsApp keys are owned by PUT /fd/autonomy/whatsapp (validated there):
-    a whole-config save from the Autonomous Work page — its Reset, or a stale
-    tab — keeps the stored number and switch instead of wiping or overwriting them."""
+    The WhatsApp keys are owned by PUT /fd/autonomy/whatsapp (validated there),
+    the other channel switches by PUT /fd/autonomy/notify: a whole-config save
+    from the Autonomous Work page — its Reset, or a stale tab — keeps the stored
+    number and switches instead of wiping or overwriting them."""
     uid = _user_id(request)
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
     overrides = dict(body.get("config") if isinstance(body.get("config"), dict) else body)
     stored = get_store().get_overrides(uid)
-    for key in _WHATSAPP_KEYS:
+    for key in _WHATSAPP_KEYS + _NOTIFY_KEYS:
         overrides.pop(key, None)
         if key in stored:
             overrides[key] = stored[key]
@@ -273,6 +275,111 @@ async def test_whatsapp_route(
             waid, "Captain Claw: test nudge — autonomous nudges will reach you here.")
         results.append({"to": waid, "ok": ok, "error": why})
     return {"sent": sum(1 for r in results if r["ok"]), "total": len(results), "results": results}
+
+
+# ── Where nudges and waiting proposals reach the user (a switch per channel) ──
+
+# Channel → its switch in the autonomy config (WhatsApp's predates the others).
+_NOTIFY_SWITCHES = {"whatsapp": "nudge_to_whatsapp", "telegram": "notify_telegram",
+                    "devices": "notify_devices"}
+_NOTIFY_KEYS = ("notify_telegram", "notify_devices")
+_last_notify_test_at: dict[str, float] = {}
+
+
+def _notify_state(uid: str) -> dict[str, Any]:
+    """Each channel: switched on, can it reach this user, and what that means."""
+    from captain_claw.flight_deck.device_bridge import connected_devices
+    from captain_claw.flight_deck.fd_scheduler import _owner_telegram_chat
+    from captain_claw.flight_deck.owner_notify import waiting_count
+
+    cfg = resolve_config(uid)
+    wa = _whatsapp_state(uid)
+    tg_linked = bool(_owner_telegram_chat(uid))
+    devices = connected_devices(uid)
+    return {
+        "autonomy_active": wa["autonomy_active"],
+        "waiting": waiting_count(uid),
+        "channels": {
+            "whatsapp": {
+                "on": bool(cfg.get("nudge_to_whatsapp", True)),
+                "ready": bool(wa["bridge_configured"] and wa["recipients"]),
+                "detail": (", ".join(f"+{w}" for w in wa["recipients"]) if wa["recipients"]
+                           else "WhatsApp isn't set up on this deck" if not wa["bridge_configured"]
+                           else wa["issue"] or "no number yet"),
+            },
+            "telegram": {
+                "on": bool(cfg.get("notify_telegram", False)),
+                "ready": tg_linked,
+                "detail": ("your chat with the deck's bot" if tg_linked
+                           else "Telegram isn't linked — link it in Connections → Telegram"),
+            },
+            "devices": {
+                "on": bool(cfg.get("notify_devices", True)),
+                "ready": True,  # one asleep hears it when it next connects
+                "connected": devices,
+                "detail": (f"{devices} connected now" if devices
+                           else "none connected now — they hear it when they next connect"),
+            },
+        },
+    }
+
+
+@router.get("/notify")
+async def get_notify_route(
+    request: Request,
+    _user: dict | None = Depends(get_optional_user),
+):
+    """Which channels this user's nudges and waiting proposals reach."""
+    return _notify_state(_user_id(request))
+
+
+@router.put("/notify")
+async def put_notify_route(
+    request: Request,
+    _user: dict | None = Depends(get_optional_user),
+):
+    """Switch channels on or off: ``{"whatsapp"|"telegram"|"devices": bool}``,
+    merged into the user's other overrides."""
+    uid = _user_id(request)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    overrides = get_store().get_overrides(uid)
+    devices_were_on = bool(resolve_config(uid).get("notify_devices", True))
+    for channel, key in _NOTIFY_SWITCHES.items():
+        if channel not in body:
+            continue
+        if not isinstance(body[channel], bool):
+            raise HTTPException(status_code=400, detail=f"{channel} must be true or false")
+        overrides[key] = body[channel]
+    save_config(uid, overrides)
+    if devices_were_on and body.get("devices") is False:
+        from captain_claw.flight_deck.owner_notify import devices_switched_off
+        await devices_switched_off(uid)
+    return _notify_state(uid)
+
+
+@router.post("/notify/test")
+async def test_notify_route(
+    request: Request,
+    _user: dict | None = Depends(get_optional_user),
+):
+    """One test through every channel switched on — devices beep. At most one
+    a minute per user."""
+    from captain_claw.flight_deck.owner_notify import notify_owner
+
+    uid = _user_id(request)
+    key = _norm_user(uid)
+    now = time.monotonic()
+    last = _last_notify_test_at.get(key)
+    if last is not None and now - last < _TEST_COOLDOWN_S:
+        wait = int(_TEST_COOLDOWN_S - (now - last)) + 1
+        raise HTTPException(status_code=429, detail=f"Wait {wait}s before sending another test.")
+    _last_notify_test_at[key] = now
+    res = await notify_owner(uid, "test", "Captain: test notification — nudges and proposals "
+                                          "waiting for you will reach you here.",
+                             device_text="Test: notifications reach this device")
+    return {"sent": res}
 
 
 @router.get("/actions")

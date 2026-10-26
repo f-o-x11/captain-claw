@@ -1017,6 +1017,7 @@ static String clockLength(uint32_t secs) {
 
 static Home lastHome;  // what the main loop last knew of the links (its rows: Wi-Fi, deck, agent)
 static bool haveHome = false;
+static int waitingCount = 0;  // proposals waiting in Flight Deck, as last heard (setWaiting)
 
 // The dashboard's top: the header (the clock as of this drawing, the links'
 // dots, the battery), the date, the room, the battery's block. Returns where
@@ -1064,6 +1065,7 @@ static void drawDashboard(bool asleep) {
     font(vlw::BodyS);
     text(fit(String("Press ") + board::kTalkKey + " to wake it and talk.", w), x, y, kInk);
     text("Redrawn every five minutes.", x, y + 32, kInk);
+    if (waitingCount > 0) text(fit(String(waitingCount) + " waiting in Flight Deck", w), x, y + 64, kRed);
   } else {
     font(vlw::Small);
     int labelW = 0;
@@ -1105,6 +1107,8 @@ static void dashboardIfDue() {
   forceNext = false;
   if (now || (dashDue() && !held)) askDashboard(false, !now);
 }
+
+void setWaiting(int count) { waitingCount = count; }
 
 void setHome(const Home& home) {
   lastHome = home;

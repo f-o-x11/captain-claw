@@ -10,7 +10,8 @@
 // the left light shows Wi-Fi and the right one the agent; offline (the first
 // minute), the left one blinks blue with no Wi-Fi, the right one with Wi-Fi
 // but no Flight Deck or agent; idle, a short blink every 10 s says how close
-// sleep is. Devices without lights ignore all of it.
+// sleep is; while proposals wait in Flight Deck, that blink is magenta on
+// the right. Devices without lights ignore all of it.
 #pragma once
 
 #include <Arduino.h>
@@ -47,6 +48,11 @@ enum class Step : uint8_t { Tool, Narration, Model };
 void action(Step step);
 // Something went wrong: two red blinks.
 void alert();
+// Something new waits in Flight Deck (a proposal, a nudge): magenta blinks
+// on both lights for two seconds.
+void notify();
+// Proposals wait in Flight Deck: the idle blink's right light is magenta.
+void setWaiting(bool waiting);
 // From loop(): animates the lights (at most ~30 times a second).
 void tick();
 // Off now (before sleep).

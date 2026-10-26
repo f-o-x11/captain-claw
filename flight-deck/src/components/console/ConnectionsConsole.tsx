@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import {
-  Plug, Mail, LayoutGrid, Send, Scale, Mic, Sparkles, MessageCircle, Database, ChevronRight, ChevronLeft, Cable, Smartphone,
+  Plug, Mail, LayoutGrid, Send, Scale, Mic, Sparkles, MessageCircle, Database, ChevronRight, ChevronLeft, Cable, Smartphone, Bell,
 } from 'lucide-react'
 import GoogleConnection from '../connections/GoogleConnection'
 import MicrosoftConnection from '../connections/MicrosoftConnection'
@@ -14,6 +14,7 @@ import AgentLinksConnection, { type LinksStatus } from '../connections/AgentLink
 import JevConnection from '../connections/JevConnection'
 import SonioxConnection from '../connections/SonioxConnection'
 import WhatsAppNudgeConnection from '../connections/WhatsAppNudgeConnection'
+import NotificationsConnection from '../connections/NotificationsConnection'
 import TypesenseConnection from '../connections/TypesenseConnection'
 import { SharedTelegramBotAdmin } from '../admin/SharedTelegramBotAdmin'
 import { JevTeamKey, SonioxTeamKey, SharedMCPServers } from '../admin/SharedCredentialsAdmin'
@@ -32,7 +33,7 @@ import { Page, PageHeader, Dot } from './parts'
 // own connection. The same cards as Connections and Admin → Integrations; all
 // stay mounted so sign-in popups and half-typed forms survive switching.
 
-type ServiceId = 'google' | 'microsoft' | 'telegram' | 'whatsapp_web' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'codex' | 'antigravity' | 'whatsapp' | 'typesense'
+type ServiceId = 'google' | 'microsoft' | 'telegram' | 'whatsapp_web' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'codex' | 'antigravity' | 'notify' | 'whatsapp' | 'typesense'
 
 interface Service {
   id: ServiceId
@@ -55,6 +56,7 @@ const SERVICES: Service[] = [
   { id: 'soniox', label: 'Soniox', hint: 'Speech-to-text and voices — a team key or each person\'s own', icon: Mic, everyone: true },
   { id: 'codex', label: 'ChatGPT', hint: 'A ChatGPT subscription as a model provider', icon: Sparkles, everyone: false },
   { id: 'antigravity', label: 'Antigravity', hint: 'A Google subscription as a model provider', icon: Sparkles, everyone: false },
+  { id: 'notify', label: 'Notifications', hint: 'Where your nudges and waiting proposals reach you — WhatsApp, Telegram, devices', icon: Bell, everyone: false },
   { id: 'whatsapp', label: 'WhatsApp', hint: 'Nudges from autonomous work over WhatsApp', icon: MessageCircle, everyone: false },
   { id: 'typesense', label: 'Deep memory', hint: 'The search server behind agents\' long-term memory', icon: Database, everyone: false },
 ]
@@ -232,6 +234,7 @@ export function ConnectionsConsole() {
           {panel('soniox', accounts ? <SonioxTeamKey refreshTick={0} /> : null, <SonioxConnection />)}
           {panel('codex', null, <CodexConnection />)}
           {panel('antigravity', null, <AntigravityConnection />)}
+          {panel('notify', null, <NotificationsConnection />)}
           {panel('whatsapp', null, <WhatsAppNudgeConnection />)}
           {panel('typesense', null, <TypesenseConnection />)}
         </div>

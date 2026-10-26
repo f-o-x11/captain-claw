@@ -36,7 +36,8 @@ static State state = State::Off;
 static int level = 0;
 static uint32_t recMs = 0;  // State::Listening: how long the recording has been going
 static uint8_t maxBright = 48;
-static uint32_t flashUntil = 0, alertUntil = 0, actionUntil = 0, lastMs = 0;
+static uint32_t flashUntil = 0, alertUntil = 0, notifyUntil = 0, actionUntil = 0, lastMs = 0;
+static bool waitingOn = false;  // proposals wait in Flight Deck
 static Step lastStep = Step::Narration;
 static uint32_t idleMs = 0, idleAt = 0, sleepMs = 1;  // State::Idle: how long, as of when
 static bool inStartup = false;
@@ -94,6 +95,10 @@ bool startingUp() { return inStartup; }
 void flash() { flashUntil = millis() + 700; }
 
 void alert() { alertUntil = millis() + 900; }
+
+void notify() { notifyUntil = millis() + 2000; }
+
+void setWaiting(bool waiting) { waitingOn = waiting; }
 
 void action(Step step) {
   lastStep = step;
@@ -153,6 +158,11 @@ void tick() {
     show(c, c);
     return;
   }
+  if ((int32_t)(notifyUntil - now) > 0) {  // magenta, on/off every 250 ms
+    uint32_t c = ((notifyUntil - now) / 250) % 2 ? scale(255, 0, 170, 1) : 0;
+    show(c, c);
+    return;
+  }
   const float t = now / 1000.0f;
   switch (state) {
     case State::Listening: {
@@ -204,13 +214,15 @@ void tick() {
       show(linkColor(linkWifi), linkColor(linkAgent));
       break;
     case State::Idle: {  // a blink 10 s into the quiet and every 10 s after, coloured by how near sleep is
+                         // (the right one magenta while proposals wait)
       const uint32_t idle = idleMs + (now - idleAt);
       const float toSleep = (float)idle / sleepMs;
-      uint32_t c = 0;
+      uint32_t c = 0, right = 0;
       if (idle >= 10000 && idle % 10000 < 150) {
         c = toSleep < 0.3f ? scale(0, 255, 40, 1) : toSleep < 0.8f ? scale(0, 60, 255, 1) : scale(255, 170, 0, 1);
+        right = waitingOn ? scale(255, 0, 170, 1) : c;  // something waits in Flight Deck
       }
-      show(c, c);
+      show(c, right);
       break;
     }
     default:

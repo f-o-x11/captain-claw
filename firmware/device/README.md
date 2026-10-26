@@ -410,6 +410,28 @@ quarter second later (talk after the blip), and a lower one (A5) when you let
 go and it's sent or kept offline. A tap that only stops speech, or a
 press too short to send, gets no second blip.
 
+## Waiting in Flight Deck
+
+From 0.19.0 (paper B 1.0.20) the device tells you when something waits for
+you in Flight Deck: a proposal from Autonomous Work waiting for your approval,
+or a nudge. Flight Deck sends `{"type":"waiting","count":n,"text":"…","beep":true}`
+(`owner_notify.py`) to every connected device of the owner who has *Devices*
+switched on under Connections → Notifications.
+
+- **The beep**: two rising tones wider apart than the speech chime (E6 → C7),
+  a double buzz on the StopWatch, two seconds of magenta blinks on the
+  PaperColor's lights, and a dark screen lit. Not over a recording, the voice
+  or a turn under way: it waits for them to end. *Beeps around speech* (and
+  "beep off") silences the tones, *Buzz* the motor. In quiet hours (the
+  autonomy config's, UTC) the count comes without a beep.
+- **The count**: "n waiting in Flight Deck" in place of the home screen's hint,
+  and a *Waiting* row after the device's (the B paper lists it with its links,
+  and asleep under how to wake it, as last heard). While proposals wait, the paper's
+  idle blink is magenta on the right. Approving, rejecting or expiring them
+  updates it without a beep; 0 clears it.
+- **Asleep**: a device in deep sleep isn't connected, so it hears about it when
+  it next wakes and connects — once, for things from the last 24 hours.
+
 ## Buttons
 
 StickS3:

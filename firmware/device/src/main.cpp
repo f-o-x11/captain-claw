@@ -49,9 +49,9 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.19"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.20"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.18.3"
+#define FW_VERSION "0.19.0"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -252,6 +252,17 @@ static bool asideOpen = false;  // the deck is sending a line spoken aside
 
 // The agent's name survives a deep sleep for the sleeping screen.
 RTC_DATA_ATTR static char rtcAgent[48] = "";
+
+// What waits in Flight Deck (the deck's "waiting" frame): how many proposals
+// wait for the owner's approval — kept through a deep sleep for the paper's
+// dashboard — and the newest thing that came, which the home screen says for
+// a while. Its beep waits while the device records, speaks or works.
+RTC_DATA_ATTR static int rtcWaiting = 0;
+static int waitingCount = 0;
+static String waitingLine;
+static uint32_t waitingLineMs = 0;
+static bool waitingCuePending = false;
+static constexpr uint32_t kWaitingLineMs = 10 * 60 * 1000UL;
 
 static constexpr uint32_t kTapMs = 300;      // shorter press = tap, not talk
 static constexpr uint32_t kDoubleMs = 350;   // a second click within this = double-click
@@ -544,6 +555,16 @@ static ui::Home homeNow() {
   home.rows.push_back({"Deck", wsUp ? serverHost() : String("connecting…"), wsUp ? kGreen : kRed});
   home.rows.push_back({"Agent", agentLinked ? agentName : (wsUp ? String("waiting for agent") : String("-")),
                        agentLinked ? kGreen : kYellow});
+  // What waits in Flight Deck: right after the device's row (the B paper's
+  // dashboard lists the rows after it as its links), and in place of the hint.
+  // (Red on the paper: its inks have no cyan, and that came out white.)
+  const String waiting = String(waitingCount) + " waiting in Flight Deck";
+  if (waitingCount > 0) {
+    home.rows.insert(home.rows.begin() + 1,
+                     {"Waiting", String(waitingCount) + " in Flight Deck", board::kEpaper ? kRed : kCyan});
+  }
+  const bool freshLine = waitingLine.length() && millis() - waitingLineMs < kWaitingLineMs;
+  if (ok && (freshLine || waitingCount > 0)) home.hint = freshLine ? waitingLine : waiting;
   home.character = settings.character;
   home.battery = batteryLine();
   home.noteMode = board::kNoteMode && settings.noteMode;
@@ -1873,6 +1894,32 @@ static void soundCommand(const String& cmd) {
   }
 }
 
+// ── waiting in Flight Deck ────────────────────────────────────────────
+
+// Not over a recording, the voice or a turn under way: the beep waits for them.
+static bool canCueNow() {
+  return mode != Mode::Listening && mode != Mode::Waiting && !audio::playing() && !audio::micActive() &&
+         !prerollOn && !flashing;
+}
+
+// Something new waits in Flight Deck: a chime, a double buzz (the watch),
+// magenta blinks (the paper), and a dark screen lit to show it.
+static void waitingCue() {
+  if (!canCueNow()) {
+    waitingCuePending = true;
+    return;
+  }
+  waitingCuePending = false;
+  if (settings.cueBeep) audio::chime();
+  if (settings.cueBuzz) buzzTicks(2, 120, 140);
+  leds::notify();
+  touch();
+}
+
+static void waitingCuePoll() {
+  if (waitingCuePending && canCueNow()) waitingCue();
+}
+
 static void onText(const char* payload, size_t len) {
   JsonDocument doc;
   if (deserializeJson(doc, payload, len)) return;
@@ -1946,6 +1993,22 @@ static void onText(const char* payload, size_t len) {
       workDirty = true;
       leds::action(isTool ? leds::Step::Tool : leds::Step::Narration);
     }
+  } else if (type == "waiting") {
+    // How many proposals wait for approval in Flight Deck; "beep": something
+    // new came ("text" says what, in a line).
+    const int was = waitingCount;
+    waitingCount = rtcWaiting = max(0, (int)(doc["count"] | 0));
+    leds::setWaiting(waitingCount > 0);
+#if defined(PAPER_B)
+    ui::setWaiting(waitingCount);
+#endif
+    String line = doc["text"] | "";
+    if (line.length()) {
+      waitingLine = line;
+      waitingLineMs = millis();
+    }
+    if (doc["beep"] | false) waitingCue();
+    if ((waitingCount != was || line.length()) && (mode == Mode::Idle || mode == Mode::Home)) redraw();
   } else if (type == "reply") {
     touch();
     ++turns;
@@ -2842,6 +2905,11 @@ void setup() {
   battery::begin();
   leds::begin();
   leds::setLevel(settings.ledLevel);
+  waitingCount = rtcWaiting;  // as last heard, until the deck says again
+  leds::setWaiting(waitingCount > 0);
+#if defined(PAPER_B)
+  ui::setWaiting(waitingCount);
+#endif
 #if defined(BOARD_PAPERCOLOR)
   paperPower();
 #endif
@@ -3333,6 +3401,7 @@ void loop() {
   if (wsUp != wasUp) linkChangeMs = millis();
   holdTurn();
   paperAnswerPoll();
+  waitingCuePoll();
   keepAgentLink();
   trackLinks();
   pollCard();
