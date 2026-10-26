@@ -54,7 +54,7 @@ import { useUIStore, startInConsoleUnlessChosen, beginLayoutHydrate } from './st
 import { useConsoleStore, syncConsoleFromUrl, dropConsoleRequest, selectConsoleAdmin, openConsole, startDesktop, consoleHome, pageFromPath } from './stores/consoleStore'
 import { isAppShell, reportAndroidSession, reportAndroidSignedOut } from './services/desktopShell'
 import { useAgentStore } from './stores/agentStore'
-import { useAuthStore, selectKioskLocked, awaitAuthStatus, refreshAccessToken, reloadAfterSessionEnd, DEFAULT_INSTANCE_NAME } from './stores/authStore'
+import { useAuthStore, selectKioskLocked, awaitAuthStatus, refreshAccessToken, reloadAfterSessionEnd, DEFAULT_INSTANCE_NAME, DEFAULT_LOGO } from './stores/authStore'
 import { useChatStore } from './stores/chatStore'
 import { useContainerStore } from './stores/containerStore'
 import { useLocalAgentStore } from './stores/localAgentStore'
@@ -641,6 +641,7 @@ function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
   const mustChangePassword = useAuthStore((s) => s.user?.must_change_password === true)
   const instanceName = useAuthStore((s) => s.branding.name)
+  const instanceLogo = useAuthStore((s) => s.branding.logo)
   const [authChecked, setAuthChecked] = useState(false)
   const [fdUnreachable, setFdUnreachable] = useState(false)
   // An invitation link (<deck>/invite#<token>): choose a password, get an account.
@@ -686,6 +687,17 @@ function App() {
 
   // The browser tab carries the deck's name (Admin → Settings → Branding).
   useEffect(() => { document.title = instanceName || DEFAULT_INSTANCE_NAME }, [instanceName])
+  // …and its logo as the tab icon (the Captain icon when Branding has none).
+  useEffect(() => {
+    let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    if (!link) {
+      link = document.createElement('link')
+      link.rel = 'icon'
+      document.head.appendChild(link)
+    }
+    link.removeAttribute('type')   // PNG, JPEG, SVG… — the browser goes by the response
+    link.href = instanceLogo || DEFAULT_LOGO
+  }, [instanceLogo])
 
   // After login, hydrate stores. On the way back out (sign-out, or a session
   // that expired: a 401 whose refresh failed → clearAuth()), reload instead of
