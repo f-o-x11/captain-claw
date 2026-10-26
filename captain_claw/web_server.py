@@ -3069,7 +3069,7 @@ class WebServer:
         except Exception:
             return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
 
-        from captain_claw.llm import Message, LLMResponse
+        from captain_claw.llm import LLMResponse, Message, is_reasoning_backfill_placeholder
         raw_messages = body.get("messages", [])
         messages = [Message(role=m["role"], content=m["content"]) for m in raw_messages]
         temperature = body.get("temperature")
@@ -3081,12 +3081,16 @@ class WebServer:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            reasoning = resp.reasoning_content or ""
             return web.json_response({
                 "ok": True,
                 "content": resp.content,
                 "model": resp.model,
                 "usage": resp.usage,
                 "finish_reason": resp.finish_reason,
+                # A thinking model's chain of thought ("" otherwise), for
+                # callers that show it (WhatsApp Web auto-replies).
+                "reasoning": "" if is_reasoning_backfill_placeholder(reasoning) else reasoning,
             })
         except Exception as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=500)

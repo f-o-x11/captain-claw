@@ -49,6 +49,8 @@ MAX_DAILY_LIMIT = 200
 # Auto-replies: trigger words, each a word or a short phrase.
 MAX_TRIGGERS = 10
 MAX_TRIGGER_CHARS = 40
+# Auto-reply decisions kept for the card (the newest; older ones are dropped).
+AUTOREPLY_LOG_KEEP = 500
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -110,6 +112,15 @@ CREATE TABLE IF NOT EXISTS sends (
     error TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sends_ts ON sends (ts);
+-- Each auto-reply decision Flight Deck made (whatsapp_web_autoreply), the
+-- details sealed: the messages, what the model thought and said.
+CREATE TABLE IF NOT EXISTS autoreply_log (
+    rowid INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    chat_jid TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT ''
+);
 CREATE INDEX IF NOT EXISTS sends_chat ON sends (chat_jid, ts);
 """
 
@@ -636,6 +647,37 @@ class Store:
                 "status": r["status"], "error": r["error"], "text": str(body.get("t") or ""),
                 "wa_id": r["wa_id"],
             })
+        return out
+
+    def add_autoreply_log(self, chat_jid: str, outcome: str, details: dict[str, Any], *, now: float) -> None:
+        with self._lock, self._tx() as db:
+            db.execute("INSERT INTO autoreply_log (ts, chat_jid, outcome, body) VALUES (?,?,?,?)",
+                       (int(now), chat_jid, outcome[:80], _seal(details)))
+            db.execute("DELETE FROM autoreply_log WHERE rowid <= (SELECT MAX(rowid) FROM autoreply_log) - ?",
+                       (AUTOREPLY_LOG_KEEP,))
+
+    def autoreply_log(self, *, limit: int = 50, chat_jid: str = "", ignored: bool = True) -> list[dict[str, Any]]:
+        """The latest auto-reply decisions, newest first; without *ignored*,
+        not the messages that didn't call the agent."""
+        where, args = ["1=1"], []
+        if chat_jid:
+            where.append("chat_jid=?")
+            args.append(chat_jid)
+        if not ignored:
+            where.append("outcome != 'skip:not addressed'")
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT * FROM autoreply_log WHERE {' AND '.join(where)} ORDER BY rowid DESC LIMIT ?",
+                (*args, max(1, min(int(limit or 50), 200)))).fetchall()
+            titles = {r["jid"]: _text(r["name"]) for r in self._db.execute("SELECT jid, name FROM chats")}
+            names = self._names()
+        out = []
+        for r in rows:
+            details = _unseal(r["body"]) if r["body"] else None
+            jid = r["chat_jid"]
+            out.append({"id": int(r["rowid"]), "ts": int(r["ts"]), "chat_jid": jid,
+                        "chat": titles.get(jid) or self._person(jid, names), "outcome": r["outcome"],
+                        **(details if isinstance(details, dict) else {})})
         return out
 
     def autoreply_config(self) -> dict[str, Any]:

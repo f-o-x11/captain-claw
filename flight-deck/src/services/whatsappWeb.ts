@@ -185,6 +185,39 @@ export interface WhatsAppWebSendingChanges {
   autoreply?: { chats?: string[]; agent?: string; triggers?: string[] }
 }
 
+// One auto-reply decision: the messages, what the model thought and said.
+export interface WhatsAppWebAutoreplyStep {
+  // reply / silent (the model's SKIP) / search / skip (a malformed answer) / error (no answer)
+  kind: 'reply' | 'silent' | 'search' | 'skip' | 'error'
+  // The reply, the reason it stayed silent, the search query, or what was wrong.
+  text: string
+  why?: string
+  reasoning?: string
+  model?: string
+  tokens?: number
+  results?: string[]
+}
+
+export interface WhatsAppWebAutoreplyEntry {
+  id: number
+  ts: number
+  chat_jid: string
+  chat: string
+  // sent · skip:silent · skip:not addressed · skip:cap · skip:model · skip:format · skip:refused 429 · off:switch …
+  outcome: string
+  agent?: string
+  mode?: 'mention' | 'follow_up' | ''
+  called?: string[]
+  messages?: { id: string; sender: string; from_owner: boolean; reply_to_agent: boolean; text: string }[]
+  steps?: WhatsAppWebAutoreplyStep[]
+  seconds?: number
+  error?: string
+}
+
+export const getWhatsAppWebAutoreplyActivity = (ignored = false, limit = 50) =>
+  fdFetch<{ available: boolean; stale_service?: boolean; entries: WhatsAppWebAutoreplyEntry[] }>(
+    `/fd/whatsapp-web/autoreply-activity?limit=${limit}&ignored=${ignored}`)
+
 export const getWhatsAppWebSending = () => fdFetch<WhatsAppWebSending>('/fd/whatsapp-web/sending')
 export const setWhatsAppWebSending = (changes: WhatsAppWebSendingChanges) =>
   fdFetch<WhatsAppWebSending>('/fd/whatsapp-web/sending', { method: 'PUT', body: JSON.stringify(changes) })

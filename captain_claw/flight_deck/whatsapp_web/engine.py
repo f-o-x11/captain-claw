@@ -761,6 +761,19 @@ class Engine:
         await asyncio.to_thread(store.set_autoreply_config, config)
         return {**config, "dropped": dropped}
 
+    async def add_autoreply_log(self, user_id: str, *, chat: str, outcome: str,
+                                details: dict[str, Any]) -> dict[str, Any]:
+        """Keep one of Flight Deck's auto-reply decisions for the card."""
+        store = self._reader(user_id)
+        await asyncio.to_thread(store.add_autoreply_log, store.canon(chat), outcome, details, now=self._clock())
+        return {"ok": True}
+
+    async def autoreply_log(self, user_id: str, *, limit: int = 50, chat: str = "",
+                            ignored: bool = True) -> dict[str, Any]:
+        store = self._reader(user_id)
+        return {"entries": await asyncio.to_thread(store.autoreply_log, limit=limit, chat_jid=chat,
+                                                   ignored=ignored)}
+
     def _bell(self, link: _Link, title: str, body: str) -> None:
         self._seq += 1
         self._events.append({"seq": self._seq, "user_id": link.user_id, "title": title[:120],

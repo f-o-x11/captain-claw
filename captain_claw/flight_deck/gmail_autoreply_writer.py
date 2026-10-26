@@ -312,12 +312,15 @@ def _tokens_used(usage: Any) -> int:
 
 async def _agent_complete(rec: agent_sharing.AgentRecord, messages: Sequence[dict[str, str]], *,
                           max_tokens: int, timeout: float,
-                          meta_out: dict[str, Any] | None = None) -> tuple[str, str] | None:
+                          meta_out: dict[str, Any] | None = None,
+                          reasoning: bool = False) -> tuple[str, str] | None:
     """``(content, finish_reason)`` from the agent's own model through its
     ``POST /api/llm/complete`` (a scoped provider copy: no tools, memory,
     session or loop), or None on any error, a non-answer or a truncated
     answer. No ``temperature`` is sent. Never raises. ``meta_out`` gets the
-    reported ``model`` and ``tokens`` (never content)."""
+    reported ``model`` and ``tokens`` (never content); with *reasoning*, also
+    a thinking model's ``reasoning`` when the agent returns it (content: only
+    for a caller that keeps it as such, never in usage records)."""
     try:
         port = int(rec.port or 0)
         token = str(rec.web_auth or "")
@@ -355,6 +358,9 @@ async def _agent_complete(rec: agent_sharing.AgentRecord, messages: Sequence[dic
     if meta_out is not None:
         meta_out["model"] = str(data.get("model") or "")[:120]
         meta_out["tokens"] = _tokens_used(data.get("usage"))
+        if reasoning:
+            thought = data.get("reasoning")
+            meta_out["reasoning"] = thought if isinstance(thought, str) else ""
     return content, finish
 
 

@@ -324,6 +324,26 @@ async def set_sending(body: SendingBody, user: dict = Depends(get_current_user))
     return await get_sending(user)
 
 
+@router.get("/fd/whatsapp-web/autoreply-activity")
+async def autoreply_activity(limit: int = 50, ignored: bool = False,
+                             user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """The user's latest auto-reply decisions, newest first: the messages,
+    what the model thought and said, what was sent. Without *ignored*, not
+    the messages that didn't call the agent."""
+    s = sup.get()
+    if s is None or not s.user_has_link(user["id"]) or await _unavailable_reason(get_db()):
+        return {"available": False, "entries": []}
+    try:
+        data = await s.request("GET", f"/links/{user['id']}/autoreply-log?limit={max(1, min(limit, 200))}"
+                                      f"&ignored={'true' if ignored else 'false'}")
+    except (sup.ServiceDown, sup.ServiceError) as exc:
+        if isinstance(exc, sup.ServiceError) and exc.status == 404:
+            # A service started before this Flight Deck was updated.
+            return {"available": False, "entries": [], "stale_service": True}
+        raise _service_error(exc) from None
+    return {"available": True, "entries": data.get("entries") or []}
+
+
 # ── agents (owner only) ─────────────────────────────────────────────
 
 _NOT_LINKED = ("Your user hasn't linked WhatsApp — they can in Flight Deck → Connections → "

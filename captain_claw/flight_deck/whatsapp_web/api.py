@@ -21,6 +21,7 @@ person and only ever passes their own id.
 * ``GET/PUT /links/{user_id}/send-policy`` sending on/off, whitelist, daily limit, signature
 * ``POST   /links/{user_id}/send``       ``{chat, text, agent, allow_repeat}`` → through the gate
 * ``GET/PUT /links/{user_id}/autoreply`` the chats the agent answers by itself, the agent, trigger words
+* ``GET/POST /links/{user_id}/autoreply-log`` Flight Deck's auto-reply decisions (sealed), for the card
 * ``GET    /events?after=<seq>``         bells for Flight Deck to ring, and (``kind: "incoming"``)
   messages in auto-reply chats for Flight Deck to answer
 """
@@ -90,6 +91,12 @@ class AutoreplyBody(BaseModel):
     chats: list[str] | None = None
     agent: str | None = None
     triggers: list[str] | None = None
+
+
+class AutoreplyLogBody(BaseModel):
+    chat: str
+    outcome: str
+    details: dict[str, Any] = {}
 
 
 class RetentionBody(BaseModel):
@@ -202,6 +209,15 @@ def build_app(engine: Engine, secret: str, *, version: str = "", lifespan: Any =
     @app.put("/links/{user_id}/autoreply", dependencies=auth)
     async def put_autoreply(user_id: str, body: AutoreplyBody) -> dict[str, Any]:
         return await answer(engine.set_autoreply_config)(user_id, body.model_dump())
+
+    @app.post("/links/{user_id}/autoreply-log", dependencies=auth)
+    async def add_autoreply_log(user_id: str, body: AutoreplyLogBody) -> dict[str, Any]:
+        return await answer(engine.add_autoreply_log)(user_id, chat=body.chat, outcome=body.outcome,
+                                                       details=body.details)
+
+    @app.get("/links/{user_id}/autoreply-log", dependencies=auth)
+    async def get_autoreply_log(user_id: str, limit: int = 50, chat: str = "", ignored: bool = True) -> dict[str, Any]:
+        return await answer(engine.autoreply_log)(user_id, limit=limit, chat=chat, ignored=ignored)
 
     @app.put("/links/{user_id}/retention", dependencies=auth)
     async def retention(user_id: str, body: RetentionBody) -> dict[str, Any]:

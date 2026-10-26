@@ -122,6 +122,28 @@ async def test_the_agents_messages_are_kept_and_known(tmp_path):
     assert [e["id"] for e in _incoming(eng)[n:]] == ["G7", "G8", "G9"]
 
 
+async def test_the_decision_log(tmp_path, monkeypatch):
+    from captain_claw.flight_deck.whatsapp_web import store as store_mod
+
+    monkeypatch.setattr(store_mod, "AUTOREPLY_LOG_KEEP", 3)
+    eng, _a = await _engine(tmp_path, Clock())
+    for i, outcome in enumerate(["sent", "skip:not addressed", "skip:silent", "sent", "skip:not addressed"]):
+        await eng.add_autoreply_log(ALICE, chat=GROUP, outcome=outcome,
+                                    details={"messages": [{"text": f"secret {i}"}], "steps": []})
+    rows = (await eng.autoreply_log(ALICE))["entries"]
+    assert [r["outcome"] for r in rows] == ["skip:not addressed", "sent", "skip:silent"]  # the newest 3
+    assert rows[0]["chat"] == "Obitelj" and rows[0]["messages"] == [{"text": "secret 4"}]
+    assert [r["outcome"] for r in (await eng.autoreply_log(ALICE, ignored=False))["entries"]] == ["sent", "skip:silent"]
+    assert (await eng.autoreply_log(ALICE, chat=ANA))["entries"] == []
+    raw = b"".join(f.read_bytes() for f in (tmp_path / "waw" / ALICE).glob("store.sqlite3*"))
+    assert b"secret" not in raw  # sealed
+    c = TestClient(build_app(eng, "s"))
+    h = {"Authorization": "Bearer s"}
+    assert c.post(f"/links/{ALICE}/autoreply-log", json={"chat": GROUP, "outcome": "sent", "details": {"steps": []}},
+                  headers=h).json() == {"ok": True}
+    assert c.get(f"/links/{ALICE}/autoreply-log?limit=1", headers=h).json()["entries"][0]["outcome"] == "sent"
+
+
 async def test_the_config_keeps_to_the_whitelist(tmp_path):
     eng, _a = await _engine(tmp_path, Clock())
     await eng.set_send_policy(ALICE, {"enabled": True, "allowed": [GROUP]})
@@ -236,6 +258,7 @@ class FakeSup:
     def __init__(self, history=None, refuse=None):
         self.db = SimpleNamespace(get_user_by_id=self._user)
         self.calls: list = []
+        self.logged: list = []  # the decisions kept for the card
         self.history = history if history is not None else [
             {"id": "G3", "ts": int(NOW), "sender": "Ivo", "text": "Kapetan, when is the match?", "from_me": False},
             {"id": "G1", "ts": int(NOW) - 60, "sender": "Ivo", "text": "dinner?", "from_me": False},
@@ -246,6 +269,9 @@ class FakeSup:
         return {"id": uid, "display_name": "Alice Smith", "email": "a@x.co"}
 
     async def request(self, method, path, body=None, **kw):
+        if path.endswith("/autoreply-log"):
+            self.logged.append(body)
+            return {"ok": True}
         self.calls.append((method, path, body))
         if path.endswith("/messages"):
             return {"messages": self.history}
@@ -261,14 +287,18 @@ REC = SimpleNamespace(name="Kapetan", slug="alice-bot", port=24001, web_auth="to
 
 @pytest.fixture()
 def model(monkeypatch):
-    m = SimpleNamespace(answers=[], seen=[], tools=[], resolved=(REC, False))
+    m = SimpleNamespace(answers=[], seen=[], tools=[], resolved=(REC, False), reasoning="")
 
     async def resolve(db, owner, ref):
         m.ref = ref
         return m.resolved
 
-    async def complete(rec, messages, *, max_tokens, timeout, meta_out=None):
+    async def complete(rec, messages, *, max_tokens, timeout, meta_out=None, reasoning=False):
         m.seen.append([dict(x) for x in messages])
+        if meta_out is not None:
+            meta_out.update(model="deepseek-v4-flash", tokens=321)
+            if reasoning:
+                meta_out["reasoning"] = m.reasoning
         nonce = re.search(r"<<<REPLY (\w+)>>>", messages[0]["content"]).group(1)
         answer = m.answers.pop(0)
         return (answer.replace("{n}", nonce), "stop") if answer is not None else None
@@ -370,6 +400,83 @@ async def test_the_hourly_cap_and_a_refused_send(model):
     assert await ar.respond(s, ALICE, GROUP, [_event()], ar._Chat(), now=NOW) == "skip:refused 429"
 
 
+def test_the_why_line():
+    n = "abc123"
+    text = f"<<<WHY {n}>>>Senko asks me\ndirectly.<<<END {n}>>><<<REPLY {n}>>>Da.<<<END {n}>>>"
+    assert ar.parse_why(text, n) == "Senko asks me ⏎ directly."
+    assert ar.parse(text, n, search_ok=True) == ("reply", "Da.")  # the WHY isn't a second envelope
+    assert ar.parse_why(f"<<<REPLY {n}>>>Da.<<<END {n}>>>", n) == ""
+
+
+async def test_each_decision_is_kept_for_the_card(model):
+    s = FakeSup()
+    model.reasoning = "Senko is asking LeChuck, that's me. A short joke fits."
+    model.answers = ["<<<WHY {n}>>>He asks me directly.<<<END {n}>>><<<REPLY {n}>>>Samo za čarolije.<<<END {n}>>>"]
+    ev = _event("Kapetan, do witches use spell checkers?", sender="Senko")
+    assert await ar.respond(s, ALICE, GROUP, [ev], ar._Chat(), now=NOW) == "sent"
+    (entry,) = s.logged
+    assert entry["chat"] == GROUP and entry["outcome"] == "sent"
+    d = entry["details"]
+    assert d["mode"] == ar.MENTION and d["called"] == ["Kapetan"] and d["agent"] == "Kapetan"
+    assert d["messages"] == [{"id": "G3", "sender": "Senko", "from_owner": False, "reply_to_agent": False,
+                              "text": "Kapetan, do witches use spell checkers?"}]
+    (step,) = d["steps"]
+    assert step == {"kind": "reply", "text": "Samo za čarolije.", "why": "He asks me directly.",
+                    "reasoning": model.reasoning, "model": "deepseek-v4-flash", "tokens": 321}
+    assert d["seconds"] >= 0
+    # A search: both calls are steps, the search with what it found.
+    model.answers = ["<<<WHY {n}>>>Need the date.<<<END {n}>>><<<SEARCH {n}>>>Dinamo Hajduk kickoff<<<END {n}>>>",
+                     "<<<REPLY {n}>>>Saturday 20:00.<<<END {n}>>>"]
+    await ar.respond(s, ALICE, GROUP, [_event()], ar._Chat(), now=NOW)
+    search, reply = s.logged[-1]["details"]["steps"]
+    assert search["kind"] == "search" and search["text"] == "Dinamo Hajduk kickoff" and search["why"] == "Need the date."
+    assert search["results"] == ["example.com: Dinamo – Hajduk"] and reply["kind"] == "reply"
+    assert "Now the WHY line, then REPLY or SKIP." in model.seen[-1][-1]["content"]
+    # Silence keeps the model's reason; not being called is kept too, without a model call.
+    model.answers = ["<<<SKIP {n}>>>a question for Alice<<<END {n}>>>"]
+    await ar.respond(s, ALICE, GROUP, [_event()], ar._Chat(), now=NOW)
+    assert s.logged[-1]["outcome"] == "skip:silent"
+    assert s.logged[-1]["details"]["steps"][0]["text"] == "a question for Alice"
+    await ar.respond(s, ALICE, GROUP, [_event("dinner?")], ar._Chat(), now=NOW)
+    assert s.logged[-1]["outcome"] == "skip:not addressed" and s.logged[-1]["details"]["steps"] == []
+    # A model that answers nothing, and a refused send, say so.
+    model.answers = [None]
+    await ar.respond(s, ALICE, GROUP, [_event()], ar._Chat(), now=NOW)
+    assert s.logged[-1]["outcome"] == "skip:model" and s.logged[-1]["details"]["steps"][0]["kind"] == "error"
+    s.refuse = sup.ServiceError(429, "The daily limit is reached (30 messages in 24 hours)")
+    model.answers = ["<<<REPLY {n}>>>ok<<<END {n}>>>"]
+    await ar.respond(s, ALICE, GROUP, [_event()], ar._Chat(), now=NOW)
+    assert s.logged[-1]["details"]["error"].startswith("The daily limit is reached")
+
+
+async def test_a_lost_record_never_stops_the_answer(model):
+    class Flaky(FakeSup):
+        async def request(self, method, path, body=None, **kw):
+            if path.endswith("/autoreply-log"):
+                raise sup.ServiceDown("down")
+            return await super().request(method, path, body, **kw)
+
+    model.answers = ["<<<REPLY {n}>>>ok<<<END {n}>>>"]
+    assert await ar.respond(Flaky(), ALICE, GROUP, [_event()], ar._Chat(), now=NOW) == "sent"
+
+
+async def test_the_writer_passes_reasoning_only_when_asked(monkeypatch):
+    def handler(request):
+        return httpx.Response(200, json={"ok": True, "content": "x", "model": "m", "usage": {"total_tokens": 3},
+                                         "finish_reason": "stop", "reasoning": "I think…"})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(writer.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    rec = SimpleNamespace(port=24001, web_auth="tok")
+    plain, thought = {}, {}
+    await writer._agent_complete(rec, [{"role": "user", "content": "hi"}], max_tokens=10, timeout=5, meta_out=plain)
+    await writer._agent_complete(rec, [{"role": "user", "content": "hi"}], max_tokens=10, timeout=5,
+                                 meta_out=thought, reasoning=True)
+    assert plain == {"model": "m", "tokens": 3}  # Gmail's usage records never get it
+    assert thought == {"model": "m", "tokens": 3, "reasoning": "I think…"}
+
+
 async def test_a_burst_is_answered_once(model, monkeypatch):
     monkeypatch.setattr(ar, "DEBOUNCE_SECONDS", 0.05)
     seen = []
@@ -445,3 +552,31 @@ def test_the_cards_settings(deck, monkeypatch):  # noqa: F811
     puts = [call for call in svc.calls[n:] if call[0] == "PUT"]
     assert [p[1] for p in puts] == [f"/links/{ALICE}/send-policy", f"/links/{ALICE}/autoreply"]
     assert "autoreply" not in puts[0][2] and puts[1][2]["chats"] == [ANA]
+
+
+def test_the_activity_route(deck, monkeypatch):  # noqa: F811
+    from captain_claw.flight_deck import auth
+
+    svc, c = deck
+    real = svc.request
+    answer = {"entries": [{"id": 1, "ts": 1, "chat_jid": GROUP, "chat": "Obitelj", "outcome": "sent"}]}
+
+    async def request(self, method, path, body=None, **kw):
+        if "/autoreply-log" in path:
+            svc.calls.append((method, path, body, kw))
+            if answer is None:
+                raise sup.ServiceError(404, "Not Found")
+            return answer
+        return await real(self, method, path, body, **kw)
+
+    monkeypatch.setattr(svc, "request", request)
+    h = {"Authorization": f"Bearer {auth.create_access_token(ALICE, 'user')}"}
+    r = c.get("/fd/whatsapp-web/autoreply-activity", headers=h).json()
+    assert r["available"] and r["entries"][0]["outcome"] == "sent"
+    assert svc.calls[-1][1] == f"/links/{ALICE}/autoreply-log?limit=50&ignored=false"
+    c.get("/fd/whatsapp-web/autoreply-activity?ignored=true&limit=500", headers=h)
+    assert svc.calls[-1][1] == f"/links/{ALICE}/autoreply-log?limit=200&ignored=true"
+    assert c.get("/fd/whatsapp-web/autoreply-activity").status_code == 401
+    answer = None  # a service from before this update
+    assert c.get("/fd/whatsapp-web/autoreply-activity", headers=h).json() == {
+        "available": False, "entries": [], "stale_service": True}
