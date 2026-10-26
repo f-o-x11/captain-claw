@@ -436,6 +436,14 @@ As built:
   assistant's signature, mention or not (two assistants never keep each other going); a message older than
   10 minutes on arrival is left alone; `FD_WHATSAPP_WEB_AUTOREPLY=off` and
   `FD_WHATSAPP_WEB_SEND=off` stop everything, checked again right before the send.
+- **First staging test (2026-10-26):** a trigger word didn't make the agent answer. The model
+  was "Glasses", the chat called it "LeChuck", and nothing told it that was its name: the
+  same prompt on the same model skipped 3 times out of 3 ("the question is for LeChuck, not
+  me"). The prompt now lists the words that call it and says which one the message used, and
+  its rule about instructions no longer reads as "only the owner may ask you something". With
+  that, 3 out of 3 answered. Names also match with a case ending ("captainu", "LeChucka",
+  "Stevu"); a message's line breaks show as ⏎ so it can't pose as another speaker; each
+  outcome is logged (category only).
 - **The card:** an *auto-reply* tick next to each whitelisted chat, the agent picker (the
   user's own agents, `list_eligible_agents`; FD refuses anyone else's), the trigger words.
 
