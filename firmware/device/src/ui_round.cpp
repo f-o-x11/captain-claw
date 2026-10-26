@@ -382,6 +382,21 @@ static void drawBatteryAt(int y, bool force) {
 
 // Clock with the Wi-Fi dot left of it and the agent dot right of it; a low
 // battery shows its percentage underneath on every screen.
+// Proposals waiting in Flight Deck (setWaiting): a magenta badge with the count.
+static int waitingCount = 0;
+static constexpr uint16_t kWaitingInk = rgb(235, 40, 170);
+
+void setWaiting(int count) { waitingCount = count; }
+
+static void drawWaiting(int x, int y) {
+  if (waitingCount <= 0) return;
+  font(vlw::Small);
+  const String n = waitingCount > 99 ? String("99+") : String(waitingCount);
+  const int h = 26, w = max(h, tw(n) + 14);
+  canvas.fillSmoothRoundRect(x, y - h / 2, w, h, h / 2, kWaitingInk);
+  text(n, x + w / 2, y, kWhite);
+}
+
 static void drawChrome(bool lowBattery = true, bool withClock = true) {
   char clock[8];
   font(vlw::Small);
@@ -392,6 +407,7 @@ static void drawChrome(bool lowBattery = true, bool withClock = true) {
   }
   canvas.fillSmoothCircle(CX - half, kChromeY, 5, healthColor(hWifi));
   canvas.fillSmoothCircle(CX + half, kChromeY, 5, healthColor(hAgent));
+  drawWaiting(CX + half + 14, kChromeY);
   if (lowBattery) drawBatteryAt(kChromeY + 24, false);
 }
 

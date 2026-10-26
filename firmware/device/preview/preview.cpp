@@ -363,6 +363,20 @@ int main(int argc, char** argv) {
   ui::showAsk("Saved voice notes", "3 voice notes recorded offline (1:24). Send them to the agent?", "send", "later");
   save("30_ask_notes");
 
+  // Something waits in Flight Deck (main.cpp waitingCue): the banner as it
+  // comes, then the count as a badge on every screen.
+  ui::setWaiting(2);
+  ui::showMessage("Flight Deck", "Waiting for your approval: Reply to Ana about the Q3 numbers\n\n"
+                  "Open the bell", ui::rgb(235, 40, 170));
+  save("30b_waiting_banner");
+  home.hint = "2 waiting in Flight Deck";
+  ui::showHome(home);
+  save("30c_waiting_home");
+  ui::showFace(0, face::Pose::Idle, 0);
+  save("30d_waiting_icon");
+  ui::setWaiting(0);
+  home.hint = "Press the yellow button to talk";
+
   // A background picture behind every screen (flight_deck/device_backgrounds.py).
   auto bgJpg = readFile(gOut + "/background.jpg");
   if (!bgJpg.empty()) {

@@ -1111,6 +1111,8 @@ static void drawHomeScreen(bool asleep, uint16_t chipFill, uint16_t chipDot, uin
   }
 }
 
+void setWaiting(int) {}  // the home screen's hint says it (a redraw costs ~20 s)
+
 void showHome(const Home& home) {
   Card scratch;
   String key = cardKey(homeCard(scratch));

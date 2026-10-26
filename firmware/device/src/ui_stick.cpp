@@ -156,11 +156,25 @@ static int drawBattery(int right, int y) {
   return bx;
 }
 
+// Proposals waiting in Flight Deck (setWaiting): a magenta badge in the bar.
+static int waitingCount = 0;
+
+void setWaiting(int count) { waitingCount = count; }
+
 static void drawBar() {
   canvas.fillRect(0, 0, W, BAR, rgb(24, 28, 36));
   int x = drawHealth(2, 2) + 3;
   int left = drawBattery(W - 2, 2);
   canvas.setFont(kSmall);
+  if (waitingCount > 0) {  // before the battery
+    const String n = waitingCount > 99 ? String("99+") : String(waitingCount);
+    const int w = max(BAR - 2, (int)canvas.textWidth(n) + 8);
+    left -= w + 4;
+    canvas.fillRoundRect(left, 1, w, BAR - 2, (BAR - 2) / 2, rgb(235, 40, 170));
+    canvas.setTextDatum(middle_center);
+    canvas.setTextColor(TFT_WHITE);
+    canvas.drawString(n, left + w / 2, BAR / 2);
+  }
   int stateW = canvas.textWidth(barState);
   canvas.setTextDatum(middle_right);
   canvas.setTextColor(barColor);
