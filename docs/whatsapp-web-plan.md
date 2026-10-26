@@ -444,6 +444,15 @@ As built:
   that, 3 out of 3 answered. Names also match with a case ending ("captainu", "LeChucka",
   "Stevu"); a message's line breaks show as ⏎ so it can't pose as another speaker; each
   outcome is logged (category only).
+- **Activity (the agent's thinking):** every decision is kept with the link (store table
+  `autoreply_log`, sealed, the newest 500; `GET/POST /links/{uid}/autoreply-log`, FD route
+  `GET /fd/whatsapp-web/autoreply-activity`) and shown on the card: the messages, the outcome,
+  the decision (called by which word, a reply, a follow-up), each model call with its one-line
+  WHY (asked for in the prompt, before REPLY / SKIP / SEARCH) and, for a thinking model, its
+  reasoning — the agent's `/api/llm/complete` now returns `reasoning`, and
+  `_agent_complete(..., reasoning=True)` passes it on only to a caller that asks (Gmail's usage
+  records copy `meta_out`, so they never get it) — the search and its results, the reply or the
+  model's reason for silence, a refused send's reason.
 - **The card:** an *auto-reply* tick next to each whitelisted chat, the agent picker (the
   user's own agents, `list_eligible_agents`; FD refuses anyone else's), the trigger words.
 

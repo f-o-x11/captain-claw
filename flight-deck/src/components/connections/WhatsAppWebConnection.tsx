@@ -13,6 +13,8 @@ import {
   getWhatsAppWebRecent,
   getWhatsAppWebSending,
   setWhatsAppWebSending,
+  getWhatsAppWebAutoreplyActivity,
+  type WhatsAppWebAutoreplyEntry,
   type MyWhatsAppWeb,
   type WhatsAppWebSending,
   type WhatsAppWebSendingChanges,
@@ -146,10 +148,15 @@ function Sending() {
   const autoChanges = { chats: [...answered], agent: auto.agent, triggers: triggerList(auto.triggers) }
   const autoView = view?.autoreply
   const answerer = autoView?.agents.find((a) => a.ref === auto.agent)
+  // Whitelisted chats first, auto-reply ones on top — by what's saved, so a row
+  // doesn't jump away while it's being ticked.
+  const saved = new Set(view?.allowed ?? [])
+  const savedAuto = new Set(view?.autoreply?.chats ?? [])
+  const rank = (jid: string) => (savedAuto.has(jid) ? 0 : saved.has(jid) ? 1 : 2)
   const chats = (view?.chats ?? []).filter((c) => {
     const q = filter.trim().toLowerCase()
     return !q || c.title.toLowerCase().includes(q) || (c.number || '').includes(q.replace(/\s/g, ''))
-  })
+  }).sort((a, b) => rank(a.jid) - rank(b.jid))
   const dirty = !!view && (
     JSON.stringify([...(view.allowed ?? [])].sort()) !== JSON.stringify([...allowed].sort())
     || draft.daily_limit !== view.daily_limit || draft.signature !== view.signature || draft.signature_on !== view.signature_on
@@ -329,6 +336,143 @@ function Sending() {
         </div>
       )}
       {error && <div className="text-red-600 dark:text-red-400">{error}</div>}
+    </div>
+  )
+}
+
+// What each auto-reply outcome means, for the activity list.
+function outcomeLabel(outcome: string): { text: string; tone: Tone } {
+  if (outcome === 'sent') return { text: 'answered', tone: 'on' }
+  if (outcome === 'skip:silent') return { text: 'stayed silent', tone: 'off' }
+  if (outcome === 'skip:not addressed') return { text: 'not for it', tone: 'off' }
+  if (outcome === 'skip:cap') return { text: 'hourly limit', tone: 'warn' }
+  if (outcome === 'skip:no context') return { text: 'no chat history', tone: 'warn' }
+  if (outcome === 'skip:search refused') return { text: 'search refused', tone: 'warn' }
+  if (outcome.startsWith('skip:refused')) return { text: 'send refused', tone: 'warn' }
+  if (outcome === 'off:switch') return { text: 'switched off', tone: 'warn' }
+  if (outcome === 'off:agent_stopped') return { text: 'agent stopped', tone: 'warn' }
+  if (outcome.startsWith('off:')) return { text: 'no agent to answer', tone: 'warn' }
+  return { text: 'couldn’t answer', tone: 'warn' }
+}
+
+const STEP_LABEL: Record<string, string> = {
+  reply: 'Answer', silent: 'Stayed silent', search: 'Searched the web for', skip: 'Unusable answer', error: 'No answer',
+}
+
+function ActivityEntry({ e }: { e: WhatsAppWebAutoreplyEntry }) {
+  const [open, setOpen] = useState(false)
+  const label = outcomeLabel(e.outcome)
+  const steps = e.steps ?? []
+  const why = [...steps].reverse().find((s) => s.why)?.why
+  const final = steps[steps.length - 1]
+  const how = e.mode === 'mention'
+    ? (e.called?.length ? `called by ${e.called.map((w) => `“${w}”`).join(', ')}` : 'a reply to its message')
+    : e.mode === 'follow_up' ? 'following up (not addressed)' : ''
+  return (
+    <div className="px-3 py-2 space-y-1">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-zinc-500">
+        <span>{stamp(e.ts)} · {e.chat}</span>
+        <span className={`inline-flex items-center text-[11px] px-1.5 py-px rounded-full border ${PILL[label.tone]}`}>{label.text}</span>
+        {how && <span>{how}</span>}
+        {steps.length > 0 && (
+          <button onClick={() => setOpen((v) => !v)} className="ml-auto flex items-center gap-0.5 text-violet-500 hover:underline">
+            <ChevronRight className={`h-3 w-3 transition-transform ${open ? 'rotate-90' : ''}`} /> details
+          </button>
+        )}
+      </div>
+      {(e.messages ?? []).map((m) => (
+        <div key={m.id} className="text-zinc-300 break-words">
+          <span className="text-zinc-500">{m.from_owner ? 'You' : m.sender || 'someone'}: </span>{m.text || <span className="italic text-zinc-500">no text</span>}
+        </div>
+      ))}
+      {why && <div className="italic text-zinc-400">Why: {why}</div>}
+      {final?.kind === 'reply' && (
+        <div className="border-l-2 border-emerald-500/50 pl-2 text-zinc-200 whitespace-pre-wrap break-words">{final.text}</div>
+      )}
+      {final?.kind === 'silent' && final.text && <div className="text-zinc-400">Its reason: {final.text}</div>}
+      {e.error && <div className="text-amber-600 dark:text-amber-400">{e.error}</div>}
+      {open && (
+        <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-900/40 px-2.5 py-2">
+          {steps.map((s, i) => (
+            <div key={i} className="space-y-1">
+              <div className="text-zinc-400">
+                <span className="font-medium text-zinc-300">{i + 1}. {STEP_LABEL[s.kind] ?? s.kind}</span>
+                {s.kind === 'search' && <span>: “{s.text}”</span>}
+                {(s.kind === 'skip' || s.kind === 'error') && <span>: {s.text}</span>}
+                {(s.model || s.tokens) ? <span className="text-zinc-500"> · {[s.model, s.tokens ? `${s.tokens} tokens` : ''].filter(Boolean).join(' · ')}</span> : null}
+              </div>
+              {s.reasoning && (
+                <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded bg-zinc-950 px-2 py-1.5 font-mono text-[11px] text-zinc-400">{s.reasoning}</pre>
+              )}
+              {s.kind !== 'search' && s.why && <div className="text-zinc-400">Why: {s.why}</div>}
+              {(s.results ?? []).length > 0 && (
+                <ul className="list-disc pl-5 text-zinc-500">{s.results!.map((r, j) => <li key={j}>{r}</li>)}</ul>
+              )}
+            </div>
+          ))}
+          {!steps.some((s) => s.reasoning) && (
+            <div className="text-zinc-500">This model didn’t return its reasoning: only its one-line “why” is shown.</div>
+          )}
+          {e.seconds !== undefined && <div className="text-zinc-500">{e.agent ? `${e.agent} · ` : ''}{e.seconds} s in all</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AutoreplyActivity() {
+  const [open, setOpen] = useState(false)
+  const [ignored, setIgnored] = useState(false)
+  const [entries, setEntries] = useState<WhatsAppWebAutoreplyEntry[] | null>(null)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const load = useCallback(async () => {
+    setBusy(true)
+    try {
+      const r = await getWhatsAppWebAutoreplyActivity(ignored)
+      setEntries(r.entries)
+      setNote(r.stale_service ? 'The WhatsApp Web service is older than Flight Deck: an admin can restart it by turning WhatsApp Web off and on for the deck.' : '')
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }, [ignored])
+  useEffect(() => { if (open) load() }, [open, load])
+  return (
+    <div className={`${BOX} space-y-2`}>
+      <div className="flex items-center gap-2">
+        <button onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 text-left">
+          <ChevronRight className={`h-3 w-3 transition-transform ${open ? 'rotate-90' : ''}`} />
+          <span className="font-medium text-zinc-100">Auto-reply activity</span>
+        </button>
+        {open && (
+          <>
+            <label className="ml-auto flex items-center gap-1.5 text-zinc-400">
+              <input type="checkbox" checked={ignored} onChange={(e) => setIgnored(e.target.checked)} className="h-3 w-3 accent-violet-600" />
+              messages not for it
+            </label>
+            <button onClick={load} disabled={busy} className="text-zinc-400 hover:text-zinc-200 disabled:opacity-50" title="Refresh">
+              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
+            </button>
+          </>
+        )}
+      </div>
+      {open && (
+        <>
+          <p className="text-zinc-500">
+            Every time a message in an auto-reply chat could call your agent: what it decided, why, what it searched
+            and what it said. Only you see this.
+          </p>
+          {note && <div className="text-amber-600 dark:text-amber-400">{note}</div>}
+          {entries && entries.length === 0 && !note && <div className="text-zinc-500">Nothing yet.</div>}
+          {entries && entries.length > 0 && (
+            <div className="max-h-[28rem] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 divide-y divide-zinc-800/60">
+              {entries.map((e) => <ActivityEntry key={e.id} e={e} />)}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -610,6 +754,7 @@ export default function WhatsAppWebConnection() {
           )}
         </div>
         {link.linked_at && state !== 'logged_out' && <Sending />}
+        {link.linked_at && state !== 'logged_out' && <AutoreplyActivity />}
         {link.stats && link.stats.messages > 0 && (
           <div>
             <button
