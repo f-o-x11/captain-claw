@@ -269,6 +269,24 @@ class TestMicrosoftMail:
         res = await _mail(graph, monkeypatch).execute("create_draft", to="ana@x.co", subject="Hi", body="x")
         assert not res.success and REPEAT_MARK in res.error and is_repeat_refusal(res.error)
         assert "Draft ID OLD" in res.error and graph.bodies("POST") == []
+        assert "recurring email" in res.error and "date in the subject" in res.error
+
+    async def test_next_edition_of_a_weekly_report_goes_out_with_a_dated_subject(self, monkeypatch):
+        graph = _Graph({
+            ("GET", "/me/mailFolders/drafts/messages"): _EMPTY,
+            ("GET", "/me/mailFolders/sentitems/messages"): (200, {"value": [{
+                "id": "S7", "subject": "Weekly report", "isDraft": False,
+                "sentDateTime": "2026-10-19T08:04:00Z",
+                "toRecipients": [{"emailAddress": {"address": "ana@x.co"}}]}]}),
+            ("POST", "/me/messages"): (201, {"id": "D8"}),
+        })
+        mail = _mail(graph, monkeypatch)
+        res = await mail.execute("create_draft", to="ana@x.co", subject="Weekly report", body="x")
+        assert not res.success and is_repeat_refusal(res.error) and "date in the subject" in res.error
+        res = await mail.execute(
+            "create_draft", to="ana@x.co", subject="Weekly report — 2026-10-26", body="x")
+        assert res.success, res.error
+        assert graph.bodies("POST")[0]["subject"] == "Weekly report — 2026-10-26"
 
     async def test_allow_repeat_skips_the_check(self, monkeypatch):
         graph = _Graph({("POST", "/me/messages"): (201, {"id": "D2"})})
@@ -305,6 +323,7 @@ class TestMicrosoftMail:
         })
         res = await _mail(graph, monkeypatch).execute("create_draft", reply_to_message_id="M1", body="x")
         assert not res.success and is_repeat_refusal(res.error) and graph.bodies("POST") == []
+        assert "date in the subject" not in res.error  # a reply is matched by its thread
 
     async def test_update_draft_refuses_a_sent_message(self, monkeypatch):
         graph = _Graph({("GET", "/me/messages/S1"): (200, {"id": "S1", "isDraft": False})})
