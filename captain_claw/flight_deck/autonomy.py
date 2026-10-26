@@ -47,6 +47,16 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _status_changed(user_id: str) -> None:
+    """One of this user's actions was added or changed status: their devices'
+    count of proposals waiting may have moved (owner_notify)."""
+    try:
+        from captain_claw.flight_deck.owner_notify import waiting_may_have_changed
+        waiting_may_have_changed(user_id)
+    except Exception:  # noqa: BLE001 — a notification never breaks a write
+        pass
+
+
 def _db_path() -> Path:
     base = os.environ.get("FD_DATA_DIR", "").strip()
     if base:
@@ -406,6 +416,7 @@ class AutonomyStore:
                  json.dumps(payload or {}), now),
             )
             conn.commit()
+        _status_changed(uid)
         return self.get_action(aid) or {}
 
     def get_action(self, action_id: str) -> dict[str, Any] | None:
@@ -469,7 +480,10 @@ class AutonomyStore:
                 f"UPDATE autonomous_actions SET {', '.join(sets)} WHERE id = ?", vals
             )
             conn.commit()
-        return self.get_action(action_id)
+        row = self.get_action(action_id)
+        if row:
+            _status_changed(str(row.get("user_id") or ""))
+        return row
 
     def count_since(self, user_id: str, iso_cutoff: str) -> int:
         """How many actions this user created at/after ``iso_cutoff`` — the
@@ -481,6 +495,16 @@ class AutonomyStore:
                 "SELECT COUNT(*) AS n FROM autonomous_actions"
                 " WHERE user_id = ? AND created_at >= ?",
                 (uid, iso_cutoff),
+            ).fetchone()
+        return int(r["n"] if r else 0)
+
+    def count_status(self, user_id: str, status: str) -> int:
+        """How many of this user's actions are in ``status`` now."""
+        uid = _norm_user(user_id)
+        with self._lock:
+            r = self._c().execute(
+                "SELECT COUNT(*) AS n FROM autonomous_actions WHERE user_id = ? AND status = ?",
+                (uid, status),
             ).fetchone()
         return int(r["n"] if r else 0)
 
@@ -512,6 +536,8 @@ class AutonomyStore:
                 (_utcnow_iso(), uid, iso_cutoff),
             )
             conn.commit()
+        if cur.rowcount:
+            _status_changed(uid)
         return int(cur.rowcount or 0)
 
     def open_actions(self, user_id: str) -> list[dict[str, Any]]:
@@ -555,7 +581,12 @@ class AutonomyStore:
                 (*vals, action_id, *froms),
             )
             conn.commit()
-        return int(cur.rowcount or 0) == 1
+        moved = int(cur.rowcount or 0) == 1
+        if moved:
+            row = self.get_action(action_id)
+            if row:
+                _status_changed(str(row.get("user_id") or ""))
+        return moved
 
     def latest_thread_action(
         self, user_id: str, thread_key: str, since_iso: str,

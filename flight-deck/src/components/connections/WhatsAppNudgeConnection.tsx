@@ -3,6 +3,7 @@ import { isAppShell } from '../../services/desktopShell'
 import { MessageCircle, Loader2, Check, AlertCircle, ChevronDown, Send } from 'lucide-react'
 import { useAuthStore, refreshAccessToken } from '../../stores/authStore'
 import { useUIStore } from '../../stores/uiStore'
+import { NOTIFY_CHANGED } from './NotificationsConnection'
 
 // Mirrors captain_claw/flight_deck/autonomy_routes.py (/fd/autonomy/whatsapp)
 interface TestResult {
@@ -83,7 +84,12 @@ export default function WhatsAppNudgeConnection() {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    const reload = () => { load() }
+    window.addEventListener(NOTIFY_CHANGED, reload)
+    return () => window.removeEventListener(NOTIFY_CHANGED, reload)
+  }, [])
 
   const save = async () => {
     if (!state) return
@@ -98,6 +104,7 @@ export default function WhatsAppNudgeConnection() {
       if (!res.ok) throw new Error(await _detail(res))
       apply(await res.json())
       setNotice('Saved.')
+      if (body.nudge_to_whatsapp !== undefined) window.dispatchEvent(new Event(NOTIFY_CHANGED))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -200,8 +207,8 @@ export default function WhatsAppNudgeConnection() {
             {status}
           </div>
           <div className="text-xs text-zinc-500 mt-0.5">
-            Autonomous Work's reminders and follow-up nudges, delivered to your own WhatsApp
-            as well as the agent's chat.
+            Autonomous Work's nudges, and proposals waiting for your approval, delivered to
+            your own WhatsApp as well as the agent's chat.
           </div>
         </div>
         <ChevronDown
@@ -246,7 +253,7 @@ export default function WhatsAppNudgeConnection() {
               onChange={(e) => setEnabled(e.target.checked)}
               className="h-3.5 w-3.5 accent-violet-600"
             />
-            Send my nudges to WhatsApp
+            Send my nudges and waiting proposals to WhatsApp
           </label>
 
           <div>

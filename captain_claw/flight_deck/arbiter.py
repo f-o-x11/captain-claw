@@ -812,6 +812,10 @@ async def maybe_run_arbiter(
 
         emit("dispatched" if dispatched else "proposed",
              f"{chosen['kind']} · {chosen['title']} (score {chosen['score']:.2f}, risk {chosen['risk']})")
+        if not dispatched and (store.get_action(row.get("id", "")) or {}).get("status") == "awaiting_approval":
+            # It waits for the user: tell them where they asked to hear it.
+            from captain_claw.flight_deck.owner_notify import notify_proposal
+            await notify_proposal(user_id, row)
         _log.info("arbiter: %s %r for %s",
                   "dispatched" if dispatched else "proposed", chosen["title"], user_id)
         return {"ran": True, "proposed": 1, "dispatched": dispatched,

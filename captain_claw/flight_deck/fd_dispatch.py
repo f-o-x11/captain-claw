@@ -387,22 +387,11 @@ async def _execute_and_judge(
             # nudges and would suppress them via reliability. Delivery == success.
             success = True
             note = output[:300] or "delivered"
-            # Also push the nudge to the owner's WhatsApp (the agent turn already
-            # surfaces it in web chat; this fans it out to WhatsApp too).
-            if output and cfg.get("nudge_to_whatsapp", True):
-                try:
-                    from captain_claw.flight_deck.whatsapp_bridge import push_to_waid
-                    waids, skipped = _nudge_waids(cfg)
-                    sent = 0
-                    for waid in waids:
-                        if await push_to_waid(waid, output):
-                            sent += 1
-                    if waids:
-                        store.log(user_id, "nudge → whatsapp", f"sent to {sent}/{len(waids)} recipient(s)")
-                    elif skipped:
-                        store.log(user_id, "nudge → whatsapp skipped", skipped)
-                except Exception as exc:
-                    _log.debug("nudge whatsapp delivery failed: %s", exc)
+            # Also send the nudge to the owner's own channels — the ones they
+            # switched on (the agent turn already surfaces it in web chat).
+            if output:
+                from captain_claw.flight_deck.owner_notify import notify_owner
+                await notify_owner(user_id, "nudge", output, cfg=cfg)
             # If this nudge was reminding about a tracked follow-up, re-arm it
             # (escalate: sooner each time) — or retire it after enough nudges.
             fu_id = str((action.get("payload") or {}).get("follow_up_id") or "")

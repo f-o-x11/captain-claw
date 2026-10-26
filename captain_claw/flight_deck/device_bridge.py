@@ -67,6 +67,12 @@ Flight Deck → device
   text  {"type":"replay_none"}                   nothing to replay (the device plays what it kept)
   text  {"type":"sound","cmd":"volume_up|volume_down|beep_on|beep_off"}  a spoken sound command
                                                  (cmds=sound devices), then state ready
+  text  {"type":"waiting","count":n,"text":"…","beep":bool}   how many proposals wait for the
+                                                 owner's approval in Flight Deck (0: none); with
+                                                 "beep", something new came (a proposal, a nudge:
+                                                 "text" says it in a line) — beep, buzz, blink.
+                                                 On connect, and whenever the count moves
+                                                 (owner_notify.py)
 
 Auth: a personal access token (Profile → MCP agent access) names the owner;
 the device only ever reaches that owner's agents. With Flight Deck auth off
@@ -1113,6 +1119,34 @@ async def push_background(user_id: str, hw: str) -> int:
     return sent
 
 
+async def push_waiting(user_id: str, count: int, text: str = "", beep: bool = False) -> list[str]:
+    """How many of the owner's proposals wait (and with ``beep``, that
+    something new came: ``text``) to their connected devices; the ids of
+    those that got it (owner_notify.py)."""
+    from captain_claw.flight_deck.autonomy import _norm_user
+
+    owner = _norm_user(user_id)
+    frame = {"type": "waiting", "count": max(0, int(count)), "text": text, "beep": bool(beep)}
+    reached: list[str] = []
+    for conn in list(_live):
+        if _norm_user(conn.user_id) != owner or conn.closed:
+            continue
+        try:
+            await conn.send_json(frame)
+            reached.append(conn.device_id)
+        except Exception as exc:
+            log.debug("device waiting send failed: %s", exc)
+    return reached
+
+
+def connected_devices(user_id: str) -> int:
+    """How many of the owner's devices are connected now."""
+    from captain_claw.flight_deck.autonomy import _norm_user
+
+    owner = _norm_user(user_id)
+    return sum(1 for conn in list(_live) if _norm_user(conn.user_id) == owner and not conn.closed)
+
+
 async def offer_to_connected(hw: str) -> int:
     """Offer the newest build to every connected device of kind ``hw``."""
     offered = 0
@@ -1152,6 +1186,12 @@ async def device_ws(ws: WebSocket) -> None:
         if await conn.bind(q.get("agent", "")):
             conn._spawn(conn.resume())
         await conn.offer_update()
+        # How many proposals wait in Flight Deck (and a beep for what came
+        # while it slept). Firmware that doesn't know the frame ignores it.
+        from captain_claw.flight_deck.owner_notify import device_connected
+        waiting = device_connected(conn.user_id, conn.device_id)
+        if waiting:
+            await conn.send_json(waiting)
         while True:
             msg = await ws.receive()
             if msg.get("type") == "websocket.disconnect":
