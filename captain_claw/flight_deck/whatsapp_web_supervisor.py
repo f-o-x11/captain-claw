@@ -64,6 +64,11 @@ def kill_switch() -> bool:
     return os.environ.get("FD_WHATSAPP_WEB", "").strip().lower() in ("off", "0", "false", "no")
 
 
+def send_kill_switch() -> bool:
+    """``FD_WHATSAPP_WEB_SEND=off``: no agent send, whatever the users chose."""
+    return os.environ.get("FD_WHATSAPP_WEB_SEND", "").strip().lower() in ("off", "0", "false", "no")
+
+
 def installed() -> bool:
     return importlib.util.find_spec("neonize") is not None
 

@@ -31,7 +31,7 @@ from captain_claw.flight_deck.whatsapp_web.link_state import (
     normalize_phone,
     now_iso,
 )
-from captain_claw.flight_deck.whatsapp_web.store import RETENTION_CHOICES, ChatNotFound, Store
+from captain_claw.flight_deck.whatsapp_web.store import MAX_DAILY_LIMIT, RETENTION_CHOICES, ChatNotFound, Store
 
 log = logging.getLogger("whatsapp_web.engine")
 
@@ -54,12 +54,21 @@ _PURGE_EVERY = 3600.0
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
 # What WhatsApp's servers say when a file is gone (media expires there).
 _GONE_MARKERS = ("404", "410", "not found", "expired", "gone", "no longer")
+# Sending (Phase 3).
+SEND_PER_CHAT_MINUTE = 6
+REPEAT_WINDOW = 86400.0
+MAX_SEND_TEXT = 4096
+MAX_SIGNATURE = 120
+SEND_TIMEOUT = 30.0
+# A send error that leaves the outcome open: WhatsApp may have the message.
+_UNKNOWN_MARKERS = ("timeout", "timed out", "deadline", "context canceled", "eof", "connection reset")
 
 
 class Adapter(Protocol):
     async def connect(self) -> None: ...
     async def pair_code(self, phone: str) -> str: ...
     async def download(self, field: str, raw_hex: str) -> bytes: ...
+    async def send_text(self, jid: str, text: str) -> str: ...
     async def logout(self) -> None: ...
     async def stop(self) -> None: ...
 
@@ -543,6 +552,125 @@ class Engine:
             "file_name": str(media.get("file_name") or ""), "seconds": int(media.get("seconds") or 0),
             "size": len(data),
         }
+
+    # ── sending (Phase 3): automatic, only to whitelisted chats ─────
+
+    async def send_policy(self, user_id: str) -> dict[str, Any]:
+        store = self._reader(user_id)
+        policy = await asyncio.to_thread(store.send_policy)
+        policy["sends"] = await asyncio.to_thread(store.sends, 20)
+        counts = await asyncio.to_thread(store.send_counts, "", now=self._clock())
+        policy["sent_today"] = counts["day"]
+        return policy
+
+    async def set_send_policy(self, user_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        """Change the sending rules. The whitelist keeps only chats that already
+        exist here (a group we're in, or a chat with messages): a number typed in
+        never becomes a chat Flight Deck may start."""
+        store = self._reader(user_id)
+        policy = await asyncio.to_thread(store.send_policy)
+        dropped: list[str] = []
+        if changes.get("enabled") is not None:
+            policy["enabled"] = bool(changes["enabled"])
+        if changes.get("allowed") is not None:
+            wanted = [str(j).strip() for j in changes["allowed"] if str(j).strip()]
+            kept = []
+            for jid in dict.fromkeys(wanted):
+                (kept if await asyncio.to_thread(store.chat_has_history, jid) else dropped).append(jid)
+            policy["allowed"] = kept
+        if changes.get("daily_limit") is not None:
+            try:
+                limit = int(changes["daily_limit"])
+            except (TypeError, ValueError):
+                raise LinkError(422, "The daily limit is a number") from None
+            if not 1 <= limit <= MAX_DAILY_LIMIT:
+                raise LinkError(422, f"The daily limit is 1 to {MAX_DAILY_LIMIT} messages")
+            policy["daily_limit"] = limit
+        if changes.get("signature") is not None:
+            sig = " ".join(str(changes["signature"]).split())
+            if len(sig) > MAX_SIGNATURE:
+                raise LinkError(422, f"Keep the signature to {MAX_SIGNATURE} characters")
+            policy["signature"] = sig
+        if changes.get("signature_on") is not None:
+            policy["signature_on"] = bool(changes["signature_on"])
+        await asyncio.to_thread(store.set_send_policy, policy)
+        out = await self.send_policy(user_id)
+        out["dropped"] = dropped
+        return out
+
+    async def send(self, user_id: str, *, chat: str, text: str, agent: str = "",
+                   allow_repeat: bool = False) -> dict[str, Any]:
+        """Send one text message for an agent — automatic once the user turned
+        sending on, and only to a chat on their whitelist. Every refusal says why."""
+        store = self._reader(user_id)
+        link = self._links[user_id]
+        policy = await asyncio.to_thread(store.send_policy)
+        if not policy["enabled"]:
+            raise LinkError(403, "Sending is off: the user can turn it on in Flight Deck → Connections → "
+                                 "WhatsApp Web → Sending")
+        body = str(text or "").strip()
+        if not body:
+            raise LinkError(422, "Nothing to send: 'text' is empty")
+        if len(body) > MAX_SEND_TEXT:
+            raise LinkError(422, f"The message is too long ({len(body)} characters; at most {MAX_SEND_TEXT})")
+        try:
+            found = await asyncio.to_thread(store.find_chat, chat)
+        except ChatNotFound as exc:
+            options = "; ".join(f"{c['title']} (id {c['jid']})" for c in exc.candidates)
+            raise LinkError(404, f"{exc}{': ' + options if options else ''}") from None
+        jid = found["jid"]
+        if jid not in policy["allowed"]:
+            raise LinkError(403, f"{found['title']} isn't on the user's sending whitelist: only they can add "
+                                 "it, in Flight Deck → Connections → WhatsApp Web → Sending")
+        if not await asyncio.to_thread(store.chat_has_history, jid):
+            raise LinkError(403, f"There's no conversation with {found['title']} yet, and Flight Deck never "
+                                 "starts one")
+        if link.state.state == "temporary_ban":
+            raise LinkError(409, "WhatsApp has temporarily banned this account: nothing is sent until it lifts")
+        if link.adapter is None or link.state.state != "connected":
+            raise LinkError(409, "WhatsApp isn't connected right now, so nothing was sent: the user can check "
+                                 "the link in Flight Deck → Connections")
+        now = self._clock()
+        counts = await asyncio.to_thread(store.send_counts, jid, now=now)
+        if counts["day"] >= policy["daily_limit"]:
+            raise LinkError(429, f"The daily limit is reached ({policy['daily_limit']} messages in 24 hours)")
+        if counts["minute"] >= SEND_PER_CHAT_MINUTE:
+            raise LinkError(429, f"Too many messages to {found['title']} in the last minute; wait a little")
+        composed = body
+        if policy["signature_on"] and policy["signature"]:
+            composed = f"{body}\n\n{policy['signature']}"
+        if not allow_repeat:
+            same = await asyncio.to_thread(store.recent_same, jid, composed, since=now - REPEAT_WINDOW)
+            if same == "unknown":
+                raise LinkError(409, f"This exact message to {found['title']} may already have gone out (WhatsApp "
+                                     "didn't confirm the earlier try): check the chat before sending it again; "
+                                     "pass allow_repeat to send it anyway")
+            if same:
+                raise LinkError(409, f"This exact message went to {found['title']} in the last 24 hours; pass "
+                                     "allow_repeat if it really should go again")
+        rowid = await asyncio.to_thread(store.start_send, jid, agent, composed, now=now)
+        try:
+            wa_id = await asyncio.wait_for(link.adapter.send_text(jid, composed), SEND_TIMEOUT)
+        except Exception as exc:
+            text_err = str(exc) or type(exc).__name__
+            unknown = isinstance(exc, asyncio.TimeoutError) or any(m in text_err.lower() for m in _UNKNOWN_MARKERS)
+            await asyncio.to_thread(store.finish_send, rowid, "unknown" if unknown else "failed", error=text_err)
+            if unknown:
+                self._bell(link, f"{agent or 'An agent'} may have sent a WhatsApp message",
+                           f"WhatsApp didn't confirm it — check the chat. To {found['title']}: {body[:120]}")
+                raise LinkError(504, f"WhatsApp didn't confirm the message to {found['title']}; it may have gone "
+                                     "out. Don't send it again before the user checks the chat.") from None
+            raise LinkError(502, f"WhatsApp refused the message to {found['title']}: {text_err}") from None
+        await asyncio.to_thread(store.finish_send, rowid, "sent", wa_id=wa_id)
+        self._bell(link, f"{agent or 'An agent'} sent a WhatsApp message", f"To {found['title']}: {body[:160]}")
+        return {"status": "sent", "id": wa_id, "chat": found["title"], "chat_jid": jid, "text": composed,
+                "signed": composed != body}
+
+    def _bell(self, link: _Link, title: str, body: str) -> None:
+        self._seq += 1
+        self._events.append({"seq": self._seq, "user_id": link.user_id, "title": title[:120],
+                             "body": body[:300], "at": now_iso(self._clock())})
+        del self._events[:-_MAX_EVENTS]
 
     async def set_retention(self, user_id: str, days: int | None) -> dict[str, Any]:
         if days is not None and days not in RETENTION_CHOICES:

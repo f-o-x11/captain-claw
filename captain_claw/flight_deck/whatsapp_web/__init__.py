@@ -21,8 +21,10 @@ library) per linked user and answers Flight Deck on a loopback port:
 * ``__main__`` — the process: lock, umask, port, run.
 
 The history the phone sends after linking and every message since are kept for
-the user's agents (the ``whatsapp_web`` tool, read-only). Nothing is ever sent,
-marked read or announced as online.
+the user's agents (the ``whatsapp_web`` tool). They send only through
+:meth:`.engine.Engine.send`: when the user turned sending on, to whitelisted
+chats that already exist, within the limits, signed. Nothing is ever marked
+read, reacted to or announced as online.
 
 Data, under ``<FD data dir>/whatsapp_web/`` (0700, files 0600):
 

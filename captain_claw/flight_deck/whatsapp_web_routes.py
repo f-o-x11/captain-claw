@@ -10,7 +10,10 @@ end of it: :mod:`.whatsapp_web_supervisor`).
   agent's member never gets here (GrantGuardMiddleware refuses member markers).
 * ``/fd/admin/whatsapp-web`` — the deck's switch, off by default.
 
-Read-only: nothing here sends, reacts or marks anything read in WhatsApp.
+Agents send only through ``/fd/whatsapp-web/agent/send``: automatic once the
+user turned sending on, and only to chats on their whitelist (the gate is the
+service's, :meth:`Engine.send`); ``FD_WHATSAPP_WEB_SEND=off`` refuses every
+send. Nothing here reacts, marks read or changes presence.
 """
 
 from __future__ import annotations
@@ -250,6 +253,49 @@ async def set_retention(body: RetentionBody, user: dict = Depends(get_current_us
     return await _call(user, "PUT", "/retention", {"days": body.days})
 
 
+# ── the user's sending rules ────────────────────────────────────────
+
+
+@router.get("/fd/whatsapp-web/sending")
+async def get_sending(user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """Sending on/off, the whitelist, the daily limit, the signature, the
+    latest sends — and the chats the whitelist can be picked from."""
+    s = sup.get()
+    if s is None or not s.user_has_link(user["id"]) or await _unavailable_reason(get_db()):
+        return {"available": False}
+    try:
+        policy = await s.request("GET", f"/links/{user['id']}/send-policy")
+        chats = (await s.request("GET", f"/links/{user['id']}/chats")).get("chats") or []
+    except (sup.ServiceDown, sup.ServiceError) as exc:
+        raise _service_error(exc) from None
+    return {"available": True, "kill_switch": sup.send_kill_switch(), **policy,
+            "chats": [{k: c.get(k) for k in ("jid", "title", "kind", "number", "messages", "last_ts")}
+                      for c in chats]}
+
+
+class SendingBody(BaseModel):
+    enabled: bool | None = None
+    allowed: list[str] | None = None
+    daily_limit: int | None = None
+    signature: str | None = None
+    signature_on: bool | None = None
+
+
+@router.put("/fd/whatsapp-web/sending")
+async def set_sending(body: SendingBody, user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    reason = await _unavailable_reason(get_db())
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+    s = _supervisor()
+    if not s.user_has_link(user["id"]):
+        raise HTTPException(status_code=409, detail="Link WhatsApp first")
+    try:
+        await s.request("PUT", f"/links/{user['id']}/send-policy", body.model_dump())
+    except (sup.ServiceDown, sup.ServiceError) as exc:
+        raise _service_error(exc) from None
+    return await get_sending(user)
+
+
 # ── agents (owner only) ─────────────────────────────────────────────
 
 _NOT_LINKED = ("Your user hasn't linked WhatsApp — they can in Flight Deck → Connections → "
@@ -362,6 +408,27 @@ async def agent_attachment(body: AgentAttachmentBody, request: Request) -> Respo
         raise _service_error(exc) from None
     return Response(content=content, media_type=headers.get("content-type") or "application/octet-stream",
                     headers={"X-WAW-Meta": headers.get("x-waw-meta") or "{}"})
+
+
+class AgentSendBody(BaseModel):
+    chat: str
+    text: str
+    allow_repeat: bool = False
+
+
+@router.post("/fd/whatsapp-web/agent/send")
+async def agent_send(body: AgentSendBody, request: Request) -> dict[str, Any]:
+    """One text message, sent now — automatic once the owner turned sending on,
+    only to a chat on their whitelist; every refusal says why."""
+    if sup.send_kill_switch():
+        raise HTTPException(status_code=403, detail=(
+            "Sending WhatsApp messages is switched off on this deck (FD_WHATSAPP_WEB_SEND=off)"))
+    owner, s = await _agent_ready(request)
+    try:
+        return await s.request("POST", f"/links/{owner}/send", {
+            **body.model_dump(), "agent": _agent_slug(request)}, timeout=60.0)
+    except (sup.ServiceDown, sup.ServiceError) as exc:
+        raise _service_error(exc) from None
 
 
 @router.post("/fd/whatsapp-web/agent/news")

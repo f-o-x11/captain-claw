@@ -25,6 +25,8 @@ in a worker thread.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 import threading
 import time
@@ -40,6 +42,10 @@ CHAT_SCAN = 100000
 # An agent's first "what's new" covers this much.
 FIRST_LOOK_SECONDS = 86400
 RETENTION_CHOICES = (7, 30, 90, 365)
+# Sending (Phase 3): off until the user turns it on, only to whitelisted chats.
+DEFAULT_SIGNATURE = "— sent by my assistant"
+DEFAULT_DAILY_LIMIT = 30
+MAX_DAILY_LIMIT = 200
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -89,6 +95,19 @@ CREATE TABLE IF NOT EXISTS lid_map (lid TEXT PRIMARY KEY, pn TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cursors (agent TEXT NOT NULL, key TEXT NOT NULL, value INTEGER NOT NULL,
                                     PRIMARY KEY (agent, key));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sends (
+    rowid INTEGER PRIMARY KEY,
+    ts INTEGER NOT NULL,
+    chat_jid TEXT NOT NULL,
+    agent TEXT NOT NULL DEFAULT '',
+    text_hash TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    wa_id TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS sends_ts ON sends (ts);
+CREATE INDEX IF NOT EXISTS sends_chat ON sends (chat_jid, ts);
 """
 
 
@@ -516,6 +535,111 @@ class Store:
             })
         out.sort(key=lambda c: (-c["messages"], c["name"] or c["push_name"] or c["jid"]))
         return out[: max(1, min(int(limit or 20), 100))]
+
+    # ── sending: the policy and the log ─────────────────────────────
+
+    def send_policy(self) -> dict[str, Any]:
+        """The user's sending rules: off, nobody whitelisted, 30 a day and the
+        signature on until they say otherwise."""
+        with self._lock:
+            meta = {r["key"]: r["value"] for r in self._db.execute(
+                "SELECT key, value FROM meta WHERE key LIKE 'send_%' OR key LIKE 'signature%'")}
+        try:
+            allowed = json.loads(meta.get("send_allowed") or "[]")
+        except ValueError:
+            allowed = []
+        try:
+            limit = int(meta.get("send_daily_limit") or DEFAULT_DAILY_LIMIT)
+        except ValueError:
+            limit = DEFAULT_DAILY_LIMIT
+        return {
+            "enabled": meta.get("send_enabled") == "1",
+            "allowed": [str(j) for j in allowed if isinstance(j, str)] if isinstance(allowed, list) else [],
+            "daily_limit": max(1, min(limit, MAX_DAILY_LIMIT)),
+            "signature": meta.get("signature", DEFAULT_SIGNATURE),
+            "signature_on": meta.get("signature_on", "1") == "1",
+        }
+
+    def set_send_policy(self, policy: dict[str, Any]) -> None:
+        values = {
+            "send_enabled": "1" if policy.get("enabled") else "0",
+            "send_allowed": json.dumps(sorted(set(policy.get("allowed") or []))),
+            "send_daily_limit": str(int(policy.get("daily_limit") or DEFAULT_DAILY_LIMIT)),
+            "signature": str(policy.get("signature") if policy.get("signature") is not None else DEFAULT_SIGNATURE),
+            "signature_on": "1" if policy.get("signature_on", True) else "0",
+        }
+        with self._lock, self._tx() as db:
+            for key, value in values.items():
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)", (key, value))
+
+    @staticmethod
+    def text_hash(chat_jid: str, text: str) -> str:
+        """What the duplicate check compares: the chat and the text, folded."""
+        folded = " ".join(str(text or "").casefold().split())
+        return hashlib.sha256(f"{chat_jid}\n{folded}".encode()).hexdigest()
+
+    def start_send(self, chat_jid: str, agent: str, text: str, *, now: float) -> int:
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO sends (ts, chat_jid, agent, text_hash, body, status) VALUES (?,?,?,?,?, 'sending')",
+                (int(now), chat_jid, agent, self.text_hash(chat_jid, text), _seal({"t": text})))
+            return int(cur.lastrowid)
+
+    def finish_send(self, rowid: int, status: str, *, wa_id: str = "", error: str = "") -> None:
+        with self._lock:
+            self._db.execute("UPDATE sends SET status=?, wa_id=?, error=? WHERE rowid=?",
+                             (status, wa_id, error[:300], rowid))
+
+    def send_counts(self, chat_jid: str, *, now: float) -> dict[str, int]:
+        """Sends that count against the limits (sent, or maybe sent): the last
+        24 hours overall, the last minute in this chat."""
+        with self._lock:
+            day = self._db.execute(
+                "SELECT COUNT(*) FROM sends WHERE ts >= ? AND status IN ('sent', 'unknown', 'sending')",
+                (int(now - 86400),)).fetchone()[0]
+            minute = self._db.execute(
+                "SELECT COUNT(*) FROM sends WHERE chat_jid=? AND ts >= ? AND status IN ('sent', 'unknown', 'sending')",
+                (chat_jid, int(now - 60))).fetchone()[0]
+        return {"day": int(day), "minute": int(minute)}
+
+    def recent_same(self, chat_jid: str, text: str, *, since: float) -> str | None:
+        """The status of the same text sent to this chat since *since*, if any."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT status FROM sends WHERE chat_jid=? AND text_hash=? AND ts >= ?"
+                " AND status IN ('sent', 'unknown', 'sending') ORDER BY rowid DESC LIMIT 1",
+                (chat_jid, self.text_hash(chat_jid, text), int(since))).fetchone()
+        return row["status"] if row else None
+
+    def sends(self, limit: int = 20) -> list[dict[str, Any]]:
+        """The latest sends, newest first (for the card)."""
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM sends ORDER BY rowid DESC LIMIT ?",
+                                    (max(1, min(int(limit or 20), 100)),)).fetchall()
+            titles = {r["jid"]: _text(r["name"]) for r in self._db.execute("SELECT jid, name FROM chats")}
+            names = self._names()
+        out = []
+        for r in rows:
+            body = _unseal(r["body"]) if r["body"] else None
+            body = body if isinstance(body, dict) else {}
+            jid = r["chat_jid"]
+            out.append({
+                "ts": int(r["ts"]), "chat_jid": jid,
+                "chat": titles.get(jid) or self._person(jid, names), "agent": r["agent"],
+                "status": r["status"], "error": r["error"], "text": str(body.get("t") or ""),
+                "wa_id": r["wa_id"],
+            })
+        return out
+
+    def chat_has_history(self, jid: str) -> bool:
+        """An existing conversation: a group we're in, or a chat with messages."""
+        with self._lock:
+            row = self._db.execute("SELECT is_group FROM chats WHERE jid=?", (jid,)).fetchone()
+            if row is None:
+                return False
+            if row["is_group"]:
+                return True
+            return self._db.execute("SELECT 1 FROM messages WHERE chat_jid=? LIMIT 1", (jid,)).fetchone() is not None
 
     # ── what's new, per agent ───────────────────────────────────────
 

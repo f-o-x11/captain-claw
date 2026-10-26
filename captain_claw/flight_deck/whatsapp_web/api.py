@@ -18,6 +18,8 @@ person and only ever passes their own id.
 * ``POST   /links/{user_id}/news``       ``{agent}`` → what's new for that agent (moves its cursor)
 * ``PUT    /links/{user_id}/retention``  ``{days}`` (null = keep everything)
 * ``POST   /links/{user_id}/attachment`` ``{chat, id}`` → the file's bytes, details in ``X-WAW-Meta``
+* ``GET/PUT /links/{user_id}/send-policy`` sending on/off, whitelist, daily limit, signature
+* ``POST   /links/{user_id}/send``       ``{chat, text, agent, allow_repeat}`` → through the gate
 * ``GET    /events?after=<seq>``         bells for Flight Deck to ring
 """
 
@@ -65,6 +67,21 @@ class NewsBody(BaseModel):
 class AttachmentBody(BaseModel):
     chat: str
     id: str
+
+
+class SendPolicyBody(BaseModel):
+    enabled: bool | None = None
+    allowed: list[str] | None = None
+    daily_limit: int | None = None
+    signature: str | None = None
+    signature_on: bool | None = None
+
+
+class SendBody(BaseModel):
+    chat: str
+    text: str
+    agent: str = ""
+    allow_repeat: bool = False
 
 
 class RetentionBody(BaseModel):
@@ -156,6 +173,19 @@ def build_app(engine: Engine, secret: str, *, version: str = "", lifespan: Any =
             raise HTTPException(status_code=exc.status, detail=exc.detail) from None
         return Response(content=data, media_type=meta.get("mimetype") or "application/octet-stream",
                         headers={"X-WAW-Meta": json.dumps(meta, ensure_ascii=True)})
+
+    @app.get("/links/{user_id}/send-policy", dependencies=auth)
+    async def get_send_policy(user_id: str) -> dict[str, Any]:
+        return await answer(engine.send_policy)(user_id)
+
+    @app.put("/links/{user_id}/send-policy", dependencies=auth)
+    async def put_send_policy(user_id: str, body: SendPolicyBody) -> dict[str, Any]:
+        return await answer(engine.set_send_policy)(user_id, body.model_dump())
+
+    @app.post("/links/{user_id}/send", dependencies=auth)
+    async def send(user_id: str, body: SendBody) -> dict[str, Any]:
+        return await answer(engine.send)(user_id, chat=body.chat, text=body.text, agent=body.agent,
+                                         allow_repeat=body.allow_repeat)
 
     @app.put("/links/{user_id}/retention", dependencies=auth)
     async def retention(user_id: str, body: RetentionBody) -> dict[str, Any]:

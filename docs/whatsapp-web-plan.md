@@ -1,12 +1,12 @@
 # whatsapp_web — read the owner's own WhatsApp, like mail
 
-**Status:** Phases 0–2 are implemented, each on its own stacked branch: P0 linking
-(`feat/whatsapp-web-p0`), P1 the store, history and live ingest and the read-only `whatsapp_web`
-tool (`feat/whatsapp-web-p1`), P2 attachments and voice-note transcription
-(`feat/whatsapp-web-p2`). They're covered by unit tests, including parser tests on real neonize
-protos and a test that spawns the real service. None has been run with a real phone yet; the PoC
-(2026-10-26, below) is still the only live evidence. The open questions are decided (see
-"Decisions").
+**Status:** Phases 0–3 are implemented, each on its own stacked branch: P0 linking
+(`feat/whatsapp-web-p0`), P1 the store, history and live ingest and the `whatsapp_web` tool
+(`feat/whatsapp-web-p1`), P2 attachments and voice-note transcription (`feat/whatsapp-web-p2`),
+P3 whitelisted sending (`feat/whatsapp-web-p3`). They're covered by unit tests, including parser
+tests on real neonize protos and a test that spawns the real service. None has been run with a
+real phone yet; the PoC (2026-10-26, below) is still the only live evidence. The open questions
+are decided (see "Decisions").
 **Origin:** we tried `whatsapp-mcp-pro` (a Go bridge on whatsmeow plus a Python MCP server)
 and wanted the same reach without MCP or Go builds: one internal tool, `whatsapp_web`,
 that reads the user's own WhatsApp account the way `google_mail` and `telegram_inbox`
@@ -372,7 +372,18 @@ WhatsApp's servers 410, not connected 409, over 100 MB 413, no file 404.
 - **Done when:** a voice note from the last day is transcribed, and an image from history
   opens from `saved/`.
 
-### P3 — sending through the gate
+### P3 — sending through the gate ✓ (implemented; not live-tested)
+
+As built: the gate lives in the service (`Engine.send`), next to the chats it checks and the
+client that sends. The policy and the send log are kept with the link (the store's `meta` and
+`sends` tables; the text sealed, a hash of it for the duplicate check), so disconnecting clears
+them. This differs from Gmail's FD-side `user_settings` on purpose: a whitelist of a
+disconnected account's chats means nothing. Flight Deck adds the kill switch
+(`FD_WHATSAPP_WEB_SEND=off`) and rings the bells. `fabrication_guard` gained `WHATSAPP_CLAIM`;
+its proof is the tool's first line, "Sent to … on WhatsApp". Limits as built: 30 a day by
+default (1–200), 6 a minute per chat, the same text to the same chat once in 24 hours unless
+`allow_repeat`.
+
 
 - The gate above, `whatsapp_web_sends`, bell, fabrication guard, a tool `send` action
   (text only at first).

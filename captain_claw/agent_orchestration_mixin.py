@@ -946,6 +946,7 @@ class AgentOrchestrationMixin:
             ),
             tools=offered,
             payment_tools=offered & fabrication_guard.PAYMENT_TOOLS,
+            whatsapp_tools=offered & fabrication_guard.WHATSAPP_TOOLS,
         )
         return fabrication_guard.judge_reply(raw, text, facts)
 

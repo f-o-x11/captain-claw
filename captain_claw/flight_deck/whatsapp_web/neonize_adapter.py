@@ -290,6 +290,15 @@ class NeonizeAdapter:
         getattr(msg, field).MergeFromString(bytes.fromhex(raw_hex))
         return bytes(await self._client.download_any(msg) or b"")
 
+    async def send_text(self, jid: str, text: str) -> str:
+        """Send one text message to an existing chat; WhatsApp's message id.
+        Plain text only: no link preview, no mentions, no presence."""
+        from neonize.utils import build_jid
+
+        user, _, server = jid.partition("@")
+        resp = await self._client.send_message(build_jid(user, server or "s.whatsapp.net"), text)
+        return str(getattr(resp, "ID", "") or "")
+
     async def logout(self) -> None:
         await self._client.logout()
 

@@ -1,9 +1,9 @@
 """An agent's way to its owner's WhatsApp (WhatsApp Web, linked as a device).
 
 Flight Deck's WhatsApp Web service keeps the owner's chats
-(``flight_deck/whatsapp_web/``); the agent only reads them, through
-``/fd/whatsapp-web/agent/*`` — owner only, so a shared agent's member never
-reaches them.
+(``flight_deck/whatsapp_web/``); the agent reads them, and sends where the owner
+allows it, through ``/fd/whatsapp-web/agent/*`` — owner only, so a shared
+agent's member never reaches them.
 
 :func:`usable` is the synchronous answer the tool registry needs (the
 ``whatsapp_web`` tool shows only while it is True); :func:`refresh_connected`
@@ -110,13 +110,13 @@ def _detail(resp: httpx.Response) -> str:
     return detail if isinstance(detail, str) else ""
 
 
-async def _post(path: str, body: dict[str, Any]) -> dict[str, Any]:
+async def _post(path: str, body: dict[str, Any], *, timeout: float = 30) -> dict[str, Any]:
     if _member_call():
         raise WhatsAppWebError(0, MEMBER_REFUSED)
     if not _fd_base():
         raise WhatsAppWebError(0, "The user's WhatsApp lives in Flight Deck, and this agent isn't running under one")
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(f"{_fd_base()}{path}", json=body, headers=_fd_headers())
     except Exception as exc:
         raise WhatsAppWebError(0, f"Could not reach Flight Deck for WhatsApp: {type(exc).__name__}") from None
@@ -242,6 +242,13 @@ async def attachment(*, chat: str, message_id: str) -> tuple[bytes, dict[str, An
     except ValueError:
         meta = {}
     return resp.content, meta if isinstance(meta, dict) else {}
+
+
+async def send(*, chat: str, text: str, allow_repeat: bool = False) -> dict[str, Any]:
+    """Send one text message through Flight Deck's gate (sending on, the chat
+    whitelisted, within the limits). Raises WhatsAppWebError with the reason."""
+    return await _post("/fd/whatsapp-web/agent/send",
+                       {"chat": chat, "text": text, "allow_repeat": bool(allow_repeat)}, timeout=75)
 
 
 async def contacts(*, query: str = "", limit: int = 20) -> dict[str, Any]:

@@ -1,7 +1,8 @@
 // REST client for WhatsApp Web — the user's own WhatsApp account linked as a
 // device, the way WhatsApp Web is (/fd/whatsapp-web), and the deck's switch
 // (/fd/admin/whatsapp-web) — captain_claw/flight_deck/whatsapp_web_routes.py.
-// Agents read what's kept through /fd/whatsapp-web/agent/* (owner only).
+// Agents read what's kept through /fd/whatsapp-web/agent/* (owner only), and send
+// only where the user's Sending rules allow (/fd/whatsapp-web/sending).
 
 import { useAuthStore, refreshAccessToken } from '../stores/authStore'
 
@@ -134,6 +135,45 @@ export const setWhatsAppWebRetention = (days: number | null) =>
   fdFetch<MyWhatsAppWeb>('/fd/whatsapp-web/retention', { method: 'PUT', body: JSON.stringify({ days }) })
 export const getWhatsAppWebRecent = (limit = 20) =>
   fdFetch<{ messages: WhatsAppWebMessage[] }>(`/fd/whatsapp-web/recent?limit=${limit}`)
+
+export interface WhatsAppWebSend {
+  ts: number
+  chat_jid: string
+  chat: string
+  agent: string
+  status: 'sending' | 'sent' | 'unknown' | 'failed'
+  error: string
+  text: string
+}
+
+export interface WhatsAppWebSending {
+  available: boolean
+  kill_switch?: boolean
+  enabled?: boolean
+  // The whitelist: chat JIDs agents may send to.
+  allowed?: string[]
+  daily_limit?: number
+  signature?: string
+  signature_on?: boolean
+  sent_today?: number
+  sends?: WhatsAppWebSend[]
+  // Chats the whitelist is picked from (only existing conversations).
+  chats?: { jid: string; title: string; kind: 'direct' | 'group'; number: string; messages: number; last_ts: number | null }[]
+  // Whitelist entries refused on save (no conversation with them).
+  dropped?: string[]
+}
+
+export interface WhatsAppWebSendingChanges {
+  enabled?: boolean
+  allowed?: string[]
+  daily_limit?: number
+  signature?: string
+  signature_on?: boolean
+}
+
+export const getWhatsAppWebSending = () => fdFetch<WhatsAppWebSending>('/fd/whatsapp-web/sending')
+export const setWhatsAppWebSending = (changes: WhatsAppWebSendingChanges) =>
+  fdFetch<WhatsAppWebSending>('/fd/whatsapp-web/sending', { method: 'PUT', body: JSON.stringify(changes) })
 
 export const getWhatsAppWebAdmin = () => fdFetch<WhatsAppWebAdmin>('/fd/admin/whatsapp-web')
 export const setWhatsAppWebAllowed = (allowed: boolean) =>
