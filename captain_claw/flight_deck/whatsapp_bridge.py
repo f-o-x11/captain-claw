@@ -630,8 +630,11 @@ async def whatsapp_webhook(request: Request) -> JSONResponse:
     for entry in payload.get("entry", []) or []:
         for change in entry.get("changes", []) or []:
             value = change.get("value") or {}
-            # Status events (delivered / read / failed) arrive here too —
-            # not actionable for us, ignore.
+            # Status events (delivered / read / failed) arrive here too; only
+            # a failed delivery matters, and it is logged with Meta's code.
+            for status in value.get("statuses") or []:
+                if isinstance(status, dict) and status.get("status") == "failed":
+                    _log_failed_status(status)
             messages = value.get("messages") or []
             for msg in messages:
                 waid = str(msg.get("from") or "").lstrip("+")
@@ -2418,6 +2421,78 @@ def _media_url() -> str:
     return f"https://graph.facebook.com/v18.0/{pid}/media" if pid else ""
 
 
+# Cloud API error codes meaning the bot's own number can't send at all: Meta
+# de-registered it (a test number drops back to PENDING without warning) and
+# every send fails until someone registers it again with a PIN.
+_NOT_REGISTERED_CODES = frozenset({133010, 141000, 141001})
+
+
+def _meta_error(resp: Any) -> tuple[int, str]:
+    """``(code, detail)`` from a Cloud API error, e.g. ``(133010, "Account not
+    registered")``. The code comes from ``error.code`` or the ``(#NNN)`` prefix
+    of the message; ``(0, raw text)`` when the body isn't Meta's error shape."""
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    err = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(err, dict):
+        return 0, str(getattr(resp, "text", "") or "")[:300]
+    message = str(err.get("message") or "")
+    data = err.get("error_data") if isinstance(err.get("error_data"), dict) else {}
+    detail = str(data.get("details") or message)
+    code = err.get("code")
+    if not isinstance(code, int):
+        m = re.match(r"\(#(\d+)\)", message)
+        code = int(m.group(1)) if m else 0
+    return code, detail
+
+
+def _not_registered_fix() -> str:
+    pid = _env("WHATSAPP_PHONE_NUMBER_ID") or "<phone-number-id>"
+    return (
+        f"the bot's WhatsApp number isn't registered — register it again "
+        f"(POST /{pid}/register with a 6-digit PIN)"
+    )
+
+
+def _log_send_failure(what: str, waid: str, resp: Any) -> None:
+    """Log a Cloud API refusal with Meta's error code. A de-registered number
+    is an ERROR naming the fix: nothing reaches WhatsApp until it is done."""
+    code, detail = _meta_error(resp)
+    if code in _NOT_REGISTERED_CODES:
+        log.error(
+            "whatsapp: %s to %s refused, NUMBER NOT REGISTERED (Meta error %s: %s) — %s",
+            what, waid or "-", code, detail, _not_registered_fix(),
+        )
+        return
+    log.warning(
+        "whatsapp: %s to %s refused: HTTP %s, Meta error %s: %s",
+        what, waid or "-", resp.status_code, code or "?", detail,
+    )
+
+
+def _log_failed_status(status: dict[str, Any]) -> None:
+    """A ``failed`` status webhook: Meta accepted a send, then couldn't deliver
+    it (e.g. 131047, more than 24 h since the user last wrote)."""
+    for err in status.get("errors") or [{}]:
+        err = err if isinstance(err, dict) else {}
+        data = err.get("error_data") if isinstance(err.get("error_data"), dict) else {}
+        code = err.get("code") or "?"
+        detail = data.get("details") or err.get("message") or err.get("title") or ""
+        if code in _NOT_REGISTERED_CODES:
+            log.error(
+                "whatsapp: delivery of %s to %s failed, NUMBER NOT REGISTERED (Meta error %s: %s) — %s",
+                status.get("id") or "-", status.get("recipient_id") or "-",
+                code, detail, _not_registered_fix(),
+            )
+            continue
+        log.warning(
+            "whatsapp: delivery of %s to %s failed: Meta error %s: %s",
+            status.get("id") or "-", status.get("recipient_id") or "-", code, detail,
+        )
+
+
 def _audio_reply_enabled() -> bool:
     """Whether to attach a synthesized MP3 to every agent/face reply."""
     return _env("WHATSAPP_AUDIO_REPLY").lower() in ("on", "true", "yes", "1")
@@ -2476,11 +2551,15 @@ async def _mark_read_and_typing(message_id: str, *, typing: bool = True) -> None
         payload["typing_indicator"] = {"type": "text"}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(url, headers=headers, json=payload)
+            resp = await client.post(url, headers=headers, json=payload)
     except Exception:
-        # Pure UX nicety; if Meta returns an error or the network is flaky,
-        # the conversation still works — just no read tick / typing dots.
-        pass
+        # Pure UX nicety; if the network is flaky the conversation still
+        # works — just no read tick / typing dots.
+        return
+    if resp.status_code >= 400:
+        # Still only a nicety, but its refusal is the first sign of a
+        # de-registered number (it runs before the agent even answers).
+        _log_send_failure("read receipt", "", resp)
 
 
 async def _send_whatsapp_text(waid: str, text: str, *, mirror: bool = False) -> None:
@@ -2536,7 +2615,7 @@ async def _send_whatsapp_text(waid: str, text: str, *, mirror: bool = False) -> 
             # Stamped before the post: an in-flight reply already counts as
             # "answered" for a late reaction's typing re-fire.
             _WAID_LAST_SEND_AT[waid] = time.time()
-            await client.post(
+            resp = await client.post(
                 url,
                 headers=headers,
                 json={
@@ -2547,6 +2626,8 @@ async def _send_whatsapp_text(waid: str, text: str, *, mirror: bool = False) -> 
                     "text": {"body": chunk, "preview_url": False},
                 },
             )
+            if resp.status_code >= 400:
+                _log_send_failure("text", waid, resp)
 
 
 # ── Emoji reactions on inbound messages ──────────────────────────────
@@ -2705,7 +2786,7 @@ async def _send_whatsapp_reaction(waid: str, message_id: str, emoji: str) -> boo
     Refuses anything off ``_REACTION_EMOJIS``. Not a message, so it does not
     stamp ``_WAID_LAST_SEND_AT``. A 2xx means Meta accepted the request;
     delivery failures arrive later as ``statuses`` webhooks, which the bridge
-    ignores.
+    only logs.
     """
     token = _env("WHATSAPP_ACCESS_TOKEN")
     url = _send_url()
@@ -2731,7 +2812,7 @@ async def _send_whatsapp_reaction(waid: str, message_id: str, emoji: str) -> boo
         log.warning("whatsapp reaction send failed: %s", exc)
         return False
     if r.status_code >= 400:
-        log.warning("whatsapp reaction rejected: HTTP %s — %s", r.status_code, r.text[:300])
+        _log_send_failure("reaction", waid, r)
         return False
     return 200 <= r.status_code < 300
 
@@ -2857,6 +2938,7 @@ async def _upload_whatsapp_audio(blob: bytes) -> str:
     except Exception:
         return ""
     if resp.status_code != 200:
+        _log_send_failure("audio upload", "", resp)
         return ""
     try:
         return str((resp.json() or {}).get("id") or "")
@@ -2874,8 +2956,9 @@ async def _send_whatsapp_audio(waid: str, text: str) -> None:
       2. Meta media upload returns a media_id
       3. Send API delivers an ``audio`` message referencing that id
 
-    Failure at any step logs nothing and the user just sees the text-only
-    reply they would have received without ``WHATSAPP_AUDIO_REPLY=on``.
+    On failure the user just sees the text-only reply they would have
+    received without ``WHATSAPP_AUDIO_REPLY=on``; only Meta's refusals of
+    steps 2 and 3 are logged.
     """
     blob = await _synth_audio_mp3(text)
     if not blob:
@@ -2902,9 +2985,11 @@ async def _send_whatsapp_audio(waid: str, text: str) -> None:
     _WAID_LAST_SEND_AT[waid] = time.time()
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.post(url, headers=headers, json=payload)
+            resp = await client.post(url, headers=headers, json=payload)
     except Exception:
-        pass
+        return
+    if resp.status_code >= 400:
+        _log_send_failure("audio", waid, resp)
 
 
 # Suppress accidental duplicate deliveries of the SAME reply to the SAME number
@@ -3025,14 +3110,10 @@ async def send_text_checked(waid: str, text: str) -> tuple[bool, str]:
     if resp.status_code < 300:
         _WAID_LAST_SEND_AT[waid] = time.time()
         return True, ""
-    try:
-        body = resp.json()
-        err = body.get("error") if isinstance(body, dict) else None
-        err = err if isinstance(err, dict) else {}
-        data = err.get("error_data") if isinstance(err.get("error_data"), dict) else {}
-        detail = str(data.get("details") or err.get("message") or "")
-    except ValueError:
-        detail = ""
+    _log_send_failure("test message", waid, resp)
+    code, detail = _meta_error(resp)
+    if code in _NOT_REGISTERED_CODES:
+        return False, _not_registered_fix()
     return False, f"WhatsApp refused it ({resp.status_code}{': ' + detail if detail else ''})"
 
 
