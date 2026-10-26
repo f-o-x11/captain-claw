@@ -21,6 +21,8 @@ decision:
   style ID nothing the model was given ever held.
 * A narrated lookup (:func:`narrated_lookups`): a turn that made no tool call
   whose reply still says "Searching for the thread…", "Checked the calendar —".
+* A WhatsApp send claim (:func:`_whatsapp_claim`): "I messaged Ana on WhatsApp"
+  with no ``whatsapp_web`` send that answered "Sent to … on WhatsApp".
 
 The corrective only ever asks the model to make its reply true. It never asks
 for a send or a calendar change: whether the user wanted one is theirs to
@@ -64,6 +66,7 @@ CALENDAR_CLAIM = "false_calendar_change"  # says the calendar changed; it did no
 NARRATED_LOOKUP = "narrated_lookup"   # no tool call, yet narrates lookups
 FABRICATED_ID = "fabricated_id"       # quotes a tool-style ID nothing showed
 PAYMENT_CLAIM = "false_payment"       # says something was paid; the ledger doesn't say so
+WHATSAPP_CLAIM = "false_whatsapp_send"  # says a WhatsApp message went out; no send did
 
 
 # ── Tool results ─────────────────────────────────────────────────────
@@ -1672,6 +1675,82 @@ PAYMENT_BACKSTOP = ("Note: Captain did not make any payment — it can only prep
                     "approve in your bank app.")
 
 
+# ── WhatsApp sends ───────────────────────────────────────────────────
+#
+# The ``whatsapp_web`` tool sends one text to a whitelisted chat and answers
+# "Sent to <chat> on WhatsApp …" — the only proof a message went out. A line
+# that mentions WhatsApp and says the agent sent / messaged / replied (or that
+# a message was sent) needs that proof somewhere in the conversation. Judged
+# only while the turn offers ``whatsapp_web``. A line about delivering to the
+# user ("sent you the file on WhatsApp" — the chat channel does that) and a turn
+# where ``whatsapp_send_file`` delivered something are left alone.
+
+WHATSAPP_TOOLS = frozenset({"whatsapp_web"})
+_WA_WORD_RE = re.compile(r"(?i)\bwhats\s?app\b")
+_WA_I_CLAIM_RE = re.compile(
+    r"(?i)\bI(?:'ve|\s+have|\s+just|\s+already)?\s+(?:just\s+|already\s+|now\s+)?"
+    r"(?:sent|messaged|texted|replied|wrote(?:\s+to)?|pinged|answered)\b"
+    r"|\b(?:poslao|poslala|napisao|napisala|odgovorio|odgovorila|javio|javila)\s+sam\b"
+    r"|\bsam\s+(?:ve[ćc]\s+)?(?:poslao|poslala|napisao|napisala|odgovorio|odgovorila|javio|javila)\b"
+)
+_WA_STATE_CLAIM_RE = re.compile(
+    r"(?i)\b(?:message|reply|text|answer)s?\b(?:\s+[^\s.,;:!?]+){0,4}?\s+"
+    r"(?:is|was|were|has\s+been|have\s+been)\s+(?:now\s+|already\s+|successfully\s+)?(?:sent|delivered)\b"
+    r"|^[^\w\n]*sent\b"
+    r"|\b(?:poruk[ae]|odgovor)\s+(?:je\s+|su\s+)?(?:poslan\w*|isporu[čc]en\w*)\b"
+)
+# Delivered to the user themself, through the chat they're talking in: "sent
+# you …" right after the verb, or "here" / "this chat" on the line.
+_WA_TO_USER_AFTER_RE = re.compile(r"(?i)\s*(?:(?:it|this|that|the\s+\w+)\s+)?(?:to\s+)?(?:you|ti|vam|tebi)\b")
+_WA_HERE_RE = re.compile(r"(?i)\bhere\b|\bthis\s+chat\b|\bovdje\b|\bu\s+ovaj\s+chat\b")
+_WA_EVIDENCE_RE = re.compile(r"(?m)^Sent to .{1,200} on WhatsApp\b")
+
+
+def _whatsapp_evidence(steps: Iterable[ToolStep]) -> bool:
+    return any(step.name in WHATSAPP_TOOLS and step.action == "send" and _WA_EVIDENCE_RE.search(step.content)
+               for step in steps)
+
+
+def _whatsapp_claim(reply: str, facts: TurnFacts) -> tuple[frozenset[int], bool]:
+    """(lines that say a WhatsApp message went out, whether any is false)."""
+    if not facts.whatsapp_tools:
+        return frozenset(), False
+    if any(step.name == "whatsapp_send_file" for step in facts.turn_steps):
+        return frozenset(), False
+    text = str(reply or "")
+    evidence = _whatsapp_evidence(facts.turn_steps) or _whatsapp_evidence(facts.session_steps)
+    lines: set[int] = set()
+    false = False
+    for pattern in (_WA_I_CLAIM_RE, _WA_STATE_CLAIM_RE):
+        for match in pattern.finditer(text):
+            start, end = _line_bounds(text, match.start())
+            line = text[start:end]
+            before = text[start:match.start()]
+            after = text[match.end():end]
+            if not _WA_WORD_RE.search(line):
+                continue
+            if (_CLAIM_NEGATED_RE.search(before) or _is_question(text, match.end())
+                    or _ATTRIBUTED_RE.match(line) or _YOU_SENT_RE.search(line)
+                    or _WA_TO_USER_AFTER_RE.match(after) or _WA_HERE_RE.search(line)
+                    or before.count('"') % 2 == 1 or before.count("“") > before.count("”")):
+                continue
+            lines.add(text.count("\n", 0, start))
+            if not evidence:
+                false = True
+    return frozenset(lines), false
+
+
+def whatsapp_corrective() -> str:
+    """What the model is told about a reply that says a WhatsApp message went
+    out when no send shows it. It asks for a true reply, never for a send."""
+    return ("Your reply says a WhatsApp message was sent, but no whatsapp_web send in this conversation "
+            "answered \"Sent to … on WhatsApp\". A message goes out only that way. Rewrite your reply so it "
+            "is true: say what you prepared, or what stopped the send.")
+
+
+WHATSAPP_BACKSTOP = "Note: no WhatsApp message was sent."
+
+
 # ── One decision for a reply ─────────────────────────────────────────
 
 
@@ -1710,6 +1789,8 @@ class TurnFacts:
     tools: frozenset[str] = frozenset()
     # The payments tools this turn offers: none, no payment check.
     payment_tools: frozenset[str] = frozenset()
+    # The WhatsApp send tool, when this turn offers it: none, no WhatsApp check.
+    whatsapp_tools: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -1966,12 +2047,14 @@ def judge_reply(raw: str, reply: str, facts: TurnFacts) -> Verdict:
     cal_lines, cal_false, cal_refused, earlier_change = _calendar_claim(reply, request, facts)
     lines |= cal_lines
     _pay_lines, pay_false = _payment_claim(reply, facts)
+    wa_lines, wa_false = _whatsapp_claim(reply, facts)
+    lines |= wa_lines
     narrated = (narrated_lookups(reply, has_pasted_content(request))
                 if facts.no_tool_call and not _HOW_TO_RE.match(request) else ())
     fabricated = () if facts.known is None else fabricated_ids(raw, facts.known, request)
     kinds = tuple(kind for kind, on in (
         (MAIL_CLAIM, mail_false), (CALENDAR_CLAIM, cal_false), (PAYMENT_CLAIM, pay_false),
-        (NARRATED_LOOKUP, bool(narrated)), (FABRICATED_ID, bool(fabricated)),
+        (WHATSAPP_CLAIM, wa_false), (NARRATED_LOOKUP, bool(narrated)), (FABRICATED_ID, bool(fabricated)),
     ) if on)
     if not kinds:
         return Verdict(claim_lines=lines)
@@ -1996,6 +2079,11 @@ def judge_reply(raw: str, reply: str, facts: TurnFacts) -> Verdict:
                      "Also: your reply says a payment was made or a bill is paid — Captain can't "
                      "pay, and nothing shows it paid. Don't claim it.")
         backstop.append(PAYMENT_BACKSTOP)
+    if wa_false:
+        parts.append(whatsapp_corrective() if not parts else
+                     "Also: your reply says a WhatsApp message was sent, but no whatsapp_web send shows "
+                     "it — don't claim one.")
+        backstop.append(WHATSAPP_BACKSTOP)
     if narrated:
         parts.append(lookup_corrective(narrated, facts.tools) if not parts else
                      f"Also: your reply describes lookups ({_lookup_quotes(narrated)}) that never "

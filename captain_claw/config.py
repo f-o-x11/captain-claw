@@ -638,6 +638,7 @@ class ToolsConfig(BaseModel):
         "jev",
         "audio",
         "telegram_inbox",
+        "whatsapp_web",
         "todo",
         "contacts",
         "scripts",
@@ -686,7 +687,8 @@ class ToolsConfig(BaseModel):
     # or tools.jev.api_key / JEV_API_KEY standalone). audio the same: hidden
     # until a Soniox key is usable (the owner's or the team's in Flight Deck, or
     # SONIOX_API_KEY standalone). telegram_inbox: hidden until the owner keeps a
-    # Telegram inbox in Flight Deck. image_vision is how an
+    # Telegram inbox in Flight Deck; whatsapp_web until they link their
+    # WhatsApp there. image_vision is how an
     # agent looks at a picture (attached, downloaded, or one it saw earlier);
     # an archetype that left it out had no way to see an image at all.
     _ALWAYS_ENABLED: frozenset[str] = frozenset({
@@ -694,7 +696,7 @@ class ToolsConfig(BaseModel):
         "browser", "datastore", "direct_api", "cron",
         "google_drive", "google_calendar", "google_mail",
         "microsoft_onedrive", "microsoft_calendar", "microsoft_mail",
-        "jev", "audio", "telegram_inbox",
+        "jev", "audio", "telegram_inbox", "whatsapp_web",
         "whatsapp_send_file", "intentions", "image_vision", "video_vision", "cv", "topics",
         "sessions", "history", "vfs",
         # The everyday working set. Archetype and spawn lists used to decide

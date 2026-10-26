@@ -182,6 +182,8 @@ _ECO_CORE_TOOLS: frozenset[str] = frozenset({
     # The owner's Telegram: "what's new?" comes in any language. Hidden by the
     # registry unless the owner keeps a Telegram inbox.
     "telegram_inbox",
+    # The owner's own WhatsApp, the same way; hidden unless they linked it.
+    "whatsapp_web",
 })
 
 # ── Nano-mode: barebone tool allowlist for tiny local models. ──
@@ -944,6 +946,7 @@ class AgentOrchestrationMixin:
             ),
             tools=offered,
             payment_tools=offered & fabrication_guard.PAYMENT_TOOLS,
+            whatsapp_tools=offered & fabrication_guard.WHATSAPP_TOOLS,
         )
         return fabrication_guard.judge_reply(raw, text, facts)
 
@@ -1215,12 +1218,19 @@ class AgentOrchestrationMixin:
         # cron / peer / worker turn would use up "new" before the user saw it,
         # and a member, public or BotPort turn must never see the owner's chats.
         self._turn_telegram_news = None
+        self._turn_whatsapp_news = None
         if self._turn_wants_telegram_news():
             try:
                 from captain_claw import telegram_inbox_client
                 self._turn_telegram_news = await telegram_inbox_client.news()
             except Exception:
                 self._turn_telegram_news = None
+            # The owner's WhatsApp, under the same rule (the look moves a cursor).
+            try:
+                from captain_claw import whatsapp_web_client
+                self._turn_whatsapp_news = await whatsapp_web_client.news()
+            except Exception:
+                self._turn_whatsapp_news = None
         # Pre-populate playbook context cache for the sync _build_messages path.
         if hasattr(self, "_build_playbook_context_note"):
             try:
@@ -2236,6 +2246,12 @@ class AgentOrchestrationMixin:
                 try:
                     from captain_claw import telegram_inbox_client
                     await telegram_inbox_client.refresh_connected()
+                except Exception:
+                    pass
+                # WhatsApp Web (owner-only): has the owner linked WhatsApp?
+                try:
+                    from captain_claw import whatsapp_web_client
+                    await whatsapp_web_client.refresh_connected()
                 except Exception:
                     pass
 

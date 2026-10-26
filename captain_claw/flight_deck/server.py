@@ -941,6 +941,15 @@ async def lifespan(app: FastAPI):
             await _tg_shared.start(_fd_db)
         except Exception as _tg_exc:
             print(f"Flight Deck: shared Telegram bot not started: {_tg_exc}")
+    # WhatsApp Web (Connections → WhatsApp Web): the service holding people's
+    # linked accounts. Adopted when one survived the last restart, else started
+    # in the background when links exist and the admin allows it.
+    try:
+        from captain_claw.flight_deck import whatsapp_web_supervisor as _waw
+
+        await _waw.init(DATA_DIR, _fd_db)
+    except Exception as _waw_exc:
+        print(f"Flight Deck: WhatsApp Web not set up: {_waw_exc}")
     # ── Code-app subprocess runtime ──
     # Lazy-spawn per app on first request; reaper kicks in here.
     from captain_claw.flight_deck.app_runtime import get_runtime as _get_app_runtime
@@ -1188,6 +1197,13 @@ async def lifespan(app: FastAPI):
         from captain_claw.flight_deck import telegram_shared as _tg_shared
 
         await _tg_shared.stop()
+    except Exception:
+        pass
+    try:
+        # Stop watching only: the service and its links outlive this process.
+        from captain_claw.flight_deck import whatsapp_web_supervisor as _waw
+
+        await _waw.shutdown()
     except Exception:
         pass
     # Stop the scheduler loop first so it doesn't fire mid-shutdown.
@@ -1485,6 +1501,7 @@ from captain_claw.flight_deck.jev_routes import router as jev_router
 from captain_claw.flight_deck.soniox_routes import router as soniox_router
 from captain_claw.flight_deck.telegram_shared_routes import router as telegram_shared_router
 from captain_claw.flight_deck.telegram_inbox_routes import router as telegram_inbox_router
+from captain_claw.flight_deck.whatsapp_web_routes import router as whatsapp_web_router
 from captain_claw.flight_deck.branding_routes import router as branding_router
 from captain_claw.flight_deck.invite_routes import admin_router as invite_admin_router
 from captain_claw.flight_deck.invite_routes import public_router as invite_public_router
@@ -1567,6 +1584,7 @@ app.include_router(jev_router)
 app.include_router(soniox_router)
 app.include_router(telegram_shared_router)
 app.include_router(telegram_inbox_router)
+app.include_router(whatsapp_web_router)
 app.include_router(branding_router)
 app.include_router(invite_admin_router)
 app.include_router(invite_public_router)

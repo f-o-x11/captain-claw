@@ -500,6 +500,7 @@ class ToolRegistry:
                     and not self._tool_metadata.get(t.name, {}).get("requires_jev")
                     and not self._tool_metadata.get(t.name, {}).get("requires_payments")
                     and not self._tool_metadata.get(t.name, {}).get("requires_telegram_inbox")
+                    and not self._tool_metadata.get(t.name, {}).get("requires_whatsapp_web")
                 ]
         except Exception:
             pass
@@ -589,6 +590,19 @@ class ToolRegistry:
                              if not self._tool_metadata.get(t.name, {}).get("requires_telegram_inbox")]
         except Exception:
             tools = [t for t in tools if not self._tool_metadata.get(t.name, {}).get("requires_telegram_inbox")]
+
+        # WhatsApp Web: shown only while the owner has WhatsApp linked in Flight
+        # Deck (refreshed per turn by ``whatsapp_web_client.refresh_connected()``).
+        # Owner-only; fails closed.
+        try:
+            if any(self._tool_metadata.get(t.name, {}).get("requires_whatsapp_web") for t in tools):
+                from captain_claw import whatsapp_web_client
+
+                if not whatsapp_web_client.usable():
+                    tools = [t for t in tools
+                             if not self._tool_metadata.get(t.name, {}).get("requires_whatsapp_web")]
+        except Exception:
+            tools = [t for t in tools if not self._tool_metadata.get(t.name, {}).get("requires_whatsapp_web")]
 
         # Same idea for deep memory. Under Flight Deck the tool always shows:
         # FD owns the Typesense connection and can gain one at any moment, and

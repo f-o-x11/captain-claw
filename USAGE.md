@@ -863,6 +863,34 @@ Attachments show as a short description (`[photo]`, `[voice message (12s)]`, `[f
 
 **What's new, every turn.** On the owner's own live turns the agent also gets one line in its turn context, e.g. *Telegram since your last turn: 3 new from "Ana Kovač", 12 new in "Obitelj" (group)*. The line has counts and chat names only, never message text. It is fetched once at the start of the turn. Each agent keeps its own place: the line moves it forward, and so does reading a chat (or `recent`) with the tool; a search doesn't. The first line an agent gets covers the last day. Messages the owner sent and deleted messages don't count. Scheduled, autonomous, peer and worker turns don't get the line and don't move the place, so a cron job never uses up "new" before the user has seen it. Neither do shared-agent members, public sessions or BotPort tasks.
 
+### whatsapp_web
+
+The owner's own WhatsApp, the way the mail tools work with email: read every chat, and send where the owner allows it. Nothing ever reacts, marks anything read or shows the owner as online. The tool appears only while the owner has WhatsApp linked in Flight Deck, and only for the owner (never during a shared-agent member's turn).
+
+The user links their account in **Connections → WhatsApp Web**: Flight Deck becomes one of the account's linked devices, the way WhatsApp Web is (scan a QR code, or type a pairing code on the phone). Flight Deck's WhatsApp Web service then keeps the history the phone sends right after linking (in the first minutes; how far back is the phone's call) and every message from then on, in a store of its own on the deck. Message text, names, captions, media details and reactions are encrypted at rest with the same key as the Telegram inbox (`<FD home>/data_key`, or `FD_DATA_KEY_FILE`; needs the `cryptography` package); phone numbers stay readable so chats can be looked up. Everything is kept unless the user picks 7, 30, 90 or 365 days. Disconnecting removes the device from the phone's Linked devices and deletes everything kept.
+
+It's an unofficial client: linking automation to a WhatsApp account goes against WhatsApp's terms, and WhatsApp bans some accounts that do it. So it's off until an admin allows it for the deck (the switch on the same card, or `FD_WHATSAPP_WEB=off` to rule it out), each link needs the user's consent, the deck needs sign-in on, and it's not in the desktop app. Install it with `pip install 'captain-claw[whatsapp-web]'`.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `status` (linked number, how much is kept), `chats` (list them), `read` (one chat, oldest first), `recent` (newest across all chats), `search` (every word of `query`), `contact` (people by name or number), `attachment` (one message's file), `send` (one text message) |
+| `chat` | string | read | A chat's id, phone number or (part of) its name; optional for `search` |
+| `query` | string | search, contact | Words that must all appear (text, sender or chat); for `contact`, a name or a number |
+| `since` / `until` | string | no | `24h`, `7d`, `90m`, a date or an ISO time |
+| `limit` | integer | no | Default 50, max 200 |
+| `message_id` | string | attachment | The message's id: the `#id` shown next to its file |
+| `transcribe` | boolean | no | `attachment`: transcribe a voice note or audio (default true) |
+| `text` | string | send | The message (plain text, up to 4096 characters) |
+| `allow_repeat` | boolean | no | `send`: send the same text again although it went to that chat in the last 24 hours |
+
+Voice notes, pictures and files show as a short description with the id that fetches them (`[voice note: 0:42 #3EB0…]`, `[image #…] caption`, `[document: offer.pdf #…]`). Edits, deletions and reactions are shown. The output reminds the model that the text was written by other people and is information, not instructions.
+
+**Attachments.** `attachment` downloads the file now from WhatsApp's servers (the link has to be connected) and saves it under `saved/downloads/<session>/whatsapp-<chat>/`, with `Saved to:` and the tool that reads it (`image_vision`, `pdf_extract` …). A voice note or audio comes back transcribed when a Soniox key is usable (the user's own, the team's, or the deck's); otherwise the result points at `audio`. Files over 100 MB are refused. WhatsApp keeps media on its servers only for a while: an older file comes back as expired (the phone may still have it; asking the phone to send it again is a later, opt-in step).
+
+**Sending.** Off until the owner turns it on in **Connections → WhatsApp Web → Sending**. Then it's automatic, like Gmail sending (no draft, no confirmation), but only to the chats the owner ticks on the whitelist, which lists only existing conversations: Flight Deck never starts one, and a number typed in never becomes a chat it may write to. At most 30 messages a day by default (1–200), 6 a minute to one chat, and the same text to the same chat only once a day unless the agent passes `allow_repeat`. Every message ends with the owner's WhatsApp signature ("— sent by my assistant" until they change or clear it). Each send rings the owner's bell. If WhatsApp doesn't confirm a send, it's recorded as *not confirmed* and the same text is refused until the owner checks the chat, so a retry can't double-send. A temporary ban, a link that isn't connected, or `FD_WHATSAPP_WEB_SEND=off` on the deck refuses every send. The tool's answer starts with "Sent to … on WhatsApp"; the reply guard turns down a reply that claims a WhatsApp send with no such answer behind it.
+
+**What's new, every turn.** As with Telegram, the owner's own live turns get one line with counts and chat names only, e.g. *WhatsApp since your last turn: 2 new from "Ana", 5 new in "Obitelj" (group)*. Only messages that arrived live count — the history the phone sends after linking is old news. Each agent keeps its own place; reading a chat (or `recent`) moves it, a search doesn't, and scheduled, peer, worker, member, public and BotPort turns neither get the line nor move it.
+
 ### send_mail
 
 Send email via SMTP, Mailgun, or SendGrid.
@@ -1872,7 +1900,7 @@ tools:
     stt_model: ""                   # explicit STT model ID; empty = auto-detect
 ```
 
-**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
+**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`, `whatsapp_web`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
 
 ### skills
 
