@@ -46,6 +46,9 @@ RETENTION_CHOICES = (7, 30, 90, 365)
 DEFAULT_SIGNATURE = "— sent by my assistant"
 DEFAULT_DAILY_LIMIT = 30
 MAX_DAILY_LIMIT = 200
+# Auto-replies: trigger words, each a word or a short phrase.
+MAX_TRIGGERS = 10
+MAX_TRIGGER_CHARS = 40
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS chats (
@@ -444,6 +447,8 @@ class Store:
                 f"SELECT * FROM messages WHERE {' AND '.join(where)} ORDER BY ts DESC, rowid DESC LIMIT ?",
                 (*args, scan)).fetchall()
             reactions: dict[tuple[str, str], list[str]] = {}
+            agent_ids = {r["wa_id"] for r in self._db.execute(
+                "SELECT wa_id FROM sends WHERE status='sent' AND wa_id != ''")} if rows else set()
             if rows:
                 keys = {(r["chat_jid"], r["id"]) for r in rows}
                 for rr in self._db.execute(
@@ -479,6 +484,8 @@ class Store:
                 "deleted": bool(r["deleted"]),
                 "reactions": reactions.get((r["chat_jid"], r["id"]), []),
                 "unreadable": bool(r["body"]) and not body,
+                # Sent from the user's account by one of their agents (auto-reply, send).
+                "by_agent": bool(r["from_me"]) and r["id"] in agent_ids,
             }
             if terms:
                 hay = " ".join((item["text"], item["sender"], item["chat"],
@@ -630,6 +637,64 @@ class Store:
                 "wa_id": r["wa_id"],
             })
         return out
+
+    def autoreply_config(self) -> dict[str, Any]:
+        """Which whitelisted chats the agent answers by itself, which agent, and
+        the extra words that count as mentioning it (its name always does)."""
+        with self._lock:
+            meta = {r["key"]: r["value"] for r in self._db.execute(
+                "SELECT key, value FROM meta WHERE key LIKE 'autoreply_%'")}
+
+        def as_list(raw: str | None) -> list[str]:
+            try:
+                value = json.loads(raw or "[]")
+            except ValueError:
+                return []
+            return [str(v) for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+        return {"chats": as_list(meta.get("autoreply_chats")), "agent": meta.get("autoreply_agent", ""),
+                "triggers": as_list(meta.get("autoreply_triggers"))}
+
+    def set_autoreply_config(self, config: dict[str, Any]) -> None:
+        values = {
+            "autoreply_chats": json.dumps(sorted(set(config.get("chats") or []))),
+            "autoreply_agent": str(config.get("agent") or ""),
+            "autoreply_triggers": json.dumps(list(config.get("triggers") or [])),
+        }
+        with self._lock, self._tx() as db:
+            for key, value in values.items():
+                db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)", (key, value))
+
+    def agent_activity(self, chat_jid: str) -> dict[str, Any]:
+        """In one chat: the ids of the messages agents sent, when the last one
+        went, and when the user last wrote there themselves (not through an agent)."""
+        with self._lock:
+            sent = self._db.execute(
+                "SELECT wa_id, ts FROM sends WHERE chat_jid=? AND status='sent' AND wa_id != ''",
+                (chat_jid,)).fetchall()
+            ids = {r["wa_id"] for r in sent}
+            last_agent = max((int(r["ts"]) for r in sent), default=0)
+            own = self._db.execute(
+                "SELECT id, ts FROM messages WHERE chat_jid=? AND from_me=1 ORDER BY ts DESC LIMIT 50",
+                (chat_jid,)).fetchall()
+        last_owner = next((int(r["ts"]) for r in own if r["id"] not in ids), 0)
+        return {"agent_ids": ids, "last_agent_ts": last_agent, "last_owner_ts": last_owner}
+
+    def canon(self, jid: str) -> str:
+        """A chat's JID as it's kept (a known LID → its phone-number JID)."""
+        return self._canon(jid)
+
+    def chat_title(self, jid: str) -> tuple[str, bool]:
+        """(the chat's name as the user sees it, is it a group)."""
+        with self._lock:
+            row = self._db.execute("SELECT name, is_group FROM chats WHERE jid=?", (jid,)).fetchone()
+            is_group = bool(row["is_group"]) if row else jid.endswith("@g.us")
+            title = _text(row["name"]) if row else ""
+            return (title or (jid if is_group else self._person(jid, self._names()))), is_group
+
+    def sender_name(self, jid: str, push: str = "") -> str:
+        with self._lock:
+            return self._person(jid, self._names(), push)
 
     def chat_has_history(self, jid: str) -> bool:
         """An existing conversation: a group we're in, or a chat with messages."""

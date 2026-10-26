@@ -20,7 +20,9 @@ person and only ever passes their own id.
 * ``POST   /links/{user_id}/attachment`` ``{chat, id}`` → the file's bytes, details in ``X-WAW-Meta``
 * ``GET/PUT /links/{user_id}/send-policy`` sending on/off, whitelist, daily limit, signature
 * ``POST   /links/{user_id}/send``       ``{chat, text, agent, allow_repeat}`` → through the gate
-* ``GET    /events?after=<seq>``         bells for Flight Deck to ring
+* ``GET/PUT /links/{user_id}/autoreply`` the chats the agent answers by itself, the agent, trigger words
+* ``GET    /events?after=<seq>``         bells for Flight Deck to ring, and (``kind: "incoming"``)
+  messages in auto-reply chats for Flight Deck to answer
 """
 
 from __future__ import annotations
@@ -82,6 +84,12 @@ class SendBody(BaseModel):
     text: str
     agent: str = ""
     allow_repeat: bool = False
+
+
+class AutoreplyBody(BaseModel):
+    chats: list[str] | None = None
+    agent: str | None = None
+    triggers: list[str] | None = None
 
 
 class RetentionBody(BaseModel):
@@ -186,6 +194,14 @@ def build_app(engine: Engine, secret: str, *, version: str = "", lifespan: Any =
     async def send(user_id: str, body: SendBody) -> dict[str, Any]:
         return await answer(engine.send)(user_id, chat=body.chat, text=body.text, agent=body.agent,
                                          allow_repeat=body.allow_repeat)
+
+    @app.get("/links/{user_id}/autoreply", dependencies=auth)
+    async def get_autoreply(user_id: str) -> dict[str, Any]:
+        return await answer(engine.autoreply_config)(user_id)
+
+    @app.put("/links/{user_id}/autoreply", dependencies=auth)
+    async def put_autoreply(user_id: str, body: AutoreplyBody) -> dict[str, Any]:
+        return await answer(engine.set_autoreply_config)(user_id, body.model_dump())
 
     @app.put("/links/{user_id}/retention", dependencies=auth)
     async def retention(user_id: str, body: RetentionBody) -> dict[str, Any]:

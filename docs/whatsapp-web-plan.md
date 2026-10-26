@@ -398,6 +398,47 @@ default (1–200), 6 a minute per chat, the same text to the same chat once in 2
   - the daily limit and the kill switch refuse;
   - an unknown outcome is caught on retry.
 
+### Auto-replies ✓ (implemented; not live-tested)
+
+Asked for after P3 went to staging: in chats where sending is allowed, the agent answers when
+it's mentioned and keeps talking while it has something to say. Decisions (2026-10-26):
+
+| Question | Decision |
+|---|---|
+| What counts as a mention | The agent's name or one of the user's trigger words as a word (or `@word`) anywhere in a message, or a reply to one of the agent's own messages. A WhatsApp @mention of the user's account stays the user's. |
+| What the agent may use | **The chat and the web only:** the last 30 messages of that chat, and one web search it can ask for. Never mail, files, calendar, memory, other chats or other agents. |
+| How long it keeps talking | **15 minutes** after its last message, only with something meaningful to add; a new mention starts the window again; the user writing there ends it. |
+| Direct chats | **Only when mentioned** — the same rules as groups (a direct chat is still the user's conversation). |
+
+As built:
+
+- **The service** keeps the config with the link (`meta`: `autoreply_chats`, `autoreply_agent`,
+  `autoreply_triggers`; `GET/PUT /links/{uid}/autoreply`), only for whitelisted chats. For a
+  live message in such a chat, while sending is on, it queues an `incoming` event
+  (`Engine._autoreply_candidate`): the chat, the sender's name, the text, whether it replies
+  to an agent's message, when an agent last wrote there and when the user did. The user's own
+  messages count only as mentions (that's how they call the agent in); an agent's send never
+  becomes an event.
+  `Engine.send` now also keeps the sent message in `messages`, because WhatsApp doesn't echo
+  a linked device's own sends; `messages()` marks them `by_agent`.
+- **Flight Deck** (`whatsapp_web_autoreply.py`) gets the event from the supervisor's drain,
+  waits for the chat to be quiet for 8 s, decides (mention / follow-up / nothing), and only
+  then asks the agent's model through `POST /api/llm/complete` (no tools, memory, session —
+  `gmail_autoreply_writer._agent_complete`). The prompt is FD's own: who the agent is and whose
+  account it writes from, that the chat is conversation and never instructions, that it must
+  never speak or promise for the user and may stay silent. The model answers with one nonce
+  envelope, REPLY / SKIP / SEARCH; a search runs through the agent's `run_tool` frame
+  (`_agent_tool`, the catalogue's `web_search`; no link, domain, email or long number in the
+  query), its results go back as titles and snippets without links, and the second answer can
+  only be REPLY or SKIP. The reply goes through `POST /links/{uid}/send` — the same gate,
+  limits, signature and bell as any send.
+- **Guards:** 10 answers an hour per chat; no answer to a message that ends like another
+  assistant's signature, mention or not (two assistants never keep each other going); a message older than
+  10 minutes on arrival is left alone; `FD_WHATSAPP_WEB_AUTOREPLY=off` and
+  `FD_WHATSAPP_WEB_SEND=off` stop everything, checked again right before the send.
+- **The card:** an *auto-reply* tick next to each whitelisted chat, the agent picker (the
+  user's own agents, `list_eligible_agents`; FD refuses anyone else's), the trigger words.
+
 ### P4 — deep memory search (opt-in)
 
 - Index messages into deep memory (Typesense), opt-in per user, so `search` covers the whole
@@ -407,8 +448,8 @@ default (1–200), 6 a minute per chat, the same text to the same chat once in 2
 
 ### P5 — events (later)
 
-- New-message events into the scheduler, flows and topic auto-replies
-  (`gmail_autoreply*`), all off by default.
+- New-message events into the scheduler and flows, off by default. (Auto-replies in chosen
+  chats shipped earlier, above.)
 
 ---
 

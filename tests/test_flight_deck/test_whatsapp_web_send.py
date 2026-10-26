@@ -292,6 +292,11 @@ async def deck(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sup, "get", lambda: Svc())
     monkeypatch.setattr(sup, "installed", lambda: True)
+
+    async def no_agents(db, owner):  # the auto-reply picker; never lists Docker here
+        return []
+
+    monkeypatch.setattr(routes.writer, "list_eligible_agents", no_agents)
     app = FastAPI()
     app.include_router(routes.router)
     try:

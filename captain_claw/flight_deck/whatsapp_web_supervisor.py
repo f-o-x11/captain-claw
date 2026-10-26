@@ -11,6 +11,8 @@
   with a growing pause (1 s … 60 s) while links exist and the deck allows it.
 * **Bells.** Every few seconds the service's notices (unlinked on the phone,
   stream replaced, temporary ban, outdated) become the owner's notifications.
+  Its ``incoming`` events — messages in chats the agent answers by itself —
+  go to :mod:`.whatsapp_web_autoreply` instead.
 * **Switches.** The admin's ``fd:whatsapp-web`` system setting (off by
   default) and the kill switch ``FD_WHATSAPP_WEB=off``. Turning the setting off
   stops the service; links stay on disk and come back when it's on again.
@@ -395,6 +397,14 @@ class Supervisor:
             self._seq = max(self._seq, int(e.get("seq") or 0))
             uid = str(e.get("user_id") or "")
             if not uid:
+                continue
+            if e.get("kind") == "incoming":
+                from captain_claw.flight_deck import whatsapp_web_autoreply
+
+                try:
+                    whatsapp_web_autoreply.on_incoming(self, e)
+                except Exception as exc:
+                    log.warning("WhatsApp Web auto-reply for %s not queued: %s", uid, type(exc).__name__)
                 continue
             try:
                 await self.db.add_notification(uid, BELL_TYPE, str(e.get("title") or "")[:120],

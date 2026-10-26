@@ -29,7 +29,9 @@ import {
 // message since are kept (encrypted) for the user's agents, who read them with
 // the whatsapp_web tool. Agents send only when the user turns Sending on, only to
 // the chats on their whitelist, within a daily limit, signed; nothing is ever
-// marked read or shown as "online" in the user's name.
+// marked read or shown as "online" in the user's name. In whitelisted chats the
+// user marks for auto-reply, the agent they pick answers by itself when it's
+// mentioned (captain_claw/flight_deck/whatsapp_web_autoreply.py).
 
 type Tone = 'on' | 'wait' | 'warn' | 'off'
 
@@ -87,10 +89,17 @@ const KIND_LABEL: Record<string, string> = {
 
 const SEND_STATUS: Record<string, string> = { sent: 'sent', unknown: 'not confirmed', failed: 'failed', sending: 'sending' }
 
+const AGENT_REASON: Record<string, string> = {
+  agent_no_token: 'no web token', agent_no_port: 'no port', agent_managed: 'a worker', agent_not_found: 'not found',
+}
+
+const triggerList = (text: string) => text.split(',').map((t) => t.trim().replace(/\s+/g, ' ')).filter(Boolean)
+
 function Sending() {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState<WhatsAppWebSending | null>(null)
   const [draft, setDraft] = useState<WhatsAppWebSendingChanges>({})
+  const [auto, setAuto] = useState<{ chats: string[]; agent: string; triggers: string }>({ chats: [], agent: '', triggers: '' })
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -99,6 +108,7 @@ function Sending() {
   const apply = (v: WhatsAppWebSending) => {
     setView(v)
     setDraft({ allowed: v.allowed ?? [], daily_limit: v.daily_limit, signature: v.signature, signature_on: v.signature_on })
+    setAuto({ chats: v.autoreply?.chats ?? [], agent: v.autoreply?.agent ?? '', triggers: (v.autoreply?.triggers ?? []).join(', ') })
   }
   const load = useCallback(async () => {
     try { apply(await getWhatsAppWebSending()); setError('') } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
@@ -122,18 +132,30 @@ function Sending() {
   }
 
   const allowed = new Set(draft.allowed ?? [])
+  const answered = new Set(auto.chats.filter((j) => allowed.has(j)))
   const toggleChat = (jid: string) => {
     const next = new Set(allowed)
     if (next.has(jid)) next.delete(jid); else next.add(jid)
     setDraft((d) => ({ ...d, allowed: [...next] }))
   }
+  const toggleAuto = (jid: string) => {
+    const next = new Set(answered)
+    if (next.has(jid)) next.delete(jid); else next.add(jid)
+    setAuto((a) => ({ ...a, chats: [...next] }))
+  }
+  const autoChanges = { chats: [...answered], agent: auto.agent, triggers: triggerList(auto.triggers) }
+  const autoView = view?.autoreply
+  const answerer = autoView?.agents.find((a) => a.ref === auto.agent)
   const chats = (view?.chats ?? []).filter((c) => {
     const q = filter.trim().toLowerCase()
     return !q || c.title.toLowerCase().includes(q) || (c.number || '').includes(q.replace(/\s/g, ''))
   })
   const dirty = !!view && (
     JSON.stringify([...(view.allowed ?? [])].sort()) !== JSON.stringify([...allowed].sort())
-    || draft.daily_limit !== view.daily_limit || draft.signature !== view.signature || draft.signature_on !== view.signature_on)
+    || draft.daily_limit !== view.daily_limit || draft.signature !== view.signature || draft.signature_on !== view.signature_on
+    || JSON.stringify([...(autoView?.chats ?? [])].sort()) !== JSON.stringify([...answered].sort())
+    || auto.agent !== (autoView?.agent ?? '')
+    || JSON.stringify(autoChanges.triggers) !== JSON.stringify(autoView?.triggers ?? []))
 
   return (
     <div className={`${BOX} space-y-2`}>
@@ -189,11 +211,19 @@ function Sending() {
             <div className="max-h-56 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 divide-y divide-zinc-800/60">
               {chats.length === 0 && <div className="px-3 py-2 text-zinc-500">No chats {filter ? 'match' : 'kept yet'}.</div>}
               {chats.slice(0, 300).map((c) => (
-                <label key={c.jid} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-zinc-900/60">
-                  <input type="checkbox" checked={allowed.has(c.jid)} onChange={() => toggleChat(c.jid)} className="h-3.5 w-3.5 accent-violet-600" />
-                  <span className="truncate text-zinc-200">{c.title}</span>
-                  <span className="ml-auto shrink-0 text-zinc-500">{c.kind === 'group' ? 'group' : c.number}</span>
-                </label>
+                <div key={c.jid} className="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-900/60">
+                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                    <input type="checkbox" checked={allowed.has(c.jid)} onChange={() => toggleChat(c.jid)} className="h-3.5 w-3.5 accent-violet-600" />
+                    <span className="truncate text-zinc-200">{c.title}</span>
+                  </label>
+                  {allowed.has(c.jid) && (
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1 text-zinc-400" title="The agent answers here by itself when it's mentioned">
+                      <input type="checkbox" checked={answered.has(c.jid)} onChange={() => toggleAuto(c.jid)} className="h-3 w-3 accent-violet-600" />
+                      auto-reply
+                    </label>
+                  )}
+                  <span className="shrink-0 text-zinc-500">{c.kind === 'group' ? 'group' : c.number}</span>
+                </div>
               ))}
             </div>
           </div>
@@ -221,8 +251,60 @@ function Sending() {
               className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 focus:border-violet-500/50 focus:outline-none disabled:opacity-50"
             />
           </div>
+          {autoView && (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="font-medium text-zinc-200">Auto-replies</span>
+                <span className="text-zinc-500">{answered.size} chat{answered.size === 1 ? '' : 's'}</span>
+              </div>
+              <p className="text-zinc-400">
+                In the chats marked auto-reply, {answerer?.name ?? 'the agent you pick'} answers by itself when someone
+                mentions it by name or a trigger word, or replies to one of its messages (you can call it in the same
+                way). For 15 minutes after that it
+                joins in when it has something useful to add, and steps back as soon as you write there yourself. It sees
+                only that chat and can search the web — never your mail, files, calendar, memory or other chats. Its
+                messages count toward the daily limit and carry your signature.
+              </p>
+              {autoView.kill_switch && (
+                <div className="flex items-start gap-1.5 text-amber-600 dark:text-amber-400">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-px" />
+                  An admin switched auto-replies off for this deck (FD_WHATSAPP_WEB_AUTOREPLY=off).
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <label className="flex items-center gap-1.5">
+                  Answers as
+                  <select
+                    value={auto.agent}
+                    onChange={(e) => setAuto((a) => ({ ...a, agent: e.target.value }))}
+                    className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 focus:border-violet-500/50 focus:outline-none"
+                  >
+                    <option value="">— pick an agent —</option>
+                    {autoView.agents.map((a) => (
+                      <option key={a.ref} value={a.ref} disabled={!a.eligible}>
+                        {a.name}{!a.eligible ? ` (${AGENT_REASON[a.reason] ?? 'can’t answer'})` : !a.running ? ' (stopped)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <span className="shrink-0">Also answers to</span>
+                  <input
+                    value={auto.triggers}
+                    onChange={(e) => setAuto((a) => ({ ...a, triggers: e.target.value }))}
+                    placeholder="words, separated by commas"
+                    className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 focus:border-violet-500/50 focus:outline-none"
+                  />
+                </label>
+              </div>
+              {answered.size > 0 && !auto.agent && <div className="text-amber-600 dark:text-amber-400">Pick the agent that answers.</div>}
+              {answered.size > 0 && answerer && !answerer.running && (
+                <div className="text-amber-600 dark:text-amber-400">{answerer.name} is stopped: it won’t answer until it runs.</div>
+              )}
+            </div>
+          )}
           <div className="flex items-center gap-2">
-            <button onClick={() => save(draft)} disabled={busy || !dirty} className={PRIMARY}>
+            <button onClick={() => save(autoView ? { ...draft, autoreply: autoChanges } : draft)} disabled={busy || !dirty} className={PRIMARY}>
               {busy && <Loader2 className="h-3 w-3 animate-spin" />} Save
             </button>
             {notice && <span className="text-emerald-600 dark:text-emerald-500">{notice}</span>}
