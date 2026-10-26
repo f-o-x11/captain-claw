@@ -94,6 +94,11 @@ import type { ReasoningProfile } from '../../utils/reasoningEffort'
 const REMARK_PLUGINS = [remarkGfm, remarkMath]
 const REHYPE_PLUGINS = [rehypeKatex]
 
+// The chat box's "queue it instead of sending" chord, as this keyboard names it.
+const QUEUE_CHORD = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+  ? '⌘Enter'
+  : 'Ctrl+Enter'
+
 // Memoized markdown renderer. Parsing markdown + KaTeX is the single most
 // expensive thing the chat does, and the transcript re-renders on every
 // streaming event (status/monitor/turn_usage fire many times per turn). Keying
@@ -240,6 +245,9 @@ export function ChatPanel({ variant = 'default' }: { variant?: 'default' | 'simp
     })
   }, [setDesktopQueueOpen])
   const backToChat = useCallback(() => setPhoneQueueOpen(false), [])
+  // Bumped when the chat box queues a message: the fullscreen queue, folded
+  // to its bar or rail, unfolds to show it.
+  const [queueReveal, setQueueReveal] = useState(0)
 
   // The active session, keyed — its object identity changes only when THIS
   // session mutates, so other agents' events don't re-render the transcript.
@@ -326,6 +334,22 @@ export function ChatPanel({ variant = 'default' }: { variant?: 'default' | 'simp
       {!simpleQueueOpen && <QueueBadge signal={queueSignal} />}
     </button>
   )
+
+  // Cmd/Ctrl+Enter in the chat box: the message goes to this lane's queue,
+  // on Auto, and the queue comes into view — its column (a phone's queue
+  // view), or in the full layout the fullscreen chat that carries it.
+  const queueFromChat = (content: string) => {
+    const st = useChatStore.getState()
+    st.setQueueAutoMode(session.key, true)
+    st.enqueueQueueMessage(session.key, content)
+    if (simple || isMobile) {
+      setSimpleQueueOpen(true)
+      return
+    }
+    unfoldFullscreenQueue()
+    if (chatFullscreen) setQueueReveal((n) => n + 1)
+    else toggleChatFullscreen()
+  }
 
   return (
     <div ref={rootRef} className={`flex h-full flex-col bg-zinc-950/80 ${simple ? '' : 'border-l border-zinc-800'}`}>
@@ -613,6 +637,7 @@ export function ChatPanel({ variant = 'default' }: { variant?: 'default' | 'simp
               onGoToChat={goToChat}
               onHide={hideQueue}
               onBack={backToChat}
+              reveal={queueReveal}
             />
           )}
           {!(isMobile && simpleQueueOpen) && (
@@ -623,6 +648,7 @@ export function ChatPanel({ variant = 'default' }: { variant?: 'default' | 'simp
               simple={simple}
               minWidth={simple && !isMobile ? 300 : undefined}
               onSend={(content) => sendMessage(session.key, content)}
+              onQueue={queueFromChat}
               onCancel={() => cancelTask(session.key)}
             />
           )}
@@ -693,6 +719,7 @@ function ChatContent({
   simple = false,
   minWidth,
   onSend,
+  onQueue,
   onCancel,
 }: {
   session: { containerId: string; containerName: string; messages: ChatMessage[]; connected: boolean; busy: boolean; statusText: string; nextStepOptions?: NextStepOption[]; liveTurnUsage?: TokenUsage | null; closed?: { code: number; reason: string } | null; unreachable?: string | null; hasOlder?: boolean; hasNewer?: boolean; holdScrollUntil?: number; reasoning?: ReasoningProfile | null }
@@ -707,6 +734,8 @@ function ChatContent({
   /** Conversation floor (simple layout): the queue column shrinks before this. */
   minWidth?: number
   onSend: (content: string) => void
+  /** Cmd/Ctrl+Enter: the message goes to the lane's queue instead. */
+  onQueue: (content: string) => void
   onCancel: () => void
 }) {
   const { isMobile } = useIsMobile()
@@ -775,22 +804,32 @@ function ChatContent({
   // Today's plan allowance is spent: Flight Deck would refuse the message.
   const quotaSpent = useQuotaStore((s) => !!s.status?.blocked && !s.status.exempt)
 
-  const handleSend = () => {
+  // What's in the box (with its uploaded files) goes to `deliver`: sent now,
+  // or added to the queue.
+  const submit = (deliver: (content: string) => void) => {
     const text = input.trim()
     const uploadedFiles = attachments.filter((a) => a.status === 'uploaded' && a.uploadedPath)
     const hasContent = text || uploadedFiles.length > 0
     if (!hasContent || !session.connected || quotaSpent) return
 
     const content = appendAttachmentRefs(text, uploadedFiles)
-    onSend(content)
+    deliver(content)
     setInput('')
     // The box grew with what was typed: back to one line.
     if (inputRef.current) inputRef.current.style.height = 'auto'
     clearAttachments()
   }
+  const handleSend = () => submit(onSend)
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey && !touchKeyboard()) {
+    if (e.key !== 'Enter') return
+    // Cmd/Ctrl+Enter queues it, on any keyboard. Plain Enter sends — except
+    // on an on-screen keyboard, where it starts a new line (as in any
+    // messaging app).
+    if (e.metaKey || e.ctrlKey) {
+      e.preventDefault()
+      submit(onQueue)
+    } else if (!e.shiftKey && !touchKeyboard()) {
       e.preventDefault()
       handleSend()
     }
@@ -1063,8 +1102,15 @@ function ChatContent({
                   compact={isMobile}
                 />
               )}
-              <div className="flex-1" />
-              {!isMobile && <span className="pr-2 text-xs text-zinc-500">Enter to send</span>}
+              {/* The keys hint takes what room the row has left, and says
+                  as much of itself as fits. */}
+              <div className="@container min-w-0 flex-1">
+                {!isMobile && (
+                  <p className="hidden truncate pr-2 text-right text-xs text-zinc-500 @min-[6rem]:block">
+                    Enter to send<span className="hidden @min-[14rem]:inline"> · {QUEUE_CHORD} to queue</span>
+                  </p>
+                )}
+              </div>
               {session.busy ? (
                 <button
                   onClick={onCancel}
@@ -1140,7 +1186,7 @@ function ChatContent({
               onClick={handleSend}
               disabled={sendDisabled}
               className="flex h-[38px] items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-40"
-              title={pendingUploads > 0 ? 'Waiting for uploads...' : 'Send'}
+              title={pendingUploads > 0 ? 'Waiting for uploads...' : `Send (Enter) · ${QUEUE_CHORD} adds it to the queue`}
             >
               {pendingUploads > 0 ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </button>
@@ -1491,7 +1537,7 @@ function scrollToMessage(id: string) {
 // It lives here, not in queue/, to reach useAgentConnection. Memoized: the
 // chat around it re-renders with every streamed token, and its props (ids,
 // flags, stable callbacks) don't change with them.
-const QueueSidebar = memo(function QueueSidebar({ sessionKey, agentId, queueOnly = false, shared = false, variant, onGoToChat, onHide, onBack }: {
+const QueueSidebar = memo(function QueueSidebar({ sessionKey, agentId, queueOnly = false, shared = false, variant, onGoToChat, onHide, onBack, reveal }: {
   sessionKey: string
   agentId: string
   queueOnly?: boolean
@@ -1500,6 +1546,8 @@ const QueueSidebar = memo(function QueueSidebar({ sessionKey, agentId, queueOnly
   onGoToChat: (o: { messageId?: string; focusComposer?: boolean }) => void
   onHide: () => void
   onBack: () => void
+  /** Changes when the chat box queued a message: a folded queue unfolds. */
+  reveal: number
 }) {
   const conn = useAgentConnection(agentId)
   const width = usePersistedSize('fd:queue-sidebar-width', 288, 220, 640, 'x')
@@ -1510,6 +1558,12 @@ const QueueSidebar = memo(function QueueSidebar({ sessionKey, agentId, queueOnly
   const setRail = (v: boolean) => {
     setCollapsed(v)
     try { localStorage.setItem(QUEUE_COLLAPSED_KEY, v ? '1' : '0') } catch { /* private mode */ }
+  }
+  // (The stored setting already says unfolded: unfoldFullscreenQueue.)
+  const [revealSeen, setRevealSeen] = useState(reveal)
+  if (revealSeen !== reveal) {
+    setRevealSeen(reveal)
+    setCollapsed(false)
   }
   // The files and datastore panes give way before the queue drops under
   // ~320px: they share what the column has left over (each keeps 96px).
@@ -1644,6 +1698,11 @@ const QueueSidebar = memo(function QueueSidebar({ sessionKey, agentId, queueOnly
 })
 
 const QUEUE_COLLAPSED_KEY = 'fd:fullscreen-queue-collapsed'
+
+/** The fullscreen queue shows unfolded from now on, as if its bar was clicked. */
+function unfoldFullscreenQueue() {
+  try { localStorage.setItem(QUEUE_COLLAPSED_KEY, '0') } catch { /* private mode */ }
+}
 
 // The fullscreen queue's own width starts from the simple column's, once.
 let _fsQueueWidth: number | null = null
