@@ -18,7 +18,11 @@ async def list_notifications(
     limit: int = 50, unread_only: bool = False,
     user: dict = Depends(get_current_user),
 ):
-    """This user's notifications (newest first) + unread count."""
+    """This user's notifications (newest first) + unread count. Proposals
+    waiting for them that the bell doesn't hold yet are added first."""
+    from captain_claw.flight_deck.owner_notify import bell_backfill
+
+    await bell_backfill(user["id"])
     db = get_db()
     items = await db.list_notifications(user["id"], limit=limit, unread_only=unread_only)
     unread = await db.count_unread_notifications(user["id"])

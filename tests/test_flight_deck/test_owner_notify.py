@@ -349,3 +349,30 @@ def test_a_failing_bell_never_stops_the_other_channels(store, channels, monkeypa
     monkeypatch.setattr(auth, "get_db", _no_db)
     res = _run_coro(owner_notify.notify_owner(ALICE, "nudge", "Hi", bell=("autonomy_nudge", "Nudge", "Hi")))
     assert res["bell"] is False and res["devices"] == 1
+
+
+def test_the_bell_fills_in_waiting_proposals_it_lacks(store, monkeypatch):
+    """Proposals made before the bell held them (or when it couldn't be
+    written) get an entry the next time the bell is read — once, read or not."""
+    from captain_claw.flight_deck import auth
+
+    rows: list[dict] = []
+
+    class _DB:
+        async def add_notification(self, user_id, type, title, body="", ref_type="", ref_id=""):
+            rows.append({"user": user_id, "type": type, "ref_type": ref_type, "ref_id": ref_id, "body": body})
+            return "n"
+
+        async def count_notifications_since(self, user_id, since, types=(), *, ref_type="", ref_id=""):
+            return sum(1 for r in rows if r["user"] == user_id and r["ref_id"] == ref_id
+                       and r["ref_type"] == ref_type and r["type"] in ([types] if isinstance(types, str) else types))
+
+    monkeypatch.setattr(auth, "get_db", lambda: _DB())
+    old = store.add_action(ALICE, kind="run_prompt", title="Re-run the stock search",
+                           rationale="Prices moved.", status="awaiting_approval")
+    store.add_action(ALICE, kind="nudge", title="Already answered", status="rejected")
+    store.add_action(BOB, kind="nudge", title="Bob's", status="awaiting_approval")
+    assert _run_coro(owner_notify.bell_backfill(ALICE)) == 1
+    assert rows == [{"user": ALICE, "type": "autonomy_proposal", "ref_type": "autonomy_action",
+                     "ref_id": old["id"], "body": "Re-run the stock search\nPrices moved."}]
+    assert _run_coro(owner_notify.bell_backfill(ALICE)) == 0  # once

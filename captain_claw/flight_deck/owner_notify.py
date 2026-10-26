@@ -187,14 +187,42 @@ async def notify_proposal(user_id: str, action: dict[str, Any]) -> dict[str, Any
         _log.debug("proposal notify: no count for %s: %s", user_id, exc)
         waiting = 1
     title = str(action.get("title") or "").strip()
-    rationale = str(action.get("rationale") or "").strip()
     return await notify_owner(
         user_id, "proposal", proposal_text(action, waiting),
         device_text=f"Waiting for your approval: {title}" if title else "A proposal waits in Flight Deck",
-        bell=("autonomy_proposal", "Waiting for your approval",
-              (title or "A new proposal") + (f"\n{rationale[:600]}" if rationale else "")),
-        action_id=str(action.get("id") or ""),
+        bell=_proposal_bell(action), action_id=str(action.get("id") or ""),
     )
+
+
+def _proposal_bell(action: dict[str, Any]) -> tuple[str, str, str]:
+    """A proposal's bell notification: (type, title, body)."""
+    title = str(action.get("title") or "").strip()
+    rationale = str(action.get("rationale") or "").strip()
+    return ("autonomy_proposal", "Waiting for your approval",
+            (title or "A new proposal") + (f"\n{rationale[:600]}" if rationale else ""))
+
+
+async def bell_backfill(user_id: str) -> int:
+    """Every proposal waiting for this user gets a bell notification if it has
+    none yet (made before the bell held them, or when it couldn't be
+    written): the bell lists what the devices count. How many were added;
+    never raises. Read or dismissed ones are never added again."""
+    try:
+        from captain_claw.flight_deck.auth import get_db
+
+        db = get_db()
+        added = 0
+        for action in get_store().list_actions(user_id, status="awaiting_approval", limit=50):
+            aid = str(action.get("id") or "")
+            if not aid or await db.count_notifications_since(
+                    _norm_user(user_id), "", "autonomy_proposal", ref_type=BELL_REF, ref_id=aid):
+                continue
+            if await _to_bell(user_id, *_proposal_bell(action), action_id=aid):
+                added += 1
+        return added
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("bell backfill for %s failed: %s", user_id, exc)
+        return 0
 
 
 def waiting_may_have_changed(user_id: str) -> None:
