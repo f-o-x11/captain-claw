@@ -197,6 +197,9 @@ void linksChanged();
 void hold(bool recording);
 // Where the notes are kept changed (a microSD card put in or taken out).
 void notesChanged();
+// How many proposals wait in Flight Deck, as last heard: the dashboard
+// asleep says so (awake, the links list it).
+void setWaiting(int count);
 #endif
 
 // Conversation views (text mode).

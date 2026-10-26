@@ -99,6 +99,15 @@ void cueEnd() {
   M5.Speaker.tone(1046, 160, 1, false);  // then C6
 }
 
+void chime() {
+  if (micOn || streamOpen) return;
+  if (!M5.Speaker.isEnabled()) M5.Speaker.begin();
+  // The first tone long enough to outlast the codec waking (it swallows
+  // the first tens of ms).
+  M5.Speaker.tone(1319, 140, 1, true);   // E6
+  M5.Speaker.tone(2093, 220, 1, false);  // then C7
+}
+
 void talkStart() {
   if (micOn) return;
   playStop();
