@@ -8,17 +8,21 @@ library) per linked user and answers Flight Deck on a loopback port:
 
 * :mod:`.link_state` — one link's state and what each WhatsApp event does to
   it. Pure, so it is tested without WhatsApp.
+* :mod:`.parse` — WhatsApp protos → rows (message, edit, revoke, react, skip).
+* :mod:`.store` — one link's messages, sealed with fd_crypto: chats, contacts,
+  reactions, LID folding, search, the per-agent news cursor, retention.
 * :mod:`.engine` — the links: link, pairing code, cancel, unlink, resume after
-  a restart, the pairing timeout, the events Flight Deck turns into bells.
+  a restart, the pairing timeout, the events Flight Deck turns into bells,
+  ingest into the store and the reads agents make.
 * :mod:`.neonize_adapter` — the only module that touches neonize: the version
   pin, the libmagic stand-in, and every event handler wrapped so an exception
   is logged (neonize drops them silently).
 * :mod:`.api` — the loopback HTTP API (bearer secret from ``service.secret``).
 * ``__main__`` — the process: lock, umask, port, run.
 
-Phase 0 links and unlinks only: history sync is counted, not kept, and no
-agent reads anything yet. Nothing is ever sent, marked read or announced as
-online.
+The history the phone sends after linking and every message since are kept for
+the user's agents (the ``whatsapp_web`` tool, read-only). Nothing is ever sent,
+marked read or announced as online.
 
 Data, under ``<FD data dir>/whatsapp_web/`` (0700, files 0600):
 
@@ -26,6 +30,7 @@ Data, under ``<FD data dir>/whatsapp_web/`` (0700, files 0600):
 * ``<user_id>/session.sqlite3`` — whatsmeow's session: the device keys, so
   whoever has the file has the account
 * ``<user_id>/state.json`` — the link's state (no keys, no messages)
+* ``<user_id>/store.sqlite3`` — the messages kept (sealed; JIDs plain)
 """
 
 from __future__ import annotations

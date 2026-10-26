@@ -1,9 +1,11 @@
 # whatsapp_web — read the owner's own WhatsApp, like mail
 
-**Status:** Phase 0 is implemented on `feat/whatsapp-web-p0`: the service, the supervisor, the
-routes and the Connections card. It's covered by unit tests and a test that spawns the real
-service. A live link with a real phone hasn't been run on it yet; the PoC (2026-10-26, below)
-is still the only live evidence. The open questions are decided (see "Decisions").
+**Status:** Phases 0 and 1 are implemented: P0 (linking) on `feat/whatsapp-web-p0`, and P1
+(the store, history and live ingest, and the read-only `whatsapp_web` tool) on
+`feat/whatsapp-web-p1`, which builds on it. Both are covered by unit tests, including parser
+tests on real neonize protos and a test that spawns the real service. Neither has been run with
+a real phone yet; the PoC (2026-10-26, below) is still the only live evidence. The open
+questions are decided (see "Decisions").
 **Origin:** we tried `whatsapp-mcp-pro` (a Go bridge on whatsmeow plus a Python MCP server)
 and wanted the same reach without MCP or Go builds: one internal tool, `whatsapp_web`,
 that reads the user's own WhatsApp account the way `google_mail` and `telegram_inbox`
@@ -149,16 +151,27 @@ processes: agents in `server.py` (`_processes`), and `vfs_hosting.py`.
 | `…/whatsapp_web/engine.py` | the links: link, pairing code, reconnect, cancel, unlink, resume, pairing timeout, bells; one lock per user id, a generation per client | P0 ✓ |
 | `…/whatsapp_web/neonize_adapter.py` | the only neonize import: version + bundled-library check before import, download blocked, libmagic stand-in, guarded handlers | P0 ✓ |
 | `…/whatsapp_web/api.py` | loopback HTTP for FD (bearer secret from `service.secret`) | P0 ✓ |
-| `…/whatsapp_web/parse.py` | proto → row (kind, text, media metadata, technical-only filter); pure, unit-tested | P1 |
-| `…/whatsapp_web/store.py` | per-user SQLite: schema, upserts, retention purge, sealed fields | P1 |
+| `…/whatsapp_web/parse.py` | proto → row (message / edit / revoke / react / skip; kind, text, media metadata, reply); pure, tested on real protos | P1 ✓ |
+| `…/whatsapp_web/store.py` | per-user SQLite: schema, upserts, LID folding, sealed fields, search, news cursor, retention purge | P1 ✓ |
 | `captain_claw/flight_deck/whatsapp_web_supervisor.py` | start or adopt, restart with backoff, bells, stop; never signals a pid the service didn't confirm | P0 ✓ |
-| `captain_claw/flight_deck/whatsapp_web_routes.py` | `/fd/whatsapp-web*` (user) and `/fd/admin/whatsapp-web`; `/fd/whatsapp-web/agent/*` in P1 | P0 ✓ |
-| `captain_claw/whatsapp_web_client.py` | agent side: `usable()`, `refresh_connected()`, `news()`, modelled on `telegram_inbox_client.py` | P1 |
-| `captain_claw/tools/whatsapp_web.py` | the tool | P1 |
+| `captain_claw/flight_deck/whatsapp_web_routes.py` | `/fd/whatsapp-web*` (user: link, retention, peek), `/fd/whatsapp-web/agent/*` (owner only) and `/fd/admin/whatsapp-web` | P0 ✓ P1 ✓ |
+| `captain_claw/whatsapp_web_client.py` | agent side: `usable()`, `refresh_connected()`, `news()`, `news_line()`, modelled on `telegram_inbox_client.py` | P1 ✓ |
+| `captain_claw/tools/whatsapp_web.py` | the tool: status, chats, read, recent, search, contact | P1 ✓ |
 | `flight-deck/src/components/connections/WhatsAppWebConnection.tsx` | Connections card (classic, kiosk dialog, console), with the admin switch for admins | P0 ✓ |
 
-**History linked during P0 isn't kept** (it's counted on the card). History is sent once per link,
-so an account linked before P1 has to be linked again to bring its history into the store.
+**History linked during P0 isn't kept** (P0 only counted it). History is sent once per link, so an
+account linked on a P0 build has to be linked again to bring its history into the store.
+
+P1 details worth knowing:
+- The address book and group names are read from whatsmeow after connecting (20 s later, then
+  every 15 min); that is a read, nothing is sent.
+- The news line counts only messages that arrived live; the history sent after linking doesn't
+  count as new.
+- An account unlinked from the phone loses its kept messages too, not just its session.
+- The service seals with the key FD resolved (`FD_DATA_KEY_FILE` is passed to it), so a relative
+  `FD_DATA_DIR` can't send it to a different key.
+- On a deck without sign-in (or the desktop app) WhatsApp Web is unavailable: agents read
+  through their owner.
 
 ### Wiring into the agent (same places as `telegram_inbox`)
 

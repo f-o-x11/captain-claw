@@ -31,6 +31,7 @@ from captain_claw.flight_deck.whatsapp_web.link_state import (
     normalize_phone,
     now_iso,
 )
+from captain_claw.flight_deck.whatsapp_web.store import RETENTION_CHOICES, ChatNotFound, Store
 
 log = logging.getLogger("whatsapp_web.engine")
 
@@ -45,6 +46,10 @@ _STOP_TIMEOUT = 10.0
 # A folder name under the data dir: no "." / ".." / hidden names, nothing that climbs out.
 _USER_ID = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,79}$")
 _SESSION_FILES = ("session.sqlite3", "session.sqlite3-wal", "session.sqlite3-shm", "session.sqlite3-journal")
+_STORE_FILES = ("store.sqlite3", "store.sqlite3-wal", "store.sqlite3-shm", "store.sqlite3-journal")
+# Events that only feed the store: state.json isn't rewritten for each.
+_STORE_ONLY = frozenset({"message", "directory"})
+_PURGE_EVERY = 3600.0
 
 
 class Adapter(Protocol):
@@ -73,6 +78,7 @@ class _Link:
     dir: Path
     state: LinkState
     adapter: Adapter | None = None
+    store: Store | None = None
     # Bumped for every client started, so a stopped client's late events are ignored.
     gen: int = 0
     watchdog: asyncio.Task | None = None
@@ -86,6 +92,10 @@ class _Link:
     @property
     def state_file(self) -> Path:
         return self.dir / "state.json"
+
+    @property
+    def store_file(self) -> Path:
+        return self.dir / "store.sqlite3"
 
 
 def _qr_svg(code: str) -> str:
@@ -144,15 +154,37 @@ class Engine:
             log.warning("whatsapp_web: could not save %s: %s", link.state_file, exc)
 
     def _wipe_session(self, link: _Link) -> None:
-        for name in _SESSION_FILES:
+        """Drop the session and the messages kept for it (state.json stays, so
+        the card can say what happened)."""
+        self._close_store(link)
+        for name in (*_SESSION_FILES, *_STORE_FILES):
             try:
                 (link.dir / name).unlink()
             except FileNotFoundError:
                 pass
 
     def _remove(self, link: _Link) -> None:
+        self._close_store(link)
         self._links.pop(link.user_id, None)
         shutil.rmtree(link.dir, ignore_errors=True)
+
+    def _open_store(self, link: _Link, *, create: bool = True) -> Store | None:
+        """The link's store, opened on first use. With ``create=False`` a link
+        whose folder is gone (unlinked meanwhile) gets None, not a new folder."""
+        if link.store is None:
+            if not create and not link.dir.is_dir():
+                return None
+            link.dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+            link.store = Store(link.store_file)
+        return link.store
+
+    def _close_store(self, link: _Link) -> None:
+        store, link.store = link.store, None
+        if store is not None:
+            try:
+                store.close()
+            except Exception as exc:
+                log.warning("whatsapp_web: closing %s's store: %s", link.user_id, exc)
 
     def _sink(self, link: _Link, gen: int) -> EventSink:
         async def sink(name: str, data: dict[str, Any]) -> None:
@@ -212,7 +244,13 @@ class Engine:
         if name in ("logged_out", "stream_replaced", "outdated"):
             # Let go of the client from outside its own callback.
             asyncio.get_running_loop().create_task(self._after_terminal(link, name))
-        self._save(link)
+        if name in ("history", "message", "directory"):
+            try:
+                await asyncio.to_thread(self._ingest, link, name, data)
+            except Exception as exc:
+                log.error("whatsapp_web: storing %s for %s failed: %s", name, link.user_id, exc)
+        if name not in _STORE_ONLY:
+            self._save(link)
         if notice is not None:
             self._seq += 1
             self._events.append({
@@ -220,6 +258,26 @@ class Engine:
                 "body": notice.body, "at": now_iso(self._clock()),
             })
             del self._events[:-_MAX_EVENTS]
+
+    def _ingest(self, link: _Link, name: str, data: dict[str, Any]) -> None:
+        """Write one event's rows (worker thread; the store serialises itself)."""
+        if (not link.state.linked_at or link.state.state == "logged_out"
+                or self._links.get(link.user_id) is not link):
+            return  # unlinked or logged out while this event was on its way
+        store = self._open_store(link, create=False)
+        if store is None:
+            return
+        if name == "history":
+            # Mappings first, so this chunk's LID chats land folded already.
+            store.put_lid_map(data.get("lid_map") or [])
+            store.put_chats(data.get("chats") or [])
+            store.put_names(data.get("pushnames") or [])
+            store.ingest(data.get("rows") or [], live=False)
+        elif name == "message":
+            store.ingest([data], live=True)
+        elif name == "directory":
+            store.put_contacts(data.get("contacts") or [])
+            store.put_groups(data.get("groups") or [])
 
     async def _after_terminal(self, link: _Link, name: str) -> None:
         async with self._lock(link.user_id):
@@ -245,6 +303,14 @@ class Engine:
         expires = max(link.started_at, link.pair_code_at) + self._pairing_ttl
         if link.state.state == "pairing":
             out["pairing_expires_at"] = now_iso(expires)
+        if link.state.linked_at and (link.store is not None or link.store_file.exists()):
+            store = self._open_store(link)
+            out["stats"] = store.stats()
+            out["retention_days"] = store.retention_days()
+        else:
+            out["stats"] = None
+            out["retention_days"] = None
+        out["retention_choices"] = list(RETENTION_CHOICES)
         return out
 
     async def link(self, user_id: str, *, consented_at: str) -> dict[str, Any]:
@@ -381,6 +447,71 @@ class Engine:
                     link.state.state = "connecting"
                     link.state.detail = "Waiting for the WhatsApp Web service"
                 self._save(link)
+                self._close_store(link)
+
+    # ── reading (what agents and the card see) ──────────────────────
+
+    def _reader(self, user_id: str) -> Store:
+        link = self._get(user_id)
+        if user_id not in self._links or not link.state.linked_at or link.state.state == "logged_out":
+            raise LinkError(409, "WhatsApp isn't linked for this user")
+        return self._open_store(link)
+
+    async def chats(self, user_id: str) -> dict[str, Any]:
+        store = self._reader(user_id)
+        chats = await asyncio.to_thread(store.chats)
+        return {"chats": chats, "stats": await asyncio.to_thread(store.stats),
+                "state": self._links[user_id].state.state}
+
+    async def messages(self, user_id: str, *, chat: str = "", query: str = "", since: int | None = None,
+                       until: int | None = None, limit: int = 50, agent: str = "",
+                       mark_seen: bool = False) -> dict[str, Any]:
+        """Messages newest first, of one chat or all; a look at a chat's (or all
+        chats') newest messages by *agent* counts as seen for its news line."""
+        store = self._reader(user_id)
+        found = None
+        if str(chat or "").strip():
+            try:
+                found = await asyncio.to_thread(store.find_chat, chat)
+            except ChatNotFound as exc:
+                options = "; ".join(f"{c['title']} (id {c['jid']})" for c in exc.candidates)
+                raise LinkError(404, f"{exc}{': ' + options if options else ''}") from None
+        items = await asyncio.to_thread(
+            store.messages, chat_jid=found["jid"] if found else None, since=since, until=until,
+            query=query, limit=max(1, min(int(limit or 50), 200)))
+        if mark_seen and agent and items and until is None and not str(query or "").strip():
+            await asyncio.to_thread(store.mark_read, agent, items)
+        return {"chat": found, "messages": items}
+
+    async def contacts(self, user_id: str, *, query: str = "", limit: int = 20) -> dict[str, Any]:
+        store = self._reader(user_id)
+        return {"contacts": await asyncio.to_thread(store.contacts, query, limit)}
+
+    async def news(self, user_id: str, *, agent: str) -> dict[str, Any]:
+        link = self._get(user_id)
+        if user_id not in self._links or not link.state.linked_at or link.state.state == "logged_out":
+            return {"connected": False}
+        store = self._open_store(link)
+        return {"connected": True, **await asyncio.to_thread(store.news, agent or "_", now=self._clock())}
+
+    async def set_retention(self, user_id: str, days: int | None) -> dict[str, Any]:
+        if days is not None and days not in RETENTION_CHOICES:
+            raise LinkError(422, "Keep messages for 7, 30, 90 or 365 days, or keep everything")
+        store = self._reader(user_id)
+        await asyncio.to_thread(store.set_meta, "retention_days", "" if days is None else str(days))
+        await asyncio.to_thread(store.purge, now=self._clock())
+        return self.view(user_id)
+
+    async def maintain(self, every: float = _PURGE_EVERY) -> None:
+        """Forever: drop what's older than each user's retention choice."""
+        while True:
+            await asyncio.sleep(every)
+            for link in list(self._links.values()):
+                if link.store is not None or link.store_file.exists():
+                    try:
+                        await asyncio.to_thread(self._open_store(link).purge, now=self._clock())
+                    except Exception as exc:
+                        log.warning("whatsapp_web: purge for %s failed: %s", link.user_id, exc)
 
     def events_after(self, seq: int) -> list[dict[str, Any]]:
         return [e for e in self._events if e["seq"] > seq]

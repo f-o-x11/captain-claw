@@ -38,7 +38,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from captain_claw.flight_deck.whatsapp_web import NEONIZE_VERSION
+from captain_claw.flight_deck.whatsapp_web import NEONIZE_VERSION, parse
 
 log = logging.getLogger("whatsapp_web.neonize")
 
@@ -46,6 +46,10 @@ EventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 # What the phone's Linked devices list calls this link.
 DEVICE_NAME = "Captain Claw"
+# The address book arrives by app-state sync a little after connecting; read
+# it (and the group names) then, and again now and then.
+_DIRECTORY_FIRST = 20.0
+_DIRECTORY_EVERY = 900.0
 
 _VERSION_RE = re.compile(r'__GONEONIZE_VERSION__\s*=\s*["\']([^"\']+)["\']')
 
@@ -217,6 +221,7 @@ class NeonizeAdapter:
         self._client = NewAClient(str(session_path), props=props, uuid=client_id)
         self._sink = sink
         self._stopping = False
+        self._directory: asyncio.Task | None = None
         c = self._client
 
         async def on_qr(_: Any, payload: bytes) -> None:
@@ -241,7 +246,11 @@ class NeonizeAdapter:
                 await sink("connect_failure", {"reason": data["error"] or "pairing failed"})
 
         c.event(ev.PairStatusEv)(guarded("paired", on_pair))
-        on(ev.ConnectedEv, "connected")
+        async def on_connected(_: Any, __: Any) -> None:
+            await sink("connected", {})
+            self._start_directory()
+
+        c.event(ev.ConnectedEv)(guarded("connected", on_connected))
         on(ev.DisconnectedEv, "disconnected")
         on(ev.LoggedOutEv, "logged_out", lambda e: {"reason": str(e.Reason)})
         on(ev.StreamReplacedEv, "stream_replaced")
@@ -250,15 +259,8 @@ class NeonizeAdapter:
         on(ev.TemporaryBanEv, "temporary_ban",
            lambda e: {"code": str(e.Code), "expires_at": _ban_expiry(e.Expire, time.time())})
 
-        def history(e: Any) -> dict[str, Any]:
-            hs = e.Data
-            return {
-                "sync_type": hs.HistorySyncType.Name(hs.syncType),
-                "progress": int(hs.progress),
-                "messages": sum(len(conv.messages) for conv in hs.conversations),
-            }
-
-        on(ev.HistorySyncEv, "history", history)
+        on(ev.HistorySyncEv, "history", lambda e: parse.history_chunk(e.Data))
+        on(ev.MessageEv, "message", parse.live_row)
 
     async def connect(self) -> None:
         self._stopping = False
@@ -282,8 +284,36 @@ class NeonizeAdapter:
     async def logout(self) -> None:
         await self._client.logout()
 
+    def _start_directory(self) -> None:
+        if self._directory is None or self._directory.done():
+            self._directory = asyncio.get_running_loop().create_task(self._directory_loop())
+
+    async def _directory_loop(self) -> None:
+        await asyncio.sleep(_DIRECTORY_FIRST)
+        while not self._stopping:
+            try:
+                await self._sink("directory", await self.directory())
+            except Exception as exc:
+                log.warning("whatsapp_web directory refresh failed: %s", exc)
+            await asyncio.sleep(_DIRECTORY_EVERY)
+
+    async def directory(self) -> dict[str, Any]:
+        """The address book and the joined groups' names (reads only)."""
+        contacts = []
+        for ct in await self._client.contact.get_all_contacts():
+            info = ct.Info
+            contacts.append({
+                "jid": parse.jid_str(ct.JID), "full_name": info.FullName, "first_name": info.FirstName,
+                "push_name": info.PushName, "business_name": info.BusinessName,
+            })
+        groups = [{"jid": parse.jid_str(g.JID), "name": g.GroupName.Name}
+                  for g in await self._client.get_joined_groups()]
+        return {"contacts": contacts, "groups": groups}
+
     async def stop(self) -> None:
         self._stopping = True
+        if self._directory is not None:
+            self._directory.cancel()
         await self._client.stop()
 
 

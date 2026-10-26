@@ -143,6 +143,16 @@ class AgentToolLoopMixin:
             if action == "search":
                 return f"Searching Telegram: {str(arguments.get('query', '')).strip()}".rstrip(": ")
             return "Reading Telegram"
+        if name == "whatsapp_web":
+            action = str(arguments.get("action", "")).strip().lower()
+            chat = str(arguments.get("chat", "")).strip()
+            if action == "read" and chat:
+                return f"Reading WhatsApp: {chat}"
+            if action == "search":
+                return f"Searching WhatsApp: {str(arguments.get('query', '')).strip()}".rstrip(": ")
+            if action == "contact":
+                return f"Looking up on WhatsApp: {str(arguments.get('query', '')).strip()}".rstrip(": ")
+            return "Reading WhatsApp"
         if name == "llm_trace":
             return "LLM trace"
         # ── Media ──────────────────────────────────────────

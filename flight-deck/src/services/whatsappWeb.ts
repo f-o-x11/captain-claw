@@ -1,7 +1,7 @@
 // REST client for WhatsApp Web — the user's own WhatsApp account linked as a
 // device, the way WhatsApp Web is (/fd/whatsapp-web), and the deck's switch
 // (/fd/admin/whatsapp-web) — captain_claw/flight_deck/whatsapp_web_routes.py.
-// Phase 0: linking only; agents read nothing yet.
+// Agents read what's kept through /fd/whatsapp-web/agent/* (owner only).
 
 import { useAuthStore, refreshAccessToken } from '../stores/authStore'
 
@@ -44,6 +44,28 @@ export interface WhatsAppWebLink {
   pair_code?: string
   pairing_expires_at?: string
   has_session?: boolean
+  // What's kept (null until linked).
+  stats?: { messages: number; chats: number; oldest: number | null; newest: number | null } | null
+  // Days messages are kept; null = everything.
+  retention_days?: number | null
+  retention_choices?: number[]
+}
+
+export interface WhatsAppWebMessage {
+  rowid: number
+  chat_jid: string
+  chat: string
+  kind_of_chat: 'direct' | 'group'
+  id: string
+  ts: number
+  from_me: boolean
+  sender: string
+  kind: string
+  text: string
+  media: { mimetype?: string; size?: number; seconds?: number; file_name?: string } | null
+  edited: boolean
+  deleted: boolean
+  reactions: string[]
 }
 
 export interface MyWhatsAppWeb {
@@ -107,6 +129,11 @@ export const whatsAppWebPairCode = (phone: string) => post<MyWhatsAppWeb>('/fd/w
 export const reconnectWhatsAppWeb = () => post<MyWhatsAppWeb>('/fd/whatsapp-web/reconnect')
 export const cancelWhatsAppWeb = () => post<MyWhatsAppWeb>('/fd/whatsapp-web/cancel')
 export const unlinkWhatsAppWeb = () => fdFetch<MyWhatsAppWeb>('/fd/whatsapp-web', { method: 'DELETE' })
+
+export const setWhatsAppWebRetention = (days: number | null) =>
+  fdFetch<MyWhatsAppWeb>('/fd/whatsapp-web/retention', { method: 'PUT', body: JSON.stringify({ days }) })
+export const getWhatsAppWebRecent = (limit = 20) =>
+  fdFetch<{ messages: WhatsAppWebMessage[] }>(`/fd/whatsapp-web/recent?limit=${limit}`)
 
 export const getWhatsAppWebAdmin = () => fdFetch<WhatsAppWebAdmin>('/fd/admin/whatsapp-web')
 export const setWhatsAppWebAllowed = (allowed: boolean) =>

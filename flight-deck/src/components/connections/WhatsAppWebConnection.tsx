@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { Smartphone, Loader2, ChevronDown, Check, AlertCircle, RefreshCw } from 'lucide-react'
+import { Smartphone, Loader2, ChevronDown, ChevronRight, Check, AlertCircle, RefreshCw } from 'lucide-react'
 import {
   getMyWhatsAppWeb,
   linkWhatsAppWeb,
@@ -9,7 +9,10 @@ import {
   unlinkWhatsAppWeb,
   getWhatsAppWebAdmin,
   setWhatsAppWebAllowed,
+  setWhatsAppWebRetention,
+  getWhatsAppWebRecent,
   type MyWhatsAppWeb,
+  type WhatsAppWebMessage,
   type WhatsAppWebAdmin,
   type WhatsAppWebState,
 } from '../../services/whatsappWeb'
@@ -18,9 +21,10 @@ import {
 // WhatsApp account linked as a device — scan a QR, or type a pairing code on
 // the phone — held by Flight Deck's WhatsApp Web service. Off until an admin
 // allows it on the deck; every new link needs the user's consent, because this
-// is an unofficial client. Phase 0 links and unlinks only: history arriving
-// from the phone is counted, not kept, and agents read nothing yet. Nothing is
-// ever sent, marked read or shown as "online" in the user's name.
+// is an unofficial client. The history the phone sends after linking and every
+// message since are kept (encrypted) for the user's agents, who read them with
+// the whatsapp_web tool. Nothing is ever sent, marked read or shown as "online"
+// in the user's name.
 
 type Tone = 'on' | 'wait' | 'warn' | 'off'
 
@@ -60,6 +64,20 @@ function when(iso: string | null | undefined): string {
   if (!iso) return ''
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+function day(ts: number | null | undefined): string {
+  if (!ts) return ''
+  try { return new Date(ts * 1000).toLocaleDateString() } catch { return '' }
+}
+
+function stamp(ts: number): string {
+  try { return new Date(ts * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) } catch { return '' }
+}
+
+const KIND_LABEL: Record<string, string> = {
+  image: 'image', video: 'video', audio: 'audio', voice: 'voice note', document: 'document', sticker: 'sticker',
+  video_note: 'video note', location: 'location', contact: 'contact', contacts: 'contacts', poll: 'poll', event: 'event',
 }
 
 function AdminSwitch({ onChange }: { onChange: () => void }) {
@@ -125,6 +143,7 @@ export default function WhatsAppWebConnection() {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [recent, setRecent] = useState<WhatsAppWebMessage[] | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -210,9 +229,10 @@ export default function WhatsAppWebConnection() {
             <span>
               I understand that this links my WhatsApp to Flight Deck as a device, the way WhatsApp Web
               does, through an <span className="text-zinc-100">unofficial client</span>: that goes against
-              WhatsApp’s terms, and WhatsApp bans some accounts that do it. Once reading arrives, my agents
-              will read my chats and what they read goes to the AI model they use. Disconnecting removes
-              the device and deletes everything kept.
+              WhatsApp’s terms, and WhatsApp bans some accounts that do it. Flight Deck keeps a copy of my
+              chats — mine and other people’s messages — encrypted on this deck, my agents read them, and
+              what they read goes to the AI model they use. Disconnecting removes the device and deletes
+              everything kept.
             </span>
           </label>
           <div className="flex flex-wrap gap-2">
@@ -308,10 +328,67 @@ export default function WhatsAppWebConnection() {
               {sync.chunks === 1 ? '' : 's'}{sync.progress ? ` (${sync.progress}%)` : ''}.
             </div>
           )}
-          <div className="text-zinc-500">
-            Not kept yet: your agents can’t read WhatsApp until reading arrives in the next update.
-          </div>
+          {link.stats && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-zinc-400">
+              <span>
+                {link.stats.messages.toLocaleString()} message{link.stats.messages === 1 ? '' : 's'} kept in{' '}
+                {link.stats.chats} chat{link.stats.chats === 1 ? '' : 's'}
+                {link.stats.oldest ? `, since ${day(link.stats.oldest)}` : ''}
+              </span>
+              <label className="flex items-center gap-1.5">
+                Keep
+                <select
+                  value={link.retention_days ?? ''}
+                  disabled={!!busy}
+                  onChange={(e) => {
+                    const days = e.target.value ? Number(e.target.value) : null
+                    if (days && !confirm(`Keep messages for ${days === 365 ? 'a year' : `${days} days`}? Older ones are deleted now.`)) return
+                    run('retention', () => setWhatsAppWebRetention(days))
+                  }}
+                  className="rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 focus:border-violet-500/50 focus:outline-none disabled:opacity-50"
+                >
+                  <option value="">everything</option>
+                  {(link.retention_choices ?? [7, 30, 90, 365]).map((d) => (
+                    <option key={d} value={d}>{d === 365 ? '1 year' : `${d} days`}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
         </div>
+        {link.stats && link.stats.messages > 0 && (
+          <div>
+            <button
+              onClick={async () => {
+                if (recent) { setRecent(null); return }
+                try { setRecent((await getWhatsAppWebRecent()).messages) } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+              }}
+              className="flex items-center gap-1 text-xs text-violet-500 hover:underline"
+            >
+              <ChevronRight className={`h-3 w-3 transition-transform ${recent ? 'rotate-90' : ''}`} />
+              What your agents see
+            </button>
+            {recent && (
+              <div className="mt-2 max-h-72 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 divide-y divide-zinc-800/60">
+                {recent.map((m) => (
+                  <div key={`${m.chat_jid}:${m.id}`} className="px-3 py-1.5 text-xs">
+                    <div className="text-zinc-500">{stamp(m.ts)} · {m.chat} · {m.from_me ? 'you' : m.sender}</div>
+                    <div className="text-zinc-300 whitespace-pre-wrap break-words">
+                      {m.deleted ? <span className="italic text-zinc-500">deleted</span> : (
+                        <>
+                          {m.kind !== 'text' && <span className="text-zinc-500">[{KIND_LABEL[m.kind] ?? m.kind}{m.media?.file_name ? `: ${m.media.file_name}` : ''}] </span>}
+                          {m.text}
+                          {m.edited && <span className="text-zinc-500"> (edited)</span>}
+                          {m.reactions.length > 0 && <span className="text-zinc-500"> · {m.reactions.join(', ')}</span>}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           {(state === 'stream_replaced' || (!link.running && link.has_session && state !== 'outdated')) && (
             <button onClick={() => run('reconnect', reconnectWhatsAppWeb)} disabled={!!busy} className={PRIMARY}>

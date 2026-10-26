@@ -4,19 +4,23 @@ end of it: :mod:`.whatsapp_web_supervisor`).
 * ``/fd/whatsapp-web`` — the user's own link (Connections → WhatsApp Web):
   link with consent (a QR follows), a pairing code instead of the QR,
   reconnect, cancel, disconnect.
+  Also the retention choice and a peek at what's kept.
+* ``/fd/whatsapp-web/agent/*`` — what the user's agents read: owner only,
+  identified like the Google / Telegram routes (``X-Agent-Auth``); a shared
+  agent's member never gets here (GrantGuardMiddleware refuses member markers).
 * ``/fd/admin/whatsapp-web`` — the deck's switch, off by default.
 
-Phase 0: linking only. Nothing here reads, sends or marks anything in WhatsApp;
-agents get no route yet.
+Read-only: nothing here sends, reacts or marks anything read in WhatsApp.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from captain_claw.flight_deck import fd_crypto
 from captain_claw.flight_deck import whatsapp_web_supervisor as sup
 from captain_claw.flight_deck.admin_routes import require_admin
 from captain_claw.flight_deck.auth import get_current_user, get_db
@@ -30,8 +34,19 @@ router = APIRouter(tags=["whatsapp-web"])
 
 async def _unavailable_reason(db: Any) -> str:
     """Why this deck can't link WhatsApp Web right now ("" when it can)."""
+    from captain_claw.flight_deck import google_oauth_routes as _g
+
     if sup.kill_switch():
         return "WhatsApp Web is switched off on this deck (FD_WHATSAPP_WEB=off)."
+    if _g._fd_desktop_deck():
+        return "WhatsApp Web isn't available in the desktop app yet."
+    if not _g._fd_auth_enabled():
+        # Agents read through their owner; a deck that can't tell its users
+        # apart has no owner to read for.
+        return "WhatsApp Web needs Flight Deck sign-in, which is off on this deck (FD_AUTH_ENABLED)."
+    if not fd_crypto.available():
+        return ("This Flight Deck can't encrypt kept messages: it needs the 'cryptography' "
+                "package (pip install cryptography) and a restart.")
     if not sup.installed():
         return ("WhatsApp Web isn't installed on this deck: pip install "
                 "'captain-claw[whatsapp-web]' and restart Flight Deck.")
@@ -206,3 +221,137 @@ async def admin_put(body: AdminBody, _admin: dict = Depends(require_admin)) -> d
             except sup.ServiceDown as exc:
                 log.warning("WhatsApp Web service not started: %s", exc)
     return await _admin_view()
+
+
+# ── the user's peek and retention ───────────────────────────────────
+
+
+@router.get("/fd/whatsapp-web/recent")
+async def recent(limit: int = 20, user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """The newest kept messages — what the user's agents see."""
+    s = sup.get()
+    if s is None or not s.user_has_link(user["id"]) or await _unavailable_reason(get_db()):
+        return {"messages": []}
+    try:
+        data = await s.request("POST", f"/links/{user['id']}/messages",
+                               {"limit": max(1, min(int(limit or 20), 100))})
+    except (sup.ServiceDown, sup.ServiceError) as exc:
+        raise _service_error(exc) from None
+    return {"messages": data.get("messages") or []}
+
+
+class RetentionBody(BaseModel):
+    # None = keep everything.
+    days: int | None = None
+
+
+@router.put("/fd/whatsapp-web/retention")
+async def set_retention(body: RetentionBody, user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    return await _call(user, "PUT", "/retention", {"days": body.days})
+
+
+# ── agents (owner only) ─────────────────────────────────────────────
+
+_NOT_LINKED = ("Your user hasn't linked WhatsApp — they can in Flight Deck → Connections → "
+               "WhatsApp Web")
+# Link states whose kept messages an agent may read.
+_READABLE = ("connected", "disconnected", "connecting", "stream_replaced", "temporary_ban", "outdated")
+
+
+async def _agent_owner(request: Request) -> str:
+    from captain_claw.flight_deck import google_oauth_routes as _g
+
+    _g._authorize_agent_call(request)
+    return await _g._agent_owner(request, service="WhatsApp Web")
+
+
+def _agent_slug(request: Request) -> str:
+    """The calling agent's slug on this deck (its news cursor's key)."""
+    try:
+        from captain_claw.flight_deck.server import _find_agent_by_auth
+
+        matched, _owner, slug = _find_agent_by_auth(request.headers.get("X-Agent-Auth", ""))
+    except Exception:
+        return ""
+    return str(slug) if matched and slug else ""
+
+
+def _readable(s: sup.Supervisor, owner: str) -> bool:
+    link = s.offline_view(owner) if s.user_has_link(owner) else {"state": "off"}
+    return link.get("state") in _READABLE and bool(link.get("linked_at"))
+
+
+async def _agent_call(request: Request, path: str, body: dict[str, Any] | None = None) -> tuple[str, dict]:
+    reason = await _unavailable_reason(get_db())
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+    owner = await _agent_owner(request)
+    s = _supervisor()
+    if not _readable(s, owner):
+        raise HTTPException(status_code=409, detail=_NOT_LINKED)
+    try:
+        return owner, await s.request("GET" if body is None else "POST", f"/links/{owner}{path}", body)
+    except (sup.ServiceDown, sup.ServiceError) as exc:
+        raise _service_error(exc) from None
+
+
+@router.get("/fd/whatsapp-web/agent/status")
+async def agent_status(request: Request) -> dict[str, Any]:
+    """Whether the calling agent's owner has WhatsApp linked (no network)."""
+    s = sup.get()
+    if s is None or await _unavailable_reason(get_db()):
+        return {"connected": False}  # before asking whose agent: off decks have no owners
+    return {"connected": _readable(s, await _agent_owner(request))}
+
+
+@router.post("/fd/whatsapp-web/agent/chats")
+async def agent_chats(request: Request) -> dict[str, Any]:
+    _owner, data = await _agent_call(request, "/chats")
+    return data
+
+
+class AgentMessagesBody(BaseModel):
+    chat: str = ""
+    query: str = ""
+    since: int | None = None
+    until: int | None = None
+    limit: int = 50
+
+
+@router.post("/fd/whatsapp-web/agent/messages")
+async def agent_messages(body: AgentMessagesBody, request: Request) -> dict[str, Any]:
+    """Messages, newest first — of one chat (id, number or name) or all of them;
+    ``query`` keeps those containing every word. A look at the newest ones
+    (no ``until``, no ``query``) counts as seen for this agent's news line."""
+    _owner, data = await _agent_call(request, "/messages", {
+        **body.model_dump(), "agent": _agent_slug(request), "mark_seen": True,
+    })
+    return data
+
+
+class AgentContactsBody(BaseModel):
+    query: str = ""
+    limit: int = 20
+
+
+@router.post("/fd/whatsapp-web/agent/contacts")
+async def agent_contacts(body: AgentContactsBody, request: Request) -> dict[str, Any]:
+    _owner, data = await _agent_call(request, "/contacts", body.model_dump())
+    return data
+
+
+@router.post("/fd/whatsapp-web/agent/news")
+async def agent_news(request: Request) -> dict[str, Any]:
+    """What others wrote since this agent last looked — counts per chat, no
+    text — and the look itself moves the agent's cursor (an owner's own turn
+    calls it once)."""
+    s = sup.get()
+    if s is None or await _unavailable_reason(get_db()):
+        return {"connected": False}
+    owner = await _agent_owner(request)
+    if not _readable(s, owner):
+        return {"connected": False}
+    try:
+        return await s.request("POST", f"/links/{owner}/news", {"agent": _agent_slug(request) or "_"})
+    except (sup.ServiceDown, sup.ServiceError):
+        return {"connected": False}

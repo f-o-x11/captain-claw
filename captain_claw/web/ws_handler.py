@@ -568,6 +568,11 @@ async def handle_ws_message(
                 await telegram_inbox_client.refresh_connected()
             except Exception:
                 pass
+            try:
+                from captain_claw import whatsapp_web_client
+                await whatsapp_web_client.refresh_connected()
+            except Exception:
+                pass
             # The action catalog is the authority for a deterministic invocation,
             # so explicitly allow the named tool past the per-session tool policy
             # (which exists to constrain the LLM mid-turn). The script_tool guard

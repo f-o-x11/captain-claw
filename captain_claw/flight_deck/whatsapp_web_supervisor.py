@@ -192,6 +192,17 @@ class Supervisor:
         except (httpx.HTTPError, ValueError, AttributeError):
             return 0
 
+    def _child_env(self) -> dict[str, str]:
+        env = {**os.environ, "WAW_DATA_DIR": str(self.root)}
+        if not env.get("FD_DATA_KEY_FILE", "").strip():
+            # The service seals with Flight Deck's data key. Resolved here: from
+            # its own working directory a relative FD_DATA_DIR would point
+            # somewhere else, and messages sealed there FD couldn't open.
+            from captain_claw.flight_deck import fd_crypto
+
+            env["FD_DATA_KEY_FILE"] = str(fd_crypto.key_path().resolve())
+        return env
+
     async def _spawn(self) -> None:
         self.root.mkdir(parents=True, mode=0o700, exist_ok=True)
         self._secret()
@@ -200,7 +211,7 @@ class Supervisor:
             self._proc = subprocess.Popen(
                 [sys.executable, "-m", "captain_claw.flight_deck.whatsapp_web"],
                 cwd=str(self.root),
-                env={**os.environ, "WAW_DATA_DIR": str(self.root)},
+                env=self._child_env(),
                 stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                 # Its own session: Ctrl-C on Flight Deck's terminal doesn't take
                 # every WhatsApp link down with it.

@@ -12,6 +12,11 @@ person and only ever passes their own id.
 * ``POST   /links/{user_id}/reconnect``  start again on the kept session
 * ``POST   /links/{user_id}/cancel``     forget a link that never paired
 * ``DELETE /links/{user_id}``            log out, stop, delete
+* ``GET    /links/{user_id}/chats``      the chats kept, latest first
+* ``POST   /links/{user_id}/messages``   ``{chat, query, since, until, limit, agent, mark_seen}``
+* ``POST   /links/{user_id}/contacts``   ``{query, limit}``
+* ``POST   /links/{user_id}/news``       ``{agent}`` → what's new for that agent (moves its cursor)
+* ``PUT    /links/{user_id}/retention``  ``{days}`` (null = keep everything)
 * ``GET    /events?after=<seq>``         bells for Flight Deck to ring
 """
 
@@ -33,6 +38,31 @@ class StartBody(BaseModel):
 
 class PairCodeBody(BaseModel):
     phone: str
+
+
+class MessagesBody(BaseModel):
+    chat: str = ""
+    query: str = ""
+    since: int | None = None
+    until: int | None = None
+    limit: int = 50
+    # The agent reading (its news cursor), and whether this look counts as seen.
+    agent: str = ""
+    mark_seen: bool = False
+
+
+class ContactsBody(BaseModel):
+    query: str = ""
+    limit: int = 20
+
+
+class NewsBody(BaseModel):
+    agent: str
+
+
+class RetentionBody(BaseModel):
+    # None = keep everything.
+    days: int | None = None
 
 
 def build_app(engine: Engine, secret: str, *, version: str = "", lifespan: Any = None) -> FastAPI:
@@ -91,6 +121,28 @@ def build_app(engine: Engine, secret: str, *, version: str = "", lifespan: Any =
     @app.delete("/links/{user_id}", dependencies=auth)
     async def unlink(user_id: str) -> dict[str, Any]:
         return await answer(engine.unlink)(user_id)
+
+    @app.get("/links/{user_id}/chats", dependencies=auth)
+    async def chats(user_id: str) -> dict[str, Any]:
+        return await answer(engine.chats)(user_id)
+
+    @app.post("/links/{user_id}/messages", dependencies=auth)
+    async def messages(user_id: str, body: MessagesBody) -> dict[str, Any]:
+        return await answer(engine.messages)(
+            user_id, chat=body.chat, query=body.query, since=body.since, until=body.until,
+            limit=body.limit, agent=body.agent, mark_seen=body.mark_seen)
+
+    @app.post("/links/{user_id}/contacts", dependencies=auth)
+    async def contacts(user_id: str, body: ContactsBody) -> dict[str, Any]:
+        return await answer(engine.contacts)(user_id, query=body.query, limit=body.limit)
+
+    @app.post("/links/{user_id}/news", dependencies=auth)
+    async def news(user_id: str, body: NewsBody) -> dict[str, Any]:
+        return await answer(engine.news)(user_id, agent=body.agent)
+
+    @app.put("/links/{user_id}/retention", dependencies=auth)
+    async def retention(user_id: str, body: RetentionBody) -> dict[str, Any]:
+        return await answer(engine.set_retention)(user_id, body.days)
 
     @app.get("/events", dependencies=auth)
     async def events(after: int = 0) -> dict[str, Any]:
