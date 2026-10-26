@@ -48,9 +48,10 @@ const TABS: TabDef[] = [
   { id: 'jev', label: 'Jev', icon: Scale },
   // Speech-to-text / voice — the user's own key (else the team's); kiosk users connect theirs too.
   { id: 'soniox', label: 'Soniox', icon: Mic },
-  // Where Autonomous Work's nudges and waiting proposals reach the user.
-  { id: 'notify', label: 'Notifications', icon: Bell, deckOnly: true },
-  { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle, deckOnly: true },
+  // Where Autonomous Work's nudges and waiting proposals reach the user — and
+  // the number WhatsApp sends them to. The person's own, so the kiosk shows them too.
+  { id: 'notify', label: 'Notifications', icon: Bell },
+  { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
   { id: 'typesense', label: 'Deep memory', icon: Database, deckOnly: true },
 ]
 
@@ -95,8 +96,9 @@ function useTabDots(telegram: MyTelegram | null, systemsConnected: number): Part
 // connections only (their Google / Microsoft account, their Jev and Soniox
 // keys, the deck's MCP servers).
 // The ChatGPT subscription and the deep-memory server are deck setup, left to
-// the full view; WhatsApp nudges come from Autonomous Work, which the kiosk
-// doesn't expose.
+// the full view. Notifications and the WhatsApp number are the person's own,
+// so they're here too (without the way into Autonomous Work, which the kiosk
+// doesn't expose).
 // `initialTab` — open on that tab (the kiosk guide's "Connect Google" and the
 // like) rather than the one this viewer last had open.
 export default function ConnectionsPage({ kiosk = false, initialTab }: { kiosk?: boolean; initialTab?: TabId }) {
@@ -191,8 +193,8 @@ export default function ConnectionsPage({ kiosk = false, initialTab }: { kiosk?:
         {panel('systems', <AgentLinksConnection active={active === 'systems'} onStatus={setSystems} />)}
         {panel('jev', <JevConnection />)}
         {panel('soniox', <SonioxConnection />)}
-        {panel('notify', <NotificationsConnection />)}
-        {panel('whatsapp', <WhatsAppNudgeConnection />)}
+        {panel('notify', <NotificationsConnection kiosk={kiosk} />)}
+        {panel('whatsapp', <WhatsAppNudgeConnection kiosk={kiosk} />)}
         {panel('typesense', <TypesenseConnection />)}
       </div>
     </div>

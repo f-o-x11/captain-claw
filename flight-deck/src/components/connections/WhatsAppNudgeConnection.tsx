@@ -53,7 +53,8 @@ async function _detail(res: Response): Promise<string> {
 }
 
 // Where Autonomous Work's proactive nudges reach this user on WhatsApp.
-export default function WhatsAppNudgeConnection() {
+// `kiosk`: shown in the kiosk's Connections, which has no Autonomous Work page.
+export default function WhatsAppNudgeConnection({ kiosk = false }: { kiosk?: boolean }) {
   const setView = useUIStore((s) => s.setView)
   const [state, setState] = useState<NudgeState | null>(null)
   const [number, setNumber] = useState('')
@@ -228,8 +229,8 @@ export default function WhatsAppNudgeConnection() {
           {state.bridge_configured && !state.autonomy_active && (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               Autonomous Work isn't running for you, so no nudges are sent yet.
-              {/* The desktop app has no full Flight Deck to send you to. */}
-              {!isAppShell() && (
+              {/* The desktop app and the kiosk have no Autonomous Work page to send you to. */}
+              {!kiosk && !isAppShell() && (
                 <>
                   {' '}
                   <button
