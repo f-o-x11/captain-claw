@@ -2908,6 +2908,9 @@ async def spawn_agent(config: AgentConfig, request: Request, user: dict | None =
 
     client = get_docker()
     slug = _slug(config.name)
+    # Before a stopped container of that name goes: the folder may be a
+    # removed agent's (process or container) that isn't the caller's.
+    _refuse_other_owners_folder(slug, owner_id)
 
     # Ensure port is available; find a free one if not
     if config.web_enabled and (config.web_port <= 0 or not _is_port_available(config.web_port)):
@@ -2943,6 +2946,7 @@ async def spawn_agent(config: AgentConfig, request: Request, user: dict | None =
     (agent_dir / "data" / "sessions").mkdir(parents=True, exist_ok=True)
     (agent_dir / "data" / "skills").mkdir(parents=True, exist_ok=True)
     (agent_dir / "data" / "home-config").mkdir(parents=True, exist_ok=True)
+    _record_folder_owner(slug, owner_id)
 
     # Write config files
     config_yaml = _build_config_yaml(config)
@@ -3137,6 +3141,9 @@ async def remove_container(container_id: str, force: bool = False, purge: bool =
     name = c.name
     owner_id, short_id = str((c.labels or {}).get(OWNER_LABEL, "") or ""), c.short_id
     agent_ref = _container_agent_ref(c)
+    if not purge:
+        # The folder stays; once the container is gone only this says whose it is.
+        _record_folder_owner(name, owner_id)
     await asyncio.get_event_loop().run_in_executor(None, lambda: c.remove(force=force))
     await _set_owner_agent_instructions(owner_id, "docker", short_id, "")
     await _forget_shared_agent(agent_ref, owner_id)
@@ -3183,8 +3190,9 @@ def _remove_agent_dir(slug: str) -> str:
 
 async def _purge_agent(slug: str, chat_agent_id: str) -> str:
     """Delete what a removed agent leaves on this deck: its folder, Flight
-    Deck's log of the chats with it and its scheduled tasks — so a later agent
-    of the same name starts clean. Returns "" or what could not go."""
+    Deck's log of the chats with it, its scheduled tasks and what the File and
+    Data libraries keep of it — so a later agent of the same name, whoever's it
+    is, starts clean. Returns "" or what could not go."""
     import asyncio
     problem = await asyncio.get_event_loop().run_in_executor(None, _remove_agent_dir, slug)
     if problem:
@@ -3202,6 +3210,16 @@ async def _purge_agent(slug: str, chat_agent_id: str) -> str:
         _scheduler_store().delete_for_agent(slug)
     except Exception as exc:
         log.warning("Could not drop a removed agent's scheduled tasks", agent=slug, error=type(exc).__name__)
+    # The libraries key their rows by name and drop a gone agent's only on the
+    # next scan; meanwhile a new agent of that name would list them.
+    from captain_claw.flight_deck import data_library, file_library
+
+    for library in (file_library, data_library):
+        try:
+            library.get_store().drop_agent(slug)
+        except Exception as exc:
+            log.warning("Could not drop a removed agent's library entries", agent=slug,
+                        library=library.__name__.rsplit(".", 1)[-1], error=type(exc).__name__)
     return problem
 
 
@@ -3212,6 +3230,76 @@ def _refuse_other_owners_container(existing, owner_id: str, slug: str) -> None:
     boundary."""
     if AUTH_ENABLED and owner_id and str((existing.labels or {}).get(OWNER_LABEL, "") or "") != owner_id:
         raise HTTPException(409, f"An agent named '{slug}' already exists. Choose a different name.")
+
+
+# Who an agent's folder (DATA_DIR/<slug>) belongs to, written into it when
+# Flight Deck makes the agent and when it removes one but keeps the folder.
+# The folder outlives the agent's registry entry or container, and a new agent
+# of the same name — anyone's — would start on its sessions, memory and files.
+FOLDER_OWNER_FILE = ".fd-owner"
+
+
+def _folder_owner(slug: str) -> str:
+    """The owner recorded in ``DATA_DIR/<slug>``, or "" when none is."""
+    try:
+        return (DATA_DIR / slug / FOLDER_OWNER_FILE).read_text().strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _owners_on_record(slug: str) -> set[str]:
+    """Every owner Flight Deck has on record for the name: its process
+    registry entry's and its container's ("" for one recorded without)."""
+    owners: set[str] = set()
+    entry = _load_process_registry().get(slug)
+    if entry is not None:
+        owners.add(str(entry.get("owner") or ""))
+    try:
+        for c in _deck_containers(all=True):
+            if c.name == slug:
+                owners.add(str((c.labels or {}).get(OWNER_LABEL, "") or ""))
+    except Exception:
+        pass  # no Docker: no containers
+    return owners
+
+
+def _holds_files(folder: Path) -> bool:
+    """Is there any file in *folder* (one it can't look through counts)?"""
+    try:
+        return any(p.is_file() for p in folder.rglob("*"))
+    except OSError:
+        return True
+
+
+def _refuse_other_owners_folder(slug: str, owner_id: str) -> None:
+    """409 unless ``DATA_DIR/<slug>`` — the folder a new agent named ``slug``
+    takes over — is free or ``owner_id``'s: the owner recorded in it, else (a
+    folder from before owners were recorded) the only owner Flight Deck has on
+    record for the name. A folder with no files holds no one's data; one no
+    owner can be named for stays as it is. With auth off there is no tenant
+    boundary."""
+    if not AUTH_ENABLED or not owner_id:
+        return
+    folder = DATA_DIR / slug
+    if not folder.is_dir():
+        return
+    recorded = _folder_owner(slug)
+    if recorded == owner_id:
+        return
+    if not recorded and (not _holds_files(folder) or _owners_on_record(slug) == {owner_id}):
+        return
+    raise HTTPException(409, f"An agent named '{slug}' already exists. Choose a different name.")
+
+
+def _record_folder_owner(slug: str, owner_id: str) -> None:
+    """Write ``owner_id`` into ``DATA_DIR/<slug>`` as its owner (best-effort)."""
+    folder = DATA_DIR / slug
+    if not owner_id or not folder.is_dir():
+        return
+    try:
+        (folder / FOLDER_OWNER_FILE).write_text(owner_id + "\n")
+    except OSError as exc:
+        log.warning("Could not record an agent folder's owner", agent=slug, error=type(exc).__name__)
 
 
 async def _remove_replaced_container(existing) -> None:
@@ -3469,6 +3557,8 @@ async def clone_container(container_id: str, req: CloneRequest, request: Request
     if not new_name:
         raise HTTPException(400, "Name is required")
     new_slug = _slug(new_name)
+    clone_owner = str(labels.get(OWNER_LABEL, "") or "")
+    _refuse_other_owners_folder(new_slug, clone_owner)
 
     # Check name collision
     client = get_docker()
@@ -3478,7 +3568,7 @@ async def clone_container(container_id: str, req: CloneRequest, request: Request
             # Container names are host-global; never remove another deck's.
             raise HTTPException(409, f"Container name '{new_slug}' is used by another Flight Deck on this host.")
         # The clone is the source owner's: only their own stopped agent may go.
-        _refuse_other_owners_container(existing, str(labels.get(OWNER_LABEL, "") or ""), new_slug)
+        _refuse_other_owners_container(existing, clone_owner, new_slug)
         if existing.status == "running":
             raise HTTPException(400, f"Container '{new_slug}' already running.")
         await _remove_replaced_container(existing)
@@ -3496,6 +3586,7 @@ async def clone_container(container_id: str, req: CloneRequest, request: Request
     (new_agent_dir / "data" / "sessions").mkdir(parents=True, exist_ok=True)
     (new_agent_dir / "data" / "skills").mkdir(parents=True, exist_ok=True)
     (new_agent_dir / "data" / "home-config").mkdir(parents=True, exist_ok=True)
+    _record_folder_owner(new_slug, clone_owner)
 
     # Copy config.yaml and .env from original if they exist
     for fname in ("config.yaml", ".env"):
@@ -8387,6 +8478,8 @@ async def _spawn_process_locked(config: AgentConfig, request: Request, user: dic
     prior_owner = str((_load_process_registry().get(slug) or {}).get("owner") or "")
     if AUTH_ENABLED and prior_owner and owner_id and prior_owner != owner_id:
         raise HTTPException(409, f"An agent named '{slug}' already exists. Choose a different name.")
+    # …and a removed agent's folder outlives its entry.
+    _refuse_other_owners_folder(slug, owner_id)
 
     # Check if already running
     if _process_is_alive(slug):
@@ -8409,6 +8502,7 @@ async def _spawn_process_locked(config: AgentConfig, request: Request, user: dic
     (agent_dir / "data" / "sessions").mkdir(parents=True, exist_ok=True)
     (agent_dir / "data" / "skills").mkdir(parents=True, exist_ok=True)
     (agent_dir / "data" / "home-config").mkdir(parents=True, exist_ok=True)
+    _record_folder_owner(slug, owner_id)
 
     # Write config files with local paths
     config_yaml = _build_process_config_yaml(config, agent_dir)
@@ -8805,6 +8899,9 @@ async def remove_process(slug: str, force: bool = False, purge: bool = False, re
     registry = _load_process_registry()
     owner_id = str((registry.get(slug) or {}).get("owner") or "")
     agent_ref = agent_sharing.process_ref(slug, registry.get(slug) or {})
+    if not purge:
+        # The folder stays; once the entry is gone only this says whose it is.
+        _record_folder_owner(slug, owner_id)
     registry.pop(slug, None)
     _save_process_registry(registry)
     _processes.pop(slug, None)
@@ -8930,6 +9027,8 @@ async def clone_process(slug: str, req: CloneRequest, request: Request, user: di
             raise HTTPException(409, f"An agent named '{new_slug}' already exists. Choose a different name.")
         if _process_is_alive(new_slug):
             raise HTTPException(400, f"Process '{new_slug}' already running.")
+    clone_owner = str(entry.get("owner") or "")
+    _refuse_other_owners_folder(new_slug, clone_owner)
 
     old_agent_dir = DATA_DIR / slug
     new_agent_dir = DATA_DIR / new_slug
@@ -8940,6 +9039,7 @@ async def clone_process(slug: str, req: CloneRequest, request: Request, user: di
     (new_agent_dir / "data" / "sessions").mkdir(parents=True, exist_ok=True)
     (new_agent_dir / "data" / "skills").mkdir(parents=True, exist_ok=True)
     (new_agent_dir / "data" / "home-config").mkdir(parents=True, exist_ok=True)
+    _record_folder_owner(new_slug, clone_owner)
 
     # Copy config files
     for fname in ("config.yaml", ".env"):

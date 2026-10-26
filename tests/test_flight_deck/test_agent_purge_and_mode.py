@@ -1,10 +1,13 @@
 """Removing an agent for good, and the kiosk's agent settings.
 
 * ``DELETE /fd/processes/{slug}?purge=true`` takes the agent off the registry
-  AND deletes its folder, Flight Deck's chat log with it (every lane) and the
-  scheduled tasks that run it — another agent's are untouched; without
-  ``purge`` the folder stays, as before;
+  AND deletes its folder, Flight Deck's chat log with it (every lane), the
+  scheduled tasks that run it and its File/Data library rows — another
+  agent's are untouched; without ``purge`` the folder stays, as before;
 * the folder delete never leaves DATA_DIR (a symlink goes, not its target);
+* a kept folder stays its owner's: nobody else spawns or clones onto it (the
+  owner is recorded in it); one from before owners were recorded goes only to
+  the owner still on record, or to anyone when it holds no files;
 * ``GET /fd/agent-mode`` reads the mode as the agent resolves it, and ``PUT``
   writes Neutra too (an archetype's default mode would otherwise come back);
 * ``PUT /fd/agent-model`` with only ``vision`` leaves the model alone.
@@ -19,8 +22,8 @@ import pytest
 import yaml
 
 from captain_claw.flight_deck import auth as fd_auth
+from captain_claw.flight_deck import data_library, file_library, rate_limiter, server
 from captain_claw.flight_deck import fd_scheduler as sched
-from captain_claw.flight_deck import rate_limiter, server
 from captain_claw.flight_deck.auth import create_access_token, set_auth_db
 from captain_claw.flight_deck.db import FlightDeckDB
 
@@ -168,6 +171,112 @@ def test_read_only_entries_go_too(deck):
     ro.chmod(0o555)
     assert server._remove_agent_dir("bob-agent") == ""
     assert not (server.DATA_DIR / "bob-agent").exists()
+
+
+@pytest.mark.asyncio
+async def test_purge_drops_that_agents_library_rows(deck, tmp_path, monkeypatch):
+    files = file_library.LibraryStore(tmp_path / "file_library.db")
+    tables = data_library.DataStore(tmp_path / "data_library.db")
+    monkeypatch.setattr(file_library, "_STORE", files)
+    monkeypatch.setattr(data_library, "_STORE", tables)
+    for slug in ("bob-agent", "carol-agent"):
+        files.sync_agent(slug, file_library.walk_workspace(slug))
+        tables.sync_agent(slug, [{"table": "leads", "columns": [{"name": "email"}], "row_count": 1,
+                                  "updated_at": "2026", "fingerprint": "f", "sample": [{"email": "a@x.co"}]}])
+    async with _client() as c:
+        r = await c.delete("/fd/processes/bob-agent?purge=true", headers=_hdr(BOB))
+    assert r.status_code == 200 and r.json()["ok"], r.text
+    assert {row["agent_slug"] for row in files.search(["bob-agent", "carol-agent"], [])} == {"carol-agent"}
+    assert {row["agent_slug"] for row in tables.all_for(["bob-agent", "carol-agent"])} == {"carol-agent"}
+
+
+# ── a kept folder stays its owner's ─────────────────────────────────────────
+
+
+class _FakePopen:
+    spawned: list[str] = []
+
+    def __init__(self, args, cwd=None, env=None, stdout=None, stderr=None, start_new_session=None):
+        _FakePopen.spawned.append(Path(cwd).name)
+        self.pid = 434343
+        if stdout is not None:
+            stdout.close()
+
+    def poll(self):
+        return None
+
+
+@pytest.fixture
+def spawner(deck, monkeypatch):
+    """Spawns go all the way through the route without starting anything;
+    returns the folders a process was started in."""
+    _FakePopen.spawned = []
+    monkeypatch.setattr(server.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(server, "_is_port_available", lambda port: True)
+    monkeypatch.setattr(server, "_deck_containers", lambda all=False, client=None: [])
+
+    async def _no_cap(user, count):
+        return None
+
+    monkeypatch.setattr(server, "check_agent_count_limit", _no_cap)
+    monkeypatch.setattr(rate_limiter, "_spawn_limiter", rate_limiter._SlidingWindow())
+    monkeypatch.setenv("FD_SPAWN_SETTLE_S", "0")
+    monkeypatch.setenv("FD_PORT", "25999")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fd-env-key")
+    return _FakePopen.spawned
+
+
+def _folder_owner(slug: str) -> str:
+    return (server.DATA_DIR / slug / server.FOLDER_OWNER_FILE).read_text().strip()
+
+
+@pytest.mark.asyncio
+async def test_a_kept_folder_goes_to_no_one_else(deck, spawner):
+    async with _client() as c:
+        assert (await c.delete("/fd/processes/bob-agent", headers=_hdr(BOB))).status_code == 200
+        spawn = await c.post("/fd/spawn-process", headers=_hdr(CAROL),
+                             json={"name": "bob-agent", "web_port": 24310})
+        clone = await c.post("/fd/processes/carol-agent/clone", headers=_hdr(CAROL),
+                             json={"new_name": "Bob Agent"})
+    for r in (spawn, clone):
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == "An agent named 'bob-agent' already exists. Choose a different name."
+    assert spawner == [] and "bob-agent" not in server._load_process_registry()
+    assert _folder_owner("bob-agent") == BOB
+    assert (server.DATA_DIR / "bob-agent" / "data" / "workspace" / "notes.md").read_text() == "hi\n"
+    assert yaml.safe_load((server.DATA_DIR / "bob-agent" / "config.yaml").read_text())["model"]["model"] == "bob-agent-m"
+
+
+@pytest.mark.asyncio
+async def test_its_owner_gets_a_kept_folder_back(deck, spawner):
+    async with _client() as c:
+        await c.delete("/fd/processes/bob-agent", headers=_hdr(BOB))
+        r = await c.post("/fd/spawn-process", headers=_hdr(BOB), json={"name": "bob-agent", "web_port": 24310})
+    assert r.status_code == 200, r.text
+    assert spawner == ["bob-agent"] and server._load_process_registry()["bob-agent"]["owner"] == BOB
+    assert (server.DATA_DIR / "bob-agent" / "data" / "workspace" / "notes.md").is_file()
+    assert _folder_owner("bob-agent") == BOB
+
+
+@pytest.mark.asyncio
+async def test_a_folder_from_before_owners_were_recorded(deck, spawner):
+    """Nothing in it says whose it is: with its entry gone nobody gets it,
+    unless it holds no files; with its entry there, that entry's owner does."""
+    registry = server._load_process_registry()
+    del registry["bob-agent"]
+    server._save_process_registry(registry)
+    (server.DATA_DIR / "blank" / "data" / "workspace").mkdir(parents=True)
+    async with _client() as c:
+        carol = await c.post("/fd/spawn-process", headers=_hdr(CAROL), json={"name": "bob-agent", "web_port": 24310})
+        bob = await c.post("/fd/spawn-process", headers=_hdr(BOB), json={"name": "bob-agent", "web_port": 24311})
+        blank = await c.post("/fd/spawn-process", headers=_hdr(CAROL), json={"name": "blank", "web_port": 24312})
+        own = await c.post("/fd/spawn-process", headers=_hdr(CAROL),
+                           json={"name": "carol-agent", "web_port": 24313})
+    assert (carol.status_code, bob.status_code) == (409, 409), (carol.text, bob.text)
+    assert (blank.status_code, own.status_code) == (200, 200), (blank.text, own.text)
+    assert spawner == ["blank", "carol-agent"]
+    assert not (server.DATA_DIR / "bob-agent" / server.FOLDER_OWNER_FILE).exists()
+    assert _folder_owner("blank") == CAROL and _folder_owner("carol-agent") == CAROL
 
 
 # ── cognitive mode ──────────────────────────────────────────────────────────
