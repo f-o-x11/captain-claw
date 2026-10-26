@@ -376,6 +376,12 @@ class DataStore:
                     self._conn.execute("DELETE FROM library_tables WHERE agent_slug = ?", (slug,))
             self._conn.commit()
 
+    def drop_agent(self, slug: str) -> None:
+        """Forget one agent's tables: it was removed for good."""
+        with self._lock:
+            self._conn.execute("DELETE FROM library_tables WHERE agent_slug = ?", (slug,))
+            self._conn.commit()
+
     def pending(self, slugs: list[str], limit: int, retry_errors_before: float) -> list[dict]:
         if not slugs:
             return []

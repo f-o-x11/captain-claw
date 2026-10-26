@@ -284,6 +284,12 @@ class LibraryStore:
                     self._conn.execute("DELETE FROM library_files WHERE agent_slug = ?", (slug,))
             self._conn.commit()
 
+    def drop_agent(self, slug: str) -> None:
+        """Forget one agent's files: it was removed for good."""
+        with self._lock:
+            self._conn.execute("DELETE FROM library_files WHERE agent_slug = ?", (slug,))
+            self._conn.commit()
+
     def pending(self, slugs: list[str], limit: int, retry_errors_before: float) -> list[dict]:
         """Files waiting for a summary, newest first — with the failed ones
         last tried before *retry_errors_before*."""

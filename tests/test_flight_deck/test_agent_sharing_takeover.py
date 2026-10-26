@@ -8,7 +8,9 @@ workspace. Pinned here:
   another user's or an unowned one, before saying whether it runs);
 * a Docker spawn or clone may remove only the caller's own stopped container;
 * whatever replaces an agent drops that agent's shares and closes its members'
-  sockets (the replacement is a new agent with a new ref).
+  sockets (the replacement is a new agent with a new ref);
+* a removed agent's kept folder (its owner recorded in it) goes to no other
+  user's container, whether a process or a container left it.
 
 Same deck as ``test_agent_sharing`` (real FlightDeckDB + process registry in
 tmp dirs, Docker faked).
@@ -205,4 +207,39 @@ class TestDockerClone:
         assert _container(dock, "helper").labels[sharing.INSTANCE_LABEL] not in ("", DOCKER_INST)
         assert await deck.db.list_agent_members(DOCKER_REF, OTHER) == []
         assert spy == [(DOCKER_REF, *REMOVED)]
+
+
+class TestKeptFolder:
+    async def test_a_removed_process_agents_folder_goes_to_no_other_container(self, deck, dock, spy):
+        (deck.data / "others" / "chat.txt").write_text("private")
+        dock.containers.append(FakeContainer(dock.containers, "mine", OWNER, "mine-tok", 24992,
+                                             instance="abababababababab"))
+        async with _client() as c:
+            gone = await c.delete("/fd/processes/others", headers=_hdr(OTHER))
+            spawn = await c.post("/fd/spawn", json={"name": "Others"}, headers=_hdr(OWNER))
+            clone = await c.post("/fd/containers/sid-mine/clone", json={"new_name": "Others"},
+                                 headers=_hdr(OWNER))
+        assert gone.status_code == 200, gone.text
+        for r in (spawn, clone):
+            assert r.status_code == 409, r.text
+            assert r.json()["detail"] == "An agent named 'others' already exists. Choose a different name."
+        assert dock.runs == [] and (deck.data / "others" / "chat.txt").read_text() == "private"
+        assert (deck.data / "others" / server.FOLDER_OWNER_FILE).read_text().strip() == OTHER
+
+    async def test_a_removed_containers_folder_goes_back_to_its_owner_only(self, deck, dock, spy):
+        (deck.data / "helper" / "chat.txt").write_text("private")
+        registry = server._load_process_registry()
+        del registry["helper"]  # the container alone holds the name
+        server._save_process_registry(registry)
+        async with _client() as c:
+            gone = await c.delete("/fd/containers/sid-helper", headers=_hdr(OTHER))
+            theirs = await c.post("/fd/spawn", json={"name": "Helper"}, headers=_hdr(OWNER))
+            back = await c.post("/fd/spawn", json={"name": "Helper"}, headers=_hdr(OTHER))
+        assert gone.status_code == 200, gone.text
+        assert theirs.status_code == 409, theirs.text
+        assert back.status_code == 200, back.text
+        assert [run["name"] for run in dock.runs] == ["helper"]
+        assert _container(dock, "helper").labels[server.OWNER_LABEL] == OTHER
+        assert (deck.data / "helper" / "chat.txt").read_text() == "private"
+        assert (deck.data / "helper" / server.FOLDER_OWNER_FILE).read_text().strip() == OTHER
 
