@@ -581,7 +581,8 @@ class BotPortLink:
                 "slug": a.get("slug", ""),
                 "description": str(a.get("description") or "")[:1000],
                 "expertise_tags": list(a.get("expertise_tags") or [])[:30],
-                "status": "running" if a.get("status") == "running" else str(a.get("status") or "stopped"),
+                # A sleeping agent (agent_idle) takes requests: one wakes it.
+                "status": "running" if a.get("status") in ("running", "asleep") else str(a.get("status") or "stopped"),
             })
         return ads
 
@@ -917,7 +918,7 @@ class BotPortLink:
             self._note("in", from_label, target, False, "unknown agent")
             return
         name = str(agent.get("name") or target)
-        if agent.get("status") != "running" or not agent.get("port"):
+        if agent.get("status") not in ("running", "asleep") or not agent.get("port"):
             await self._finish(cid, ok=False, error=f"'{name}' is not running right now")
             self._note("in", from_label, name, False, "not running")
             return

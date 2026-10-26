@@ -510,6 +510,10 @@ class _LinkConn(BusClient):
         import httpx
 
         name = str(self.link.get("name") or "").strip() or "Agent link"
+        if self.ch is not None:
+            from captain_claw.flight_deck import glasses_bridge as gb
+
+            await gb.await_agent_link(self.ch)  # asleep for being idle: the files wake it
         base, params = await self._agent_base()
         images: list[str] = []
         others: list[str] = []

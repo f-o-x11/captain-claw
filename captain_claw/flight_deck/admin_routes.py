@@ -413,6 +413,8 @@ class UpdateConfigRequest(BaseModel):
     instance_name: str | None = None  # blank = back to the default
     instance_description: str | None = None
     show_powered_by: bool | None = None
+    # Idle process agents are put to sleep after this many minutes (0 = never).
+    agent_idle_stop_minutes: int | None = None
 
 
 class ProviderKeysRequest(BaseModel):
@@ -437,6 +439,9 @@ SYSTEM_CONFIG_DEFAULTS = {
     "instance_description": "Agent Management Console",
     # "Powered by Captain" (captain-claw.com · GitHub) in the sign-in page's footer.
     "show_powered_by": True,
+    # Agent controller (agent_idle): a process agent idle this many minutes is
+    # put to sleep to free its memory, and wakes when needed. 0 = never.
+    "agent_idle_stop_minutes": 0,
 }
 
 WAITLIST_COHORT_MAX = 60
@@ -568,6 +573,13 @@ async def update_config(body: UpdateConfigRequest, admin: dict = Depends(require
     updates = body.model_dump(exclude_none=True)
     if "kiosk_mode" in updates and updates["kiosk_mode"] not in KIOSK_MODES:
         raise HTTPException(400, f"kiosk_mode must be one of: {', '.join(KIOSK_MODES)}")
+    if "agent_idle_stop_minutes" in updates:
+        from captain_claw.flight_deck.agent_idle import MAX_IDLE_MINUTES, MIN_IDLE_MINUTES
+
+        minutes = updates["agent_idle_stop_minutes"]
+        if minutes != 0 and not MIN_IDLE_MINUTES <= minutes <= MAX_IDLE_MINUTES:
+            raise HTTPException(
+                400, f"Idle agents sleep after {MIN_IDLE_MINUTES} to {MAX_IDLE_MINUTES} minutes (0 = never)")
     reset: list[str] = []
     if "waitlist_cohort" in updates:
         cohort = " ".join(updates["waitlist_cohort"].split())

@@ -701,6 +701,40 @@ function noteTurnEnd(key: string) {
   _holdRefusals.delete(key)
 }
 
+type SendOpts = { fromQueue?: boolean; forced?: boolean }
+
+// A message written while the agent sleeps: Flight Deck wakes it, and the
+// frame goes once its welcome arrives (one sent before would be forgotten
+// with the old socket's frames — forgetFrames).
+const _sendOnWake = new Map<string, { content: string; opts?: SendOpts; wasBusy: boolean }[]>()
+
+/** The frame for a message (its bubble is the caller's), tracked as sent. */
+function sendFrame(key: string, content: string, opts: SendOpts | undefined, wasBusy: boolean) {
+  const session = useChatStore.getState().sessions.get(key)
+  if (!session) return
+  // Attached pictures go as image_paths; the bubble keeps their refs.
+  const frame = splitImageRefs(content)
+  // The chat box's reasoning-effort pick for this agent, fitted to what its
+  // model offers (an agent that sent no levels gets nothing).
+  const pick = session.reasoning && !session.shared ? effortFor(session.containerId) : 'auto'
+  const reasoningEffort = pick !== 'auto' && session.reasoning ? clampLevel(pick, session.reasoning) : undefined
+  const clientMsgId = session.ws.send(frame.text, { noNextSteps: !!opts?.fromQueue, imagePaths: frame.imagePaths, reasoningEffort })
+  // Whose frame this is (the queue's, for the item in flight, or yours),
+  // for the agent's answer to it: taken, or refused.
+  const itemId = opts?.fromQueue ? session.queueDispatchedId ?? null : null
+  const resumed = !!itemId && _resumed.get(key) === itemId
+  if (resumed) _resumed.delete(key)
+  noteSent(key, {
+    id: clientMsgId ?? '',
+    itemId,
+    forced: !!opts?.forced,
+    cmd: isSlashCommand(content),
+    wasBusy,
+    resumed,
+    at: Date.now(),
+  })
+}
+
 function forgetFrames(key: string) {
   _sent.delete(key)
   _turns.delete(key)
@@ -1497,6 +1531,10 @@ interface ChatSession {
   /** Why the agent can't be reached while the chat keeps reconnecting (it is
    *  restarting, or gone). Shown on the chat in place of an error per retry. */
   unreachable?: string | null
+  /** Flight Deck put the agent to sleep for being idle and holds this socket
+   *  for it: a message written now wakes it (`waking` until its welcome). */
+  asleep?: boolean
+  waking?: boolean
   /** The agent session this lane's context is on — from `welcome`,
    *  `session_info` and command results. Empty until the agent says. */
   agentSessionId: string
@@ -1561,7 +1599,9 @@ interface ChatStore {
   /** `fromQueue` marks a turn the queue dispatched: no next-step suggestions
    *  (`forced`: a start you forced, Run now / Try again). Returns the user
    *  bubble's message id (undefined when nothing was sent). */
-  sendMessage: (containerId: string, content: string, opts?: { fromQueue?: boolean; forced?: boolean }) => string | undefined
+  sendMessage: (containerId: string, content: string, opts?: SendOpts) => string | undefined
+  /** Wake the agent of a chat that is held asleep (see ChatSession.asleep). */
+  wakeAgent: (key: string) => void
   sendBtw: (containerId: string, content: string) => void
   /** Start a new topic on this lane (the agent's /new): the agent's context
    *  starts fresh; the transcript keeps going, with a divider. */
@@ -1664,6 +1704,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
         if (existing.closed) updateSession(key, { closed: null })
         existing.ws.connect()
+      } else if (existing.asleep) {
+        // Opened again while its agent sleeps: that is asking for it.
+        get().wakeAgent(key)
       }
       if (existing.unread) updateSession(key, { unread: false })
       set({ activeChatId: key, chatOpen: true })
@@ -1793,7 +1836,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     ws.on('_connected', () => {
       // A fresh socket: nothing sent before it will be answered on it.
       forgetFrames(key)
-      updateSession(key, shared ? { connected: true, closed: null } : { connected: true, unreachable: null })
+      updateSession(key, shared ? { connected: true, closed: null }
+        : { connected: true, unreachable: null, asleep: false, waking: false })
+      // What was written while the agent slept goes now that it is awake.
+      const wakeSends = _sendOnWake.get(key)
+      _sendOnWake.delete(key)
+      for (const w of wakeSends ?? []) sendFrame(key, w.content, w.opts, w.wasBusy)
       // If we hydrated a queue with pending items and auto-mode is on, kick
       // off the first dispatch now that the socket is live — and the same
       // for a task the user asked to start while the agent was away.
@@ -1817,7 +1865,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // Frames still unanswered won't be now, and the turn we knew of is out
       // of sight.
       forgetFrames(key)
-      updateSession(key, { connected: false, busy: false, statusText: '' })
+      updateSession(key, { connected: false, busy: false, statusText: '', asleep: false, waking: false })
       // A dropped socket means we won't see the next_steps event. Cancel
       // any pending auto-mark — when the agent reconnects, replay or fresh
       // events will drive the queue forward again.
@@ -1828,6 +1876,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // restarting). The chat says so once; it reconnects by itself.
     ws.on('fd_agent_waiting', () => {
       updateSession(key, { unreachable: 'The agent is not answering yet' })
+    })
+
+    // The agent is asleep (stopped for being idle) and the proxy holds the
+    // socket for it: opened by the user, the chat already asked it to wake
+    // (`waking`); reconnected by itself, it waits for a message or Wake up.
+    ws.on('fd_agent_asleep', (data) => {
+      // Work waiting for it wakes it too: a message written meanwhile, or a
+      // queue set to run (not paused or parked, and today's allowance left).
+      const cur = useChatStore.getState().sessions.get(key)
+      const quota = useQuotaStore.getState().status
+      const queued = !!cur && !cur.queuePaused && !cur.queueParked && (cur.queueAutoMode || cur.queueStartWhenFree)
+        && cur.queue.some((q) => q.status === 'pending') && !(quota?.blocked && !quota.exempt)
+      const waking = !!data.waking || _sendOnWake.has(key) || queued
+      if (waking && !data.waking) ws.wake()
+      updateSession(key, { asleep: !waking, waking, unreachable: null })
     })
 
     // The agent came back on another port (it restarted and its old one was
@@ -2727,6 +2790,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   disconnectChat: (containerId) => {
     const session = get().sessions.get(containerId)
+    _sendOnWake.delete(containerId)
     if (session) {
       session.ws.disconnect()
       const sessions = new Map(get().sessions)
@@ -2763,35 +2827,30 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       timestamp: new Date().toISOString(),
     }
     addMessage(containerId, msg)
+    // Asleep (or waking): the frame goes once the agent's welcome is in.
+    const sleeping = !session.connected && (session.asleep || session.waking)
     updateSession(containerId, {
       busy: true,
-      statusText: session.stopping ? 'Stopping…' : 'Thinking...',
+      statusText: sleeping ? 'Waking up…' : session.stopping ? 'Stopping…' : 'Thinking...',
       _busyStartedAt: Date.now(),
       nextStepOptions: [],
       liveTurnUsage: null,
+      ...(sleeping ? { asleep: false, waking: true } : {}),
     })
-    // Attached pictures go as image_paths; the bubble above keeps their refs.
-    const frame = splitImageRefs(content)
-    // The chat box's reasoning-effort pick for this agent, fitted to what its
-    // model offers (an agent that sent no levels gets nothing).
-    const pick = session.reasoning && !session.shared ? effortFor(session.containerId) : 'auto'
-    const reasoningEffort = pick !== 'auto' && session.reasoning ? clampLevel(pick, session.reasoning) : undefined
-    const clientMsgId = session.ws.send(frame.text, { noNextSteps: !!opts?.fromQueue, imagePaths: frame.imagePaths, reasoningEffort })
-    // Whose frame this is (the queue's, for the item in flight, or yours),
-    // for the agent's answer to it: taken, or refused.
-    const itemId = opts?.fromQueue ? get().sessions.get(containerId)?.queueDispatchedId ?? null : null
-    const resumed = !!itemId && _resumed.get(containerId) === itemId
-    if (resumed) _resumed.delete(containerId)
-    noteSent(containerId, {
-      id: clientMsgId ?? '',
-      itemId,
-      forced: !!opts?.forced,
-      cmd: isSlashCommand(content),
-      wasBusy: session.busy,
-      resumed,
-      at: Date.now(),
-    })
+    if (sleeping) {
+      _sendOnWake.set(containerId, [...(_sendOnWake.get(containerId) ?? []), { content, opts, wasBusy: session.busy }])
+      session.ws.wake()
+      return msg.id
+    }
+    sendFrame(containerId, content, opts, session.busy)
     return msg.id
+  },
+
+  wakeAgent: (key) => {
+    const session = get().sessions.get(key)
+    if (!session || session.connected || !session.asleep) return
+    updateSession(key, { asleep: false, waking: true })
+    session.ws.wake()
   },
 
   sendBtw: (containerId, content) => {
@@ -3277,6 +3336,8 @@ function tryDispatchNext(containerId: string, opts?: { force?: boolean }) {
   // plainly a reason to wait.)
   if (session.busy || session.stopping || !session.connected || blocked) {
     if (!session.queueStartWhenFree) updateSession(containerId, { queueStartWhenFree: true })
+    // Asleep (stopped for being idle): a task to run wakes it; it starts on the welcome.
+    if (session.asleep && !session.connected && !blocked) state.wakeAgent(containerId)
     // Busy with no turn known to run (a stray status or tool frame after the
     // turn's "ready"): nothing would ever free the lane, so the fallback that
     // counts it free after a quiet stretch does.

@@ -440,7 +440,8 @@ class FlightDeckTool(Tool):
             available = ", ".join(a.get("name", "?") for a in agents)
             return None, agents, f"Agent '{agent_name}' not found in fleet. Available: {available}"
 
-        if target.get("status") != "running":
+        # "asleep": Flight Deck stopped it for being idle and wakes it for this.
+        if target.get("status") not in ("running", "asleep"):
             return None, agents, f"Agent '{agent_name}' is not running (status: {target.get('status')})."
 
         if target.get("kind") != "remote" and not target.get("port"):

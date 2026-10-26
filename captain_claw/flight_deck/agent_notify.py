@@ -64,6 +64,10 @@ async def notify_source_agent(
         payload["origin_platform"] = origin["platform"]
         payload["origin_user_id"] = origin.get("user_id", "")
         payload["origin_chat_id"] = origin.get("chat_id", 0)
+    # A long run can outlast the agent's idle time: asleep, it is woken first.
+    from captain_claw.flight_deck import agent_idle
+
+    await agent_idle.wake_port(int(source_port), host)
     try:
         async with websockets.connect(url, open_timeout=10, close_timeout=5) as ws:
             welcome = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))

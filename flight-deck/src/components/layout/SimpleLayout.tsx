@@ -110,6 +110,8 @@ interface SimpleAgent {
   startKey: string
   /** Flight Deck runs this one itself (a run's worker, a being's body): not the user's to switch. */
   managed: boolean
+  /** Stopped for being idle, not by the user: still on — opening its chat wakes it. */
+  asleep?: boolean
   /** Shared with you: its agent_ref, and whose it is. */
   sharedRef?: string
   ownerId?: string
@@ -132,6 +134,7 @@ function dockerState(status: string): AgentState {
 }
 
 function stateLabel(a: SimpleAgent): string {
+  if (a.asleep) return 'Asleep — wakes when you open it'
   if (a.state === 'running') return a.reachable ? 'Running' : 'Running — no web port'
   if (a.state === 'starting') return 'Starting…'
   if (a.state === 'stopped') return a.kind === 'local' ? 'Offline' : 'Stopped'
@@ -327,13 +330,15 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     }
     for (const p of processes) {
       const state: AgentState = p.status === 'running' ? 'running' : 'stopped'
+      // Asleep: its chat opens (Flight Deck holds it and wakes the agent).
       list.push({
         id: `proc-${p.slug}`, kind: 'process',
         name: p.name || p.slug,
         description: procDesc[p.slug] || p.description || '',
-        state, reachable: state === 'running' && !!p.web_port,
+        state, reachable: (state === 'running' || !!p.asleep) && !!p.web_port,
         host: 'localhost', port: p.web_port, auth: p.web_auth || '',
         startKey: p.slug, managed: isManagedAgent(p.slug, p.description || ''),
+        asleep: !!p.asleep,
       })
     }
     for (const a of localAgents) {
@@ -359,7 +364,9 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
         })
       }
     }
-    list.sort((x, y) => STATE_RANK[x.state] - STATE_RANK[y.state] || x.name.localeCompare(y.name))
+    // A sleeping agent keeps its place among the running ones.
+    const rank = (a: SimpleAgent) => (a.asleep ? STATE_RANK.running : STATE_RANK[a.state])
+    list.sort((x, y) => rank(x) - rank(y) || x.name.localeCompare(y.name))
     return list
   }, [containers, processes, localAgents, dockerDesc, procDesc, sharingEnabled, sharedAgents])
 
@@ -568,7 +575,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
         ? [{ icon: FolderOpen, label: 'Files & data', hint: 'What everyone who uses it can open', onSelect: () => setFilesDataId(a.id) }]
         : []
     }
-    const up = a.reachable && !booting.has(a.id) && !switching.has(a.id)
+    const up = a.reachable && !a.asleep && !booting.has(a.id) && !switching.has(a.id)
     const items: AgentMenuItem[] = [{
       icon: Info, label: 'Info', hint: up ? 'Its intentions and topics' : 'Power it on to see its intentions and topics',
       onSelect: () => setAgentInfoId(a.id), disabled: !up,
@@ -622,7 +629,8 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     const attempt = () => {
       const s = useChatStore.getState().sessions.get(a.id)
       if (s?.connected && !s.busy) { useChatStore.getState().resumeTopic(a.id, sessionId); return }
-      if (++tries < 40) setTimeout(attempt, 250)
+      // A sleeping agent takes a while to wake.
+      if (++tries < (a.asleep ? 240 : 40)) setTimeout(attempt, 250)
     }
     setTimeout(attempt, 250)
   }
@@ -643,6 +651,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     const a = agents.find((x) => x.id === `proc-${slug}`)
     const notify = useNotificationStore.getState().add
     if (!a || !a.reachable) { notify('warning', 'Agent is off', 'Power the agent on to see everything it keeps.'); return }
+    if (a.asleep) { notify('info', 'Agent is asleep', `Open ${a.name}'s chat to wake it, then try again.`); return }
     if (booting.has(a.id)) { notify('info', 'Agent is starting', `${a.name} is still starting. Try again once it's up.`); return }
     if (switching.has(a.id)) { notify('info', 'One moment', `${a.name} is being switched on or off. Try again in a moment.`); return }
     closeLibrary()
@@ -651,7 +660,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
   // Whether that opens now — the library offers it only then.
   const libraryLiveReady = (slug: string) => {
     const a = agents.find((x) => x.id === `proc-${slug}`)
-    return !!a && a.reachable && !booting.has(a.id) && !switching.has(a.id)
+    return !!a && a.reachable && !a.asleep && !booting.has(a.id) && !switching.has(a.id)
   }
   // What a phone's Back closes before it leaves a chat (or Flight Deck).
   const phoneOverlayOpen = libraryOpen || dataOpen || foldersOpen || !!filesData
@@ -1479,7 +1488,7 @@ function AgentsColumn({
             const openable = !working && ((a.reachable && !isBooting) || hasChat)
             // A power switch for the agents Flight Deck runs; a local one can
             // only be checked again (and not from the kiosk).
-            const powered = a.state === 'running'
+            const powered = a.state === 'running' || !!a.asleep
             const canPower = a.kind !== 'local' && !shared && !a.managed && (powered || a.state === 'stopped')
             const canRecheck = a.kind === 'local' && a.state !== 'running' && !locked
             const menu = menuFor?.(a) ?? []
@@ -1670,7 +1679,9 @@ function AgentsColumn({
 }
 
 function StateDot({ agent, className = '' }: { agent: SimpleAgent; className?: string }) {
-  const cls = agent.state === 'running'
+  const cls = agent.asleep
+    ? 'bg-indigo-400/80 dark:bg-indigo-400/70'
+    : agent.state === 'running'
     ? (agent.reachable ? 'bg-emerald-600 dark:bg-emerald-400' : 'bg-amber-500 dark:bg-amber-400')
     : agent.state === 'starting'
       ? 'animate-pulse bg-amber-400'
@@ -2171,7 +2182,7 @@ function PhoneLayout({
             const isBooting = booting.has(a.id) && a.state !== 'stopped'
             const working = switching.has(a.id)
             const openable = !working && ((a.reachable && !isBooting) || hasChat)
-            const powered = a.state === 'running'
+            const powered = a.state === 'running' || !!a.asleep
             const canPower = a.kind !== 'local' && !shared && !a.managed && (powered || a.state === 'stopped')
             const menu = menuFor?.(a) ?? []
             return (

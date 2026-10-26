@@ -374,14 +374,18 @@ async def system_processes(request: Request, user: dict = Depends(get_current_us
         reg = _srv._load_process_registry()
     except Exception:
         reg = {}
-    stopped = 0
+    stopped = asleep = 0
     for entry in reg.values():
         owner = entry.get("owner") or None
         if not (is_admin or (owner and owner == user_id)):
             continue
         pid = entry.get("pid")
         if not pid or int(pid) not in by_pid:
-            stopped += 1
+            # Put to sleep for being idle (agent_idle) is not stopped: it wakes.
+            if entry.get("asleep") and not entry.get("stopped"):
+                asleep += 1
+            else:
+                stopped += 1
 
     summary = {
         "roots": len(visible),
@@ -391,6 +395,7 @@ async def system_processes(request: Request, user: dict = Depends(get_current_us
         "total_cpu": round(sum(n["agg_cpu"] for n in visible), 1),
         "total_mem_mb": round(sum(n["agg_mem_mb"] for n in visible), 1),
         "stopped": stopped,
+        "asleep": asleep,
     }
 
     # Per-owner rollup (CPU + memory + process count), memory-heaviest first.

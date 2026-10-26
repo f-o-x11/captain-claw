@@ -41,7 +41,7 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from pydantic import BaseModel
 
 from captain_claw.flight_deck import agent_sharing as sharing
-from captain_claw.flight_deck import speaker_grants, tenant_profile, usage_quota
+from captain_claw.flight_deck import agent_idle, speaker_grants, tenant_profile, usage_quota
 from captain_claw.flight_deck.auth import decode_access_token, get_current_user, get_db
 from captain_claw.logging import get_logger
 
@@ -219,7 +219,7 @@ class _MemberConn:
         self.outstanding: set[str] = set()
         self.last_btw: float | None = None  # monotonic time the last `btw` went upstream
         # Set once the socket is registered (A2: the grant tuple of its turns).
-        self.ref = self.sub = self.lane = self.conn_id = self.owner = self.runtime = ""
+        self.ref = self.sub = self.lane = self.conn_id = self.owner = self.runtime = self.slug = ""
 
     async def send(self, frame: dict) -> None:
         await self.ws.send_text(json.dumps(frame))
@@ -317,6 +317,10 @@ async def agent_ws_shared(ws: WebSocket, ref: str = "", lane: str = "", fd_token
     if not await sharing.member_check(db, ref, rec.owner, sub):
         await conn.close(4403, "Access removed")
         return
+    if not rec.running and rec.runtime == "process":
+        # Asleep for being idle (agent_idle): a member opening it wakes it.
+        if await agent_idle.wake(rec.slug):
+            rec = await asyncio.to_thread(sharing.resolve_agent_record, ref) or rec
     if not rec.running or not rec.port:
         await conn.close(4409, "Agent is stopped")
         return
@@ -327,7 +331,7 @@ async def agent_ws_shared(ws: WebSocket, ref: str = "", lane: str = "", fd_token
         return
     conn_id = sharing.register_member_socket(ref, sub, lane, conn.close)
     conn.ref, conn.sub, conn.lane, conn.conn_id = ref, sub, lane, conn_id
-    conn.owner, conn.runtime = rec.owner, rec.runtime
+    conn.owner, conn.runtime, conn.slug = rec.owner, rec.runtime, rec.slug
     try:
         await _serve_member(conn, db, user, rec, ref, lane, conn_id)
     except Exception as exc:
@@ -465,6 +469,7 @@ async def _client_to_agent(conn: _MemberConn, db, rec: sharing.AgentRecord,
         if not isinstance(data, dict):
             await conn.send({"type": "error", "code": "invalid", "message": "Malformed message"})
             continue
+        agent_idle.touch(rec.slug)  # a member at work keeps it up
         ftype = data.get("type")
 
         if ftype == "fd_auth":  # a rotated FD token; consumed here, never forwarded
@@ -589,6 +594,7 @@ async def _agent_to_client(conn: _MemberConn) -> None:
 
     try:
         async for msg in conn.upstream:
+            agent_idle.touch(conn.slug)
             text = msg if isinstance(msg, str) else bytes(msg).decode("utf-8", "replace")
             if '"turn_end"' in text:
                 try:

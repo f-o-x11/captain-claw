@@ -218,6 +218,12 @@ async def resolve_writer(db, owner: str,
     reason = check_writer(rec, owner)
     if reason:
         return reason
+    if not rec.running and rec.runtime == "process":
+        # Asleep for being idle (agent_idle): woken to write the reply.
+        from captain_claw.flight_deck import agent_idle
+
+        if await agent_idle.wake(rec.slug):
+            rec = await asyncio.to_thread(agent_sharing.resolve_agent_record, agent_ref) or rec
     if not rec.running:
         return AGENT_STOPPED
     return rec, await _is_shared(db, rec.ref, owner)

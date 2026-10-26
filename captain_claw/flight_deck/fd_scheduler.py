@@ -79,12 +79,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from captain_claw.flight_deck import agent_idle
 from captain_claw.flight_deck.glasses_bridge import (
     _broadcast,
     _check_token,
     _ensure_agent_binding,
     _get_or_create_channel,
     _remove_channel,
+    await_agent_link,
 )
 
 _log = logging.getLogger(__name__)
@@ -911,11 +913,7 @@ async def run_prompt_and_capture(
     try:
         await _ensure_agent_binding(ch, host, port, auth)
         # Wait for the pump's WS to come up (first send after binding).
-        for _ in range(50):  # ~5 s
-            if ch.agent_ws is not None:
-                break
-            await asyncio.sleep(0.1)
-        if ch.agent_ws is None:
+        if not await await_agent_link(ch):
             return None
         async with ch.send_lock:
             frame: dict[str, Any] = {"type": "chat", "content": prompt}
@@ -1274,6 +1272,10 @@ async def execute_job(job: dict[str, Any], *, force: bool = False) -> tuple[str,
     slug = str(job.get("agent_slug") or "")
     if not await _owner_may_use_agent(str(job.get("owner_id") or ""), slug):
         return ("error:agent-not-yours", f"agent '{slug}' belongs to someone else")
+    # Asleep for being idle and not woken ahead (the task was made or run just
+    # now, or Flight Deck restarted): wake it for the run (agent_idle).
+    agent_idle.touch(slug)
+    await agent_idle.wake(slug)
     host, port, auth = resolve_agent_by_slug(slug, str(job.get("agent_auth") or ""))
     if not port:
         return ("error:agent-not-running", f"agent slug '{slug}' not running")
@@ -1311,6 +1313,7 @@ async def execute_job(job: dict[str, Any], *, force: bool = False) -> tuple[str,
         whatsapp_media_to=_media_target(_kind, _target),
         meta=meta,
     )
+    agent_idle.touch(slug)  # the idle time starts when the run ends
     report = _RUN_REPORT.get()
     task_session = meta.get("task_session") if isinstance(meta.get("task_session"), dict) else {}
     if report is not None and task_session.get("id"):

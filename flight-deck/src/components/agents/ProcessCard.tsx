@@ -93,6 +93,7 @@ function ansiToHtml(text: string): string {
 const statusColors: Record<string, string> = {
   running: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
   stopped: 'bg-zinc-700/30 text-zinc-400 border-zinc-600/30',
+  asleep: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
 }
 
 export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragging }: {
@@ -242,7 +243,9 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
     }
   }, [logs])
 
-  const badgeCls = statusColors[proc.status] ?? statusColors.stopped
+  // Asleep: stopped for being idle — its chat still opens (and wakes it).
+  const shownStatus = proc.asleep ? 'asleep' : proc.status
+  const badgeCls = statusColors[shownStatus] ?? statusColors.stopped
 
   const actionProps = {
     isRunning,
@@ -369,7 +372,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
               <span className="relative inline-flex h-1 w-1 rounded-full bg-current" />
             </span>
           )}
-          {proc.status}
+          {shownStatus}
         </span>
         <button onPointerDown={(e) => e.stopPropagation()} onClick={toggleViewMode} className="rounded p-0.5 text-zinc-600 hover:text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Expand card">
           <Maximize2 className="h-3 w-3" />
@@ -386,7 +389,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
           onPointerDown={onDragStart}
           className={`flex items-center gap-1 px-2 py-0.5 bg-emerald-900/10 ${onDragStart ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'bg-emerald-500/10' : ''}`}
         >
-          {isRunning && (
+          {(isRunning || proc.asleep) && (
             <button onPointerDown={(e) => e.stopPropagation()} onClick={() => openChat(chatId, agentName, 'localhost', proc.web_port, proc.web_auth)}
               className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 relative z-10" title="Chat">
               <MessageSquare className="h-3 w-3" /> Chat
@@ -446,7 +449,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
                   <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
                 </span>
               )}
-              {proc.status}
+              {shownStatus}
             </span>
           </div>
           <div className="flex items-center gap-2 min-h-[20px]">
@@ -526,7 +529,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
         onPointerDown={onDragStart}
         className={`flex items-center gap-1 px-2 py-0.5 bg-emerald-900/10 ${onDragStart ? 'cursor-grab active:cursor-grabbing' : ''} ${isDragging ? 'bg-emerald-500/10' : ''}`}
       >
-        {isRunning && (
+        {(isRunning || proc.asleep) && (
           <button onPointerDown={(e) => e.stopPropagation()} onClick={() => openChat(chatId, agentName, 'localhost', proc.web_port, proc.web_auth)}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 relative z-10" title="Chat">
             <MessageSquare className="h-3 w-3" /> Chat
@@ -604,7 +607,7 @@ export function ProcessCard({ process: proc, onBrowseFiles, onDragStart, isDragg
                       <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-current" />
                     </span>
                   )}
-                  {proc.status}
+                  {shownStatus}
                 </span>
                 {proc.freebie && (
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400" title="Free OpenRouter agent">

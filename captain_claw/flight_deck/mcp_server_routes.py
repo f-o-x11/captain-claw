@@ -134,7 +134,8 @@ def _user_agents(user_id: str) -> list[dict]:
             out.append({
                 "name": entry.get("name", slug), "slug": slug, "kind": "process",
                 "host": "localhost", "port": entry.get("web_port", 0),
-                "status": "running" if alive else "stopped",
+                # asleep: stopped for being idle (agent_idle) — it wakes when used.
+                "status": "running" if alive else "asleep" if entry.get("asleep") and not entry.get("stopped") else "stopped",
                 "description": entry.get("description", ""),
             })
     except Exception:
@@ -170,6 +171,10 @@ async def _run_agent_task(t: _MCPTask, host: str, auth: str, timeout: float) -> 
     url = f"ws://{host}:{t.port}/ws" + (f"?token={auth}" if auth else "")
     loop = asyncio.get_event_loop()
     try:
+        from captain_claw.flight_deck import agent_idle
+
+        if await agent_idle.wake_port(t.port, host):  # asleep for being idle
+            _emit("status", {"status": "woke the agent"})
         async with websockets.connect(url, max_size=4 * 1024 * 1024) as ws:
             welcome = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
             if welcome.get("type") != "welcome":
@@ -337,7 +342,7 @@ async def _tool_send_task(user: dict, args: dict) -> dict:
         raise ValueError(f"No agent of yours matches '{agent_sel}'. Call list_agents to see options.")
     if not agent.get("port"):
         raise ValueError(f"Agent '{agent['name']}' has no web port (is it running?).")
-    if str(agent.get("status")) not in ("running", "created"):
+    if str(agent.get("status")) not in ("running", "created", "asleep"):
         raise ValueError(f"Agent '{agent['name']}' is not running (status: {agent.get('status')}).")
 
     timeout = float(args.get("timeout_seconds") or 300.0)

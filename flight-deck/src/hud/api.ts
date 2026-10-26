@@ -300,7 +300,7 @@ function postJSON(body: unknown): RequestInit {
 
 // ── Agents ──
 
-interface RawProcess { slug: string; name: string; description?: string; status: string; web_port: number; model?: string }
+interface RawProcess { slug: string; name: string; description?: string; status: string; web_port: number; model?: string; asleep?: boolean }
 interface RawContainer { id: string; name: string; agent_name?: string; description?: string; status: string; web_port: number | null }
 interface RawShared {
   agent_ref: string; name: string; description?: string; status: string; owner_name?: string
@@ -332,7 +332,8 @@ export async function listAgents(): Promise<HudAgent[]> {
   const out: HudAgent[] = []
   if (procs.status === 'fulfilled' && Array.isArray(procs.value)) {
     for (const p of procs.value) {
-      const running = p.status === 'running' && !!p.web_port
+      // Asleep (stopped for being idle) counts: attaching its chat wakes it.
+      const running = (p.status === 'running' || !!p.asleep) && !!p.web_port
       out.push({
         id: `proc-${p.slug}`, kind: 'process', name: p.name || p.slug, description: p.description || '',
         running, port: running ? p.web_port : null, ref: null, ownerName: null, model: p.model || '',

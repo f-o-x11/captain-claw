@@ -100,6 +100,9 @@ class _ChannelState:
     bound_auth: str | None = None
     agent_ws_task: asyncio.Task | None = None
     agent_ws: Any | None = None  # websockets.WebSocketClientProtocol
+    # Set to cut the pump's reconnect backoff short: something is about to go
+    # to the agent, which may have just come back (woken — agent_idle).
+    pump_kick: asyncio.Event = field(default_factory=asyncio.Event)
     # Last N messages for backfill when a new subscriber joins (e.g. glasses
     # reload). Keep it small — glasses screen shows ~3 messages anyway.
     recent: deque[dict] = field(default_factory=lambda: deque(maxlen=10))
@@ -221,6 +224,13 @@ async def _broadcast(ch: _ChannelState, payload: dict) -> None:
 # ── Outbound agent-WS pump ────────────────────────────────────────────
 
 
+def _idle_touch(port: int) -> None:
+    """The agent on ``port`` is talking: not idle (agent_idle)."""
+    from captain_claw.flight_deck import agent_idle
+
+    agent_idle.touch_port(port)
+
+
 async def _agent_pump(ch: _ChannelState, host: str, port: int) -> None:
     """Persistent connection to a captain-claw agent's WebSocket.
 
@@ -272,6 +282,7 @@ async def _agent_pump(ch: _ChannelState, host: str, port: int) -> None:
                         data = json.loads(text)
                     except Exception:
                         continue
+                    _idle_touch(port)
                     await _forward_agent_msg(ch, data)
         except asyncio.CancelledError:
             raise
@@ -288,7 +299,11 @@ async def _agent_pump(ch: _ChannelState, host: str, port: int) -> None:
             ch.agent_ws = None
         if ch.bound_host != host or ch.bound_port != port:
             break
-        await asyncio.sleep(backoff)
+        try:
+            await asyncio.wait_for(ch.pump_kick.wait(), backoff)
+        except TimeoutError:
+            pass
+        ch.pump_kick.clear()
         backoff = min(backoff * 2, 30.0)
 
 
@@ -449,6 +464,49 @@ async def _ensure_agent_binding(
     # Fresh agent → it hasn't seen our glasses context yet.
     ch.context_sent = False
     ch.agent_ws_task = asyncio.create_task(_agent_pump(ch, host, port))
+
+
+async def await_agent_link(ch: _ChannelState, wait: float = 5.0) -> bool:
+    """Whether the channel's agent link is up, waiting up to ``wait`` seconds
+    for it (the first send after binding). Call it right before writing to
+    the agent: a write is activity (agent_idle), and an agent put to sleep for
+    being idle is woken first — then the pump, maybe well into its reconnect
+    backoff, starts over at the agent's current port."""
+    from captain_claw.flight_deck import agent_idle
+
+    port = getattr(ch, "bound_port", None)
+    agent_idle.touch_port(port)
+    if ch.agent_ws is None and port:
+        slug = agent_idle.slug_for_port(port) if (ch.bound_host or "localhost") in (
+            "localhost", "127.0.0.1", "::1") else ""
+        if slug:
+            if await agent_idle.wake(slug):
+                wait = max(wait, 15.0)
+            try:
+                from captain_claw.flight_deck.server import _load_process_registry
+
+                now_port = int((_load_process_registry().get(slug) or {}).get("web_port") or port)
+            except Exception:
+                now_port = port
+            if now_port != port:
+                # It came back on another port (its own was still held).
+                if ch.agent_ws_task and not ch.agent_ws_task.done():
+                    ch.agent_ws_task.cancel()
+                    try:
+                        await ch.agent_ws_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                ch.bound_port = now_port
+                # Same agent, same session: the context it saw still stands.
+                ch.agent_ws_task = asyncio.create_task(_agent_pump(ch, ch.bound_host or "localhost", now_port))
+            else:
+                # Woken here or elsewhere: the pump may be well into its backoff.
+                ch.pump_kick.set()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait
+    while ch.agent_ws is None and loop.time() < deadline:
+        await asyncio.sleep(0.1)
+    return ch.agent_ws is not None
 
 
 # ── HTTP routes ───────────────────────────────────────────────────────
@@ -718,10 +776,13 @@ async def glasses_list_agents(request: Request) -> JSONResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"flight deck unavailable: {exc}") from exc
 
+    from captain_claw.flight_deck import agent_idle
+
     registry = _load_process_registry()
     out: list[dict] = []
     for slug, entry in registry.items():
-        if not _process_is_alive(slug):
+        # Asleep (agent_idle) is listed too: the first message wakes it.
+        if not (_process_is_alive(slug) or agent_idle.is_asleep(slug, entry)):
             continue
         try:
             port = int(entry.get("web_port", 0) or 0)
@@ -799,12 +860,7 @@ async def glasses_send(request: Request) -> JSONResponse:
     await _broadcast(ch, user_event)
 
     # Wait briefly for the agent WS to come up (first send after binding).
-    for _ in range(50):  # up to ~5s
-        if ch.agent_ws is not None:
-            break
-        await asyncio.sleep(0.1)
-
-    if ch.agent_ws is None:
+    if not await await_agent_link(ch):
         raise HTTPException(status_code=502, detail="agent WS not ready")
 
     # Inject the hidden glasses-rendering context on the FIRST message sent
@@ -1384,6 +1440,9 @@ async def glasses_upload_image(request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="file field required (multipart)")
     if not port:
         raise HTTPException(status_code=400, detail="port required")
+    from captain_claw.flight_deck import agent_idle
+
+    await agent_idle.wake_port(port, host)  # asleep for being idle: the upload needs it up
 
     # Read into memory. Phones produce 2–10 MB photos — fine in-process.
     blob = await upload.read()

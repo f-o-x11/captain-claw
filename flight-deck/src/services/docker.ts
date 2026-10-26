@@ -221,6 +221,9 @@ export interface ProcessInfo {
   /** Stable sharing id (`process:<slug>:<instance>`); empty when the agent
    *  has no access token, so it can't be shared. */
   agent_ref?: string
+  /** Stopped for being idle (Flight Deck's agent controller), not by its
+   *  owner: status is "stopped", but it is still on — opening its chat wakes it. */
+  asleep?: boolean
 }
 
 // ── Free OpenRouter ("Freebie") agents ──

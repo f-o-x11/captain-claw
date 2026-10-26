@@ -37,6 +37,7 @@ import {
   Pencil,
   Plus,
   ArrowUp,
+  Moon,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { ChatGreeting, SkillInputDialog, SkillsDialog, SkillsMenu } from './AgentSkills'
@@ -722,7 +723,7 @@ function ChatContent({
   onQueue,
   onCancel,
 }: {
-  session: { containerId: string; containerName: string; messages: ChatMessage[]; connected: boolean; busy: boolean; statusText: string; nextStepOptions?: NextStepOption[]; liveTurnUsage?: TokenUsage | null; closed?: { code: number; reason: string } | null; unreachable?: string | null; hasOlder?: boolean; hasNewer?: boolean; holdScrollUntil?: number; reasoning?: ReasoningProfile | null }
+  session: { containerId: string; containerName: string; messages: ChatMessage[]; connected: boolean; busy: boolean; statusText: string; nextStepOptions?: NextStepOption[]; liveTurnUsage?: TokenUsage | null; closed?: { code: number; reason: string } | null; unreachable?: string | null; asleep?: boolean; waking?: boolean; hasOlder?: boolean; hasNewer?: boolean; holdScrollUntil?: number; reasoning?: ReasoningProfile | null }
   /** This lane's store key — for anything that reads or writes session state.
    *  The agent id lives on `session.containerId`. */
   sessionKey: string
@@ -747,6 +748,9 @@ function ChatContent({
   const { attachments, addFiles, removeAttachment, clearAttachments, handlePasteEvent, pasteFromClipboard } = useFileAttachments(conn)
   const loadOlder = useChatStore((s) => s.loadOlder)
   const loadNewer = useChatStore((s) => s.loadNewer)
+  const wakeAgent = useChatStore((s) => s.wakeAgent)
+  // Asleep for being idle (or waking): what is written waits for the agent.
+  const sleeping = !session.connected && (!!session.asleep || !!session.waking)
 
   // Auto-scroll to bottom when new messages arrive. Deliberately keyed only on
   // message COUNT — not statusText, which changes many times per turn and would
@@ -810,7 +814,7 @@ function ChatContent({
     const text = input.trim()
     const uploadedFiles = attachments.filter((a) => a.status === 'uploaded' && a.uploadedPath)
     const hasContent = text || uploadedFiles.length > 0
-    if (!hasContent || !session.connected || quotaSpent) return
+    if (!hasContent || !(session.connected || sleeping) || quotaSpent) return
 
     const content = appendAttachmentRefs(text, uploadedFiles)
     deliver(content)
@@ -877,8 +881,10 @@ function ChatContent({
   const fresh = simple && session.connected && !session.busy && !session.hasNewer && (
     !last || (last.role === 'system' && (last.topic?.action === 'new' || last.topic?.action === 'clear')))
   const sendDisabled = (!input.trim() && attachments.filter((a) => a.status === 'uploaded').length === 0)
-    || !session.connected || closed || pendingUploads > 0 || quotaSpent
-  const placeholder = closed ? 'Disconnected' : !session.connected ? 'Connecting...' : quotaSpent ? 'Daily limit reached'
+    || (!session.connected && !sleeping) || closed || pendingUploads > 0 || quotaSpent
+  const placeholder = closed ? 'Disconnected'
+    : sleeping ? (session.waking ? 'Waking up…' : 'Asleep — write to wake it…')
+    : !session.connected ? 'Connecting...' : quotaSpent ? 'Daily limit reached'
     : simple ? (skills.available ? 'Ask anything, or try a skill…' : 'Ask anything…')
     : shared || isMobile ? 'Message…' : 'Message, paste image, or drop files...'
 
@@ -926,14 +932,36 @@ function ChatContent({
           </div>
         )}
 
-        {!session.connected && !closed && (
+        {!session.connected && !closed && (sleeping ? (
+          <div className="mt-12 text-center">
+            {session.waking
+              ? <Loader2 className="mx-auto h-8 w-8 animate-spin text-zinc-600" />
+              : <Moon className="mx-auto h-8 w-8 text-zinc-600" />}
+            <p className="mt-2 text-sm text-zinc-400">
+              {session.waking ? `Waking ${session.containerName} up…` : `${session.containerName} is asleep`}
+            </p>
+            {!session.waking && (
+              <>
+                <p className="mx-auto mt-1 max-w-sm text-xs text-zinc-500">
+                  It was stopped after a while without work, to save the server's memory. Write to it and it wakes up — it takes a few seconds.
+                </p>
+                <button
+                  onClick={() => wakeAgent(sessionKey)}
+                  className="mt-3 rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                >
+                  Wake up now
+                </button>
+              </>
+            )}
+          </div>
+        ) : (
           <div className="mt-12 text-center" title={session.unreachable || undefined}>
             <AlertCircle className="mx-auto h-8 w-8 text-zinc-700" />
             <p className="mt-2 text-sm text-zinc-500">
               {session.unreachable ? 'Agent unreachable — reconnecting…' : 'Connecting to agent...'}
             </p>
           </div>
-        )}
+        ))}
 
         {groups.map((grp, gi) => {
           // The live group is the last one (a payment card after it doesn't count).
@@ -1056,7 +1084,7 @@ function ChatContent({
               onKeyDown={handleKeyDown}
               onPaste={shared ? undefined : handlePasteEvent}
               placeholder={placeholder}
-              disabled={!session.connected || closed || quotaSpent}
+              disabled={(!session.connected && !sleeping) || closed || quotaSpent}
               rows={1}
               className="block max-h-48 min-h-[52px] w-full resize-none rounded-2xl bg-transparent px-4 pb-1 pt-3.5 text-base text-zinc-100 placeholder-zinc-500 focus:outline-none disabled:opacity-40 wide:text-[17px]"
               style={{ height: 'auto', overflow: 'hidden' }}
@@ -1163,7 +1191,7 @@ function ChatContent({
             onKeyDown={handleKeyDown}
             onPaste={shared ? undefined : handlePasteEvent}
             placeholder={placeholder}
-            disabled={!session.connected || closed || quotaSpent}
+            disabled={(!session.connected && !sleeping) || closed || quotaSpent}
             rows={1}
             className="max-h-32 min-h-[38px] min-w-0 flex-1 resize-none rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-base text-zinc-200 wide:text-sm placeholder-zinc-600 focus:border-violet-500/50 focus:outline-none disabled:opacity-40"
             style={{ height: 'auto', overflow: 'hidden' }}

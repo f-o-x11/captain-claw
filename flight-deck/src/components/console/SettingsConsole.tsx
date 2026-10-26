@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore'
 import { useConsoleStore } from '../../stores/consoleStore'
 import { BrandingAdmin } from '../admin/BrandingAdmin'
 import { Switch } from '../admin/Switch'
+import { IdleAgentsSetting, IDLE_AGENTS_HINT, IDLE_AGENTS_TITLE } from '../admin/IdleAgentsSetting'
 import { DeckProfileDefaults } from '../profile/DeckProfileDefaults'
 import {
   CONFIG_DEFAULTS, fetchConfig, saveConfig, waitlistName, type KioskMode, type SystemConfig,
@@ -162,7 +163,7 @@ export function SettingsConsole() {
         </SettingRow>
       </Card>}
 
-      <Card icon={Boxes} title="Agents" bodyClassName="px-5 py-4">
+      <Card icon={Boxes} title="Agents" bodyClassName="divide-y divide-zinc-800/80 px-5 py-4">
         <SettingRow
           title="Docker containers"
           hint="Let people start agents as Docker containers. Off: agents run as processes on this machine only."
@@ -172,6 +173,13 @@ export function SettingsConsole() {
             disabled={busy === 'docker'}
             label="Docker containers"
             onToggle={() => save('docker', { docker_spawn_enabled: !config.docker_spawn_enabled })}
+          />
+        </SettingRow>
+        <SettingRow title={IDLE_AGENTS_TITLE} hint={IDLE_AGENTS_HINT}>
+          <IdleAgentsSetting
+            minutes={config.agent_idle_stop_minutes}
+            busy={busy === 'idle'}
+            onSave={(m) => save('idle', { agent_idle_stop_minutes: m })}
           />
         </SettingRow>
       </Card>

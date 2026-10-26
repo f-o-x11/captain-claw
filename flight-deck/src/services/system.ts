@@ -86,6 +86,8 @@ export interface SystemSummary {
   total_cpu: number
   total_mem_mb: number
   stopped: number
+  /** Process agents put to sleep for being idle (they wake when needed). */
+  asleep?: number
 }
 
 export interface SystemUserUsage {

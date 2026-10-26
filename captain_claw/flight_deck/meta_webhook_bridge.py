@@ -267,7 +267,8 @@ def resolve_agent_target(
         # Explicit slug: this agent or nothing. No fallback to "first alive"
         # — that would be surprise routing on misconfig.
         entry = registry.get(slug)
-        if entry and _process_is_alive(slug):
+        # Asleep (agent_idle) counts: the send wakes it (await_agent_link).
+        if entry and (_process_is_alive(slug) or _asleep(slug)):
             try:
                 port = int(entry.get("web_port", 0) or 0)
             except (TypeError, ValueError):
@@ -290,9 +291,11 @@ def resolve_agent_target(
     # is dict-insertion order (Python 3.7+) — FD writes the registry
     # alphabetically, so the choice is stable across calls until a new
     # agent is spawned.
+    # A sleeping one (agent_idle) counts as running — the send wakes it — so
+    # the pick doesn't move to another agent while the first one sleeps.
     if registry is not None:
         for cand_slug, entry in registry.items():
-            if not _process_is_alive(cand_slug):
+            if not (_process_is_alive(cand_slug) or _asleep(cand_slug)):
                 continue
             try:
                 port = int(entry.get("web_port", 0) or 0)
@@ -302,3 +305,12 @@ def resolve_agent_target(
                 return "localhost", port, auth_override
 
     return "localhost", 0, auth_override
+
+
+def _asleep(slug: str) -> bool:
+    try:
+        from captain_claw.flight_deck import agent_idle
+
+        return agent_idle.is_asleep(slug)
+    except Exception:
+        return False
