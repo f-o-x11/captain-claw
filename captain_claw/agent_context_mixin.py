@@ -102,6 +102,8 @@ _TOOL_PROMPT_DESCRIPTIONS: dict[str, str] = {
     "web_search": "Search the web for up-to-date sources",
     "pdf_extract": "Extract a single .pdf file into markdown. ONLY for .pdf files. For multiple files in a folder use summarize_files instead.",
     "docx_extract": "Extract a single .docx file into markdown. ONLY for .docx files — never use on .pdf/.xlsx/.pptx. For multiple files in a folder use summarize_files instead.",
+    "docx": "Word documents: create a .docx from Markdown (optional template), read it as numbered paragraphs with tracked changes and comments, edit it as Word tracked changes (replace/delete/insert/insert_paragraphs/format/set_style/comment), list changes and comments, accept/reject only when asked. NEVER make or change a .docx with a script, write or edit.",
+    "self_check": "Self-assessment and status: live tests of your models, Flight Deck, Google, Microsoft 365, Jev, Soniox, deep memory, MCP, mail, web search and inboxes, plus server details (host, load, memory, disk, process) and why any tool is hidden. Read-only.",
     "xlsx_extract": "Extract a single .xlsx file into markdown tables. ONLY for .xlsx files — never use on .pdf/.docx/.pptx. For multiple files in a folder use summarize_files instead.",
     "pptx_extract": "Extract a single .pptx file into markdown. ONLY for .pptx files — never use on .pdf/.docx/.xlsx. For multiple files in a folder use summarize_files instead.",
     "pocket_tts": "Convert text to local speech audio and save as MP3",
@@ -141,6 +143,8 @@ _TOOL_PROMPT_DESCRIPTIONS_NANO: dict[str, str] = {
     "web_search": "web search",
     "pdf_extract": "pdf→md",
     "docx_extract": "docx→md",
+    "docx": "word docs",
+    "self_check": "status",
     "xlsx_extract": "xlsx→md",
     "pptx_extract": "pptx→md",
     "datastore": "tables",
@@ -162,6 +166,8 @@ _TOOL_PROMPT_DESCRIPTIONS_MICRO: dict[str, str] = {
     "web_search": "web search",
     "pdf_extract": "single .pdf → markdown (for multiple files use summarize_files)",
     "docx_extract": "single .docx → markdown (ONLY .docx, never .pdf; for multiple files use summarize_files)",
+    "docx": "Word .docx: create from Markdown, read numbered paragraphs, edit as tracked changes, accept/reject when asked; never via scripts",
+    "self_check": "test your connections (models, Flight Deck, Google, Microsoft, mail, search, MCP…) + server status; read-only",
     "xlsx_extract": "single .xlsx → markdown (ONLY .xlsx, never .pdf; for multiple files use summarize_files)",
     "pptx_extract": "single .pptx → markdown (ONLY .pptx, never .pdf; for multiple files use summarize_files)",
     "pocket_tts": "text-to-speech MP3",
@@ -2360,6 +2366,8 @@ class AgentContextMixin:
         "web_search": ["web_search"],
         "pdf_extract": ["pdf_extract"],
         "docx_extract": ["docx_extract"],
+        "docx": ["docx"],
+        "self_check": ["self_check"],
         "xlsx_extract": ["xlsx_extract"],
         "pptx_extract": ["pptx_extract"],
         "pocket_tts": ["pocket_tts"],
@@ -2503,6 +2511,12 @@ class AgentContextMixin:
                 self.tools.register(PdfExtractTool())
             elif tool_name == "docx_extract":
                 self.tools.register(DocxExtractTool())
+            elif tool_name == "docx":
+                from captain_claw.tools.docx_tool import DocxTool
+                self.tools.register(DocxTool())
+            elif tool_name == "self_check":
+                from captain_claw.tools.self_check import SelfCheckTool
+                self.tools.register(SelfCheckTool())
             elif tool_name == "xlsx_extract":
                 self.tools.register(XlsxExtractTool())
             elif tool_name == "pptx_extract":

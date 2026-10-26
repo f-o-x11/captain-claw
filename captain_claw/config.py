@@ -618,6 +618,7 @@ class ToolsConfig(BaseModel):
         "web_search",
         "pdf_extract",
         "docx_extract",
+        "docx",
         "xlsx_extract",
         "pptx_extract",
         "pocket_tts",
@@ -707,6 +708,10 @@ class ToolsConfig(BaseModel):
         "shell", "glob", "web_fetch", "web_search",
         "pdf_extract", "docx_extract", "xlsx_extract", "pptx_extract",
         "insights", "contacts", "apis", "todo",
+        # Word documents are made and changed with the docx tool (tracked
+        # changes), never with scripts; and every agent can test what it is
+        # connected to and report its server (self_check).
+        "docx", "self_check",
         # Deep memory is reached through Flight Deck, which owns the Typesense
         # connection and the credentials — so from an agent's side the archive
         # is simply always there. A per-agent opt-in would mean an agent could

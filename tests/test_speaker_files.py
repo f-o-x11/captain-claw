@@ -262,6 +262,7 @@ def test_every_path_like_schema_property_is_covered():
                  "pptx_extract"):
         assert hits[name] == {"path"}, name
     assert hits["datastore"] == {"file_path"}
+    assert hits["docx"] == {"path", "output_path", "to"}
 
 
 async def test_an_allowlisted_tool_missing_from_the_map_is_refused(world, monkeypatch):
@@ -703,6 +704,172 @@ def test_path_allowed(world):
     assert ctx.run(speaker.path_allowed, world.saved / "tmp" / "other-session" / "x.md") is True
     assert ctx.run(speaker.path_allowed, world.ws / "notes.md") is False
     assert ctx.run(speaker.path_allowed, "\x00bad") is False
+
+
+# ── docx: a member's Word documents ──────────────────────────────────
+
+_PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAA"
+        "SUVORK5CYII=")
+
+
+def _word_file(path: Path, text: str = "The term is 12 months.") -> Path:
+    from captain_claw import docx_ops
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc, _ = docx_ops.build_document(text)
+    doc.save(path)
+    return path
+
+
+@pytest.fixture
+def docx_world(world):
+    from captain_claw.tools.docx_tool import DocxTool
+
+    world.reg.register(DocxTool())
+    return world
+
+
+async def test_member_creates_word_files_in_their_own_folders(docx_world):
+    w = docx_world
+    result = await call(w, "docx", {"action": "create", "path": "Offer", "content": "# Offer\n\nHi."})
+    assert result.success, result.error
+    assert (w.saved / "tmp" / SLUG / "Offer.docx").is_file()
+    assert f"saved/tmp/{SLUG}/Offer.docx" in result.content
+    _no_host_paths(result.content, w)
+    result = await call(w, "docx", {"action": "create", "path": "vfs:p/Plan.docx", "content": "Plan."})
+    assert result.success and (w.member_root / "p" / "Plan.docx").is_file()
+    assert not (w.owner_root / "p" / "Plan.docx").exists()
+
+    for path in (str(w.ws / "output" / "x.docx"), "../x.docx"):
+        reason = await refused(w, "docx", {"action": "create", "path": path, "content": "x"})
+        assert reason.startswith(PATH_REFUSED_PREFIX), path
+        _no_host_paths(reason, w)
+    assert not (w.ws / "output" / "x.docx").exists()
+    # Any other absolute path is re-filed under their folder, as write does.
+    result = await call(w, "docx", {"action": "create", "path": str(w.owner_root / "p" / "x"),
+                                    "content": "x"})
+    assert result.success and not (w.owner_root / "p" / "x.docx").exists()
+    assert list((w.saved / "tmp" / SLUG).rglob("x.docx"))
+    # Shown as their saved/ path (it echoes only the folders they typed).
+    assert result.content.startswith(f"Created saved/tmp/{SLUG}/")
+
+
+async def test_member_cannot_overwrite_someone_elses_file(docx_world):
+    w = docx_world
+    theirs = _word_file(w.saved / "tmp" / SLUG / "Theirs.docx")
+    from captain_claw import saved_attribution
+
+    saved_attribution.note_write(theirs, None)   # written by the owner (no member bound)
+    before = theirs.read_bytes()
+    reason = await refused(w, "docx", {"action": "create", "path": "Theirs.docx", "content": "x",
+                                       "overwrite": True})
+    assert reason.startswith(PATH_REFUSED_PREFIX)
+    assert theirs.read_bytes() == before
+
+
+async def test_member_redline_of_their_upload_goes_to_their_folder(docx_world):
+    w = docx_world
+    upload = _word_file(w.saved / "downloads" / SLUG / "Contract.docx")
+    before = upload.read_bytes()
+    backups = w.ws / get_config().tools.edit.backup_dir
+    result = await call(w, "docx", {
+        "action": "edit", "path": f"saved/downloads/{SLUG}/Contract.docx", "author": "Olga",
+        "edits": [{"op": "replace", "find": "12 months", "replace_with": "24 months"}],
+    })
+    assert result.success, result.error
+    assert upload.read_bytes() == before
+    copy = w.saved / "output" / SLUG / "Contract.docx"
+    assert copy.is_file() and f"saved/output/{SLUG}/Contract.docx" in result.content
+    _no_host_paths(result.content, w)
+    # The member's own name, never the one they asked for.
+    assert "Ana (via " in result.content and "Olga" not in result.content
+    from captain_claw import docx_ops
+
+    authors = {c.author for c in docx_ops.list_changes(docx_ops.open_document(copy))}
+    assert len(authors) == 1 and authors.pop().startswith("Ana (via ")
+    # Their copy is theirs: a second edit changes it in place, still no backup.
+    again = await call(w, "docx", {"action": "edit", "path": f"saved/output/{SLUG}/Contract.docx",
+                                   "edits": [{"op": "delete", "find": "The "}]})
+    assert again.success and "Saved in place" in again.content
+    assert not backups.exists() or not any(backups.rglob("*.bak"))
+
+
+async def test_member_redlines_an_owner_document_into_their_own_copy(docx_world):
+    w = docx_world
+    owners = _word_file(w.saved / "output" / "other-session" / "Report.docx", "Revenue grew 20%.")
+    before = owners.read_bytes()
+    read = await call(w, "docx", {"action": "read", "path": "saved/output/other-session/Report.docx"})
+    assert read.success and "Revenue grew 20%." in read.content
+    result = await call(w, "docx", {"action": "edit", "path": "saved/output/other-session/Report.docx",
+                                    "edits": [{"op": "replace", "find": "20%", "replace_with": "25%"}]})
+    assert result.success, result.error
+    assert owners.read_bytes() == before
+    assert (w.saved / "output" / SLUG / "Report.docx").is_file()
+    _no_host_paths(result.content, w)
+    # Accept/reject never touch the owner's file either.
+    _word_file(w.saved / "output" / "other-session" / "Tracked.docx")
+    from captain_claw import docx_ops
+
+    tracked = w.saved / "output" / "other-session" / "Tracked.docx"
+    doc = docx_ops.open_document(tracked)
+    docx_ops.apply_edits(doc, [{"op": "replace", "find": "12", "replace_with": "36"}],
+                         docx_ops.Reviser.for_document(doc, "Owner"))
+    doc.save(tracked)
+    before = tracked.read_bytes()
+    done = await call(w, "docx", {"action": "accept", "path": "saved/output/other-session/Tracked.docx",
+                                  "all": True})
+    assert done.success and tracked.read_bytes() == before
+    assert (w.saved / "output" / SLUG / "Tracked.docx").is_file()
+
+
+async def test_member_output_path_and_template_are_confined(docx_world):
+    w = docx_world
+    _word_file(w.saved / "tmp" / SLUG / "Mine.docx")
+    edit = {"action": "edit", "path": f"saved/tmp/{SLUG}/Mine.docx",
+            "edits": [{"op": "delete", "find": "The "}]}
+    reason = await refused(w, "docx", {**edit, "output_path": str(w.ws / "output" / "n.docx")})
+    assert reason.startswith(PATH_REFUSED_PREFIX)
+    assert not (w.ws / "output" / "n.docx").exists()
+    result = await call(w, "docx", {**edit, "output_path": str(w.ws / "notes")})
+    assert result.success and not (w.ws / "notes.docx").exists()
+    assert list((w.saved / "tmp" / SLUG).rglob("notes.docx"))
+    _word_file(w.ws / "house.docx")
+    reason = await refused(w, "docx", {"action": "create", "path": "x.docx", "content": "x",
+                                       "template": str(w.ws / "house.docx")})
+    assert reason.startswith(PATH_REFUSED_PREFIX)
+    for path in (str(w.ws / "house.docx"), str(w.owner_root / "p" / "a.md")):
+        reason = await refused(w, "docx", {"action": "read", "path": path})
+        assert reason.startswith(PATH_REFUSED_PREFIX)
+        _no_host_paths(reason, w)
+
+
+async def test_member_pictures_are_their_own_only(docx_world):
+    import base64
+
+    from captain_claw import docx_ops
+
+    w = docx_world
+    png = base64.b64decode(_PNG)
+    (w.saved / "tmp" / SLUG / "mine.png").write_bytes(png)
+    (w.ws / "owner.png").write_bytes(png)
+    (w.owner_root / "p" / "owner.png").write_bytes(png)
+    content = (f"![mine](saved/tmp/{SLUG}/mine.png)\n\n![a]({w.ws / 'owner.png'})\n\n"
+               f"![b]({w.owner_root / 'p' / 'owner.png'})\n\n![c](owner.png)")
+    result = await call(w, "docx", {"action": "create", "path": "Pics.docx", "content": content})
+    assert result.success, result.error
+    assert result.content.count("skipped") == 3
+    _no_host_paths(result.content.replace(str(w.ws / "owner.png"), "").replace(
+        str(w.owner_root / "p" / "owner.png"), ""), w)
+    doc = docx_ops.open_document(w.saved / "tmp" / SLUG / "Pics.docx")
+    assert len(doc.inline_shapes) == 1
+
+
+async def test_member_docx_errors_show_no_host_paths(docx_world):
+    w = docx_world
+    (w.saved / "tmp" / SLUG / "broken.docx").write_bytes(b"not a zip")
+    result = await call(w, "docx", {"action": "read", "path": f"saved/tmp/{SLUG}/broken.docx"})
+    assert not result.success
+    _no_host_paths(result.error, w)
 
 
 # ── edit: no backups, no host paths ──────────────────────────────────

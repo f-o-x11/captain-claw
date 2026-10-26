@@ -736,6 +736,50 @@ Extract Word documents to markdown.
 
 Preserves headings, lists, and tables. Uses standard library XML parsing (no python-docx dependency).
 
+### docx
+
+Make and change Word documents properly, without scripts. Every change to a document is a Word **tracked change** with an author and a date, so whoever reviews it accepts or rejects each one in Word.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `create`, `read`, `edit`, `changes`, `comments`, `accept`, `reject` |
+| `path` | string | yes | The .docx (for `create`, where to save it) |
+| `content` | string | create | The document as Markdown |
+| `edits` | array | edit | Changes applied in order, all or nothing (see below) |
+| `output_path` | string | no | Save an edit/accept/reject to a new file instead |
+| `author` | string | no | Name on tracked changes and comments (default: the agent's name) |
+| `view` | string | no | read: `markup` (default), `final` or `original` |
+| `offset` / `limit` | integer | no | read: paging by paragraph number |
+| `ids` / `by_author` / `all` | | accept/reject | Which tracked changes |
+| `template` | string | no | create: a .docx/.dotx whose styles, page setup, header and footer to use |
+| `title`, `page_numbers`, `font`, `font_size`, `heading_font`, `heading_color`, `overwrite` | | no | create options |
+
+**create** takes Markdown: `#` headings, paragraphs, `-` and `1.` lists (each numbered list restarts at 1), pipe tables (the header row repeats on every page), `>` quotes, fenced code, `![caption](saved picture path)`, `[TOC]`, `\pagebreak`, `**bold**`, `*italic*`, `~~strike~~` and `[links](url)`.
+
+**read** lists numbered paragraphs with their style (`(H2)`, `(List Number)`, `(T1 r2c3)` for a table cell), tracked changes inline as `{+inserted+}` and `[-deleted-]`, `¶+` / `¶−` for an inserted paragraph / a removed paragraph break, and comments as `⟦anchor⟧cN`. The header says whether Track Changes is on and who made the changes so far.
+
+**edit** — each item has an `op`:
+
+| op | What it does |
+|---|---|
+| `replace` | `find` → `replace_with`. Only the words that differ are marked, so "12 months" → "24 months" shows `[-12-]{+24+}`. |
+| `delete` | `find` (text), or `paragraph` [+ `to`] for whole paragraphs |
+| `insert` | `text` `after` / `before` existing text |
+| `insert_paragraphs` | Markdown `content` `after` / `before` paragraph N. A plain paragraph takes the formatting of the one it follows (after a heading, the heading's "next" style). |
+| `format` | `bold`, `italic`, `underline`, `strike`, `highlight`, `color`, `size` on `find` or a `paragraph` (a tracked formatting change) |
+| `set_style` | `paragraph` [+ `to`] → `style` (a tracked style change) |
+| `comment` | a Word comment with `text` on `find` or a `paragraph` |
+
+`find` is exact text inside one paragraph as it reads now; curly quotes and dashes match their plain versions. When it occurs more than once, add words, or pass `paragraph`, `occurrence` or `all`. Paragraph numbers are the ones `read` showed before the call. A bad edit fails the whole call and nothing is saved. Editing text another reviewer inserted marks it deleted inside their insertion; deleting your own earlier insertion just removes it, as Word does. The saved file has Track Changes switched on.
+
+Where the result goes: a file in the agent's own `saved/` area (outside `downloads/`) or in a writable VFS folder is changed in place, with a backup. A user's upload (`saved/downloads/`), a read-only Drive folder or any other file is never changed: the redlined copy goes to `saved/output/<session>/` under the same name, where chat bridges send it from. If that copy already exists, the edit is refused until the agent edits the copy (or names a new `output_path`), so a redline never forks.
+
+**accept / reject** resolve tracked changes like Word's buttons — all, by `ids` (from `changes`), or `by_author` — and only when the user asks.
+
+On a shared agent, members use `docx` on their own files only. They read anything they may read. Their changes land in place only on files they created; anything else becomes their own redlined copy in their folder. Pictures named in the Markdown must be files they can read. Tracked changes and comments carry their name ("Ana (via Captain)"), not one they choose. No backup is kept, and results show `saved/…` or `vfs:…` paths, never host paths.
+
+`write` and `edit` refuse `.docx` paths and point to this tool. The output was checked against Microsoft Word: Word reads every revision, and its Accept All / Reject All give the same text as `accept` / `reject`.
+
 ### xlsx_extract
 
 Extract Excel sheets to markdown tables.
@@ -1208,6 +1252,26 @@ Discover and communicate with peer agents in the Flight Deck environment. Always
 - **`delegate`** — fire-and-forget task delegation. Sends a task to a peer agent via `/fd/delegate-peer` and returns immediately, freeing the calling agent. The peer works independently and delivers results back as a notification when finished. Use for large/long-running tasks like research, scraping, analysis, or file creation.
 
 Unlike `consult_peer` (which uses the static peer list pushed at connect time), `flight_deck` always queries the live fleet — so newly spawned agents are immediately discoverable.
+
+### self_check
+
+Self-assessment and status. The agent tests, live and in parallel, everything it is connected to, allowed to use and expected to work, and reports the server it runs on. Always available.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `sections` | array | no | Only some of `server`, `agent`, `models`, `connections`, `tools` (default: all) |
+| `deep` | boolean | no | Also run a real web search query and start the browser (slower) |
+| `save` | boolean | no | Also save the report as Markdown under `saved/output/<session>/` |
+
+What it checks:
+
+- **Server** — host and OS, CPU count and load (warns above 1.5× the CPUs), free memory, free disk on the workspace volume, the agent process (PID, uptime, memory, threads, CPU), Captain version and commit, and the clock against Flight Deck's.
+- **Agent** — who it is and how it runs (under Flight Deck or standalone), that the workspace is writable, and that the session store and datastore open.
+- **Models** — the model in use and every allowed model, each sent a one-word prompt (16 tokens at most). Image, video and audio models are listed, not called; a local LiteRT model isn't loaded just for the test.
+- **Connections** — internet, Flight Deck, each Google service (Gmail, Calendar, Drive) and each Microsoft 365 one (account, Outlook, Calendar, OneDrive) with its own request, so a missing permission shows on the service it blocks; Jev, Soniox, the Telegram inbox, WhatsApp, payments, deep memory (a one-result search), every MCP server allowed for the agent (its tool list), outgoing mail (an SMTP login, nothing sent), web search, BotPort, the agent's own Telegram bot and the browser.
+- **Tools** — how many tools the model can use, and for each hidden one why (e.g. "Google not connected").
+
+Every result is `ok`, `warn`, `fail` (should work and doesn't, with the fix), `off` (not set up — not a failure) or `info`. The report starts with what needs attention. Everything is read-only, and no key or token is printed.
 
 ### basna
 
@@ -1902,7 +1966,7 @@ tools:
     stt_model: ""                   # explicit STT model ID; empty = auto-detect
 ```
 
-**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`, `whatsapp_web`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
+**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — and now `docx` (Word documents with tracked changes) and `self_check` (connection tests and server status), beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`, `whatsapp_web`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
 
 ### skills
 

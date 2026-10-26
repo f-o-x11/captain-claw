@@ -85,7 +85,8 @@ _GRANT_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 SPEAKER_GOOGLE_TOOLS = frozenset({"google_mail", "google_drive", "google_calendar"})
 SPEAKER_DEEP_MEMORY_TOOLS = frozenset({"typesense"})
 SPEAKER_FILE_TOOLS = frozenset({"read", "write", "edit", "glob", "grep", "vfs",
-                                "pdf_extract", "docx_extract", "xlsx_extract", "pptx_extract"})
+                                "pdf_extract", "docx_extract", "xlsx_extract", "pptx_extract",
+                                "docx"})
 # PR C: the agent's datastore is a commons (members add rows anywhere, change
 # only their own). Not a file tool: it needs no roots unless it names a file.
 SPEAKER_DATASTORE_TOOLS = frozenset({"datastore"})
@@ -907,6 +908,12 @@ def apply_tool_rules(name: str, arguments: dict, agent: Any) -> tuple[dict, str 
                 return args, MEMBER_DELETE_MESSAGE
         return args, None
 
+    if name == "docx":
+        # Tracked changes and comments carry the member's own name, never one
+        # they pick (tools/docx_tool.py names them).
+        args.pop("author", None)
+        return args, None
+
     if name == "edit":
         # Backups of every user share one folder per file name, so undo could
         # restore someone else's content (member edits make no backups).
@@ -1003,6 +1010,12 @@ SPEAKER_PATH_MAP: dict[str, tuple[PathRule, ...]] = {
     "vfs": (PathRule("/path", "vfs_any"), PathRule("/to", "vfs_any")),
     "pdf_extract": (PathRule("/path", "read", True),),
     "docx_extract": (PathRule("/path", "read", True),),
+    # docx: `path` is written by create and read by every other action (an
+    # edit changes it only when the member may — otherwise their redlined
+    # copy goes to their own folder; tools/docx_tool.py decides); output_path
+    # is always a write.
+    "docx": (PathRule("/path", "docx_path", True), PathRule("/output_path", "docx_write"),
+             PathRule("/template", "read_abs")),
     "xlsx_extract": (PathRule("/path", "read", True),),
     "pptx_extract": (PathRule("/path", "read", True),),
     "datastore": (PathRule("/file_path", "ds_file"),),
@@ -1014,6 +1027,7 @@ SPEAKER_NON_PATH_PARAMS: dict[str, frozenset[str]] = {
     "google_drive": frozenset({"file_id", "folder_id"}),  # Drive ids / URLs, not local paths
     "google_mail": frozenset({"to"}),                     # recipients (email addresses), not a path
     "playbooks": frozenset({"do_pattern", "dont_pattern"}),  # free-text playbook guidance
+    "docx": frozenset({"to"}),                            # an edit's last paragraph number
 }
 
 
@@ -1247,6 +1261,26 @@ def _require_changeable(resolved: Path, roots: SpeakerRoots) -> None:
     _require_owned(resolved, roots)
 
 
+def member_may_write(path: str | Path) -> bool:
+    """Whether the bound member may create or replace the file at *path*: in
+    their VFS (not a Drive or hidden folder), or new in one of this
+    conversation's own saved/ folders; an existing file only when it is theirs
+    (:func:`_require_changeable`). False without roots; never raises."""
+    try:
+        roots = current_roots()
+        if roots is None:
+            return False
+        real = Path(path).resolve()
+        if roots.vfs_root is not None and _within(real, roots.vfs_root):
+            return _vfs_checks(real, roots, "write") is None
+        if real.exists():
+            _require_changeable(real, roots)
+            return True
+        return any(_within(real.parent, r) for r in roots.saved_roots)
+    except Exception:
+        return False
+
+
 def in_own_saved_roots(path: str | Path) -> bool:
     """PR C: the realpath of *path*'s parent lies in one of the bound
     member's CURRENT saved/ folders. False without roots; never raises."""
@@ -1323,6 +1357,17 @@ def _check_one(
     is_vfs = vfs.is_vfs_path(value)
     if _packs.is_pack_value(value):
         return _check_pack_value(rule, value, arguments)
+
+    if kind in ("docx_path", "docx_write"):
+        # Checked under the name the tool will save (it adds .docx), so the
+        # file checked is the file written.
+        if kind == "docx_path" and str(arguments.get("action") or "").strip().lower() != "create":
+            kind = "read_abs"
+        else:
+            from captain_claw.tools.docx_tool import docx_file_name
+
+            value = docx_file_name(value)
+            kind = "write"
 
     if kind == "ds_file":
         # PR C: the datastore's /file_path — import_file reads (the read_abs

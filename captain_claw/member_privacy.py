@@ -83,6 +83,7 @@ COMMONS_WRITES: dict[str, frozenset[str] | None] = {
     "datastore": None,                  # every action except DATASTORE_READS
     "write": None,
     "edit": None,
+    "docx": frozenset({"create", "edit", "accept", "reject"}),
     "typesense": frozenset({"index"}),
 }
 DATASTORE_READS = frozenset({"list_tables", "describe", "query", "sql", "list_protections"})
@@ -100,6 +101,7 @@ CONTENT_TURN_TOOLS: dict[str, frozenset[str] | None] = {
     "datastore": DATASTORE_READS,
     "vfs": frozenset({"info", "list_projects", "ls", "tree", "stat"}),
     "typesense": frozenset({"search"}),
+    "docx": frozenset({"read", "changes", "comments"}),
 }
 
 # Internal: the session length when the carry-over cache was last filled. A

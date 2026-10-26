@@ -164,6 +164,89 @@ class WriteTool(Tool):
             fallback = (saved_root / "tmp" / session_id / safe_parts[-1]).resolve()
             return fallback
 
+    @classmethod
+    def resolve_local_target(cls, path: str, kwargs: dict[str, Any]) -> Path:
+        """Where a write of *path* (not a vfs: path) lands: the workflow run's
+        folder, the workspace repo in code mode, else the session's saved/ area.
+        Other tools that create files (docx) use this so they land alike."""
+        # Workflow-run override: bypass session scoping entirely,
+        # preserving relative structure but stripping prefixes/traversals.
+        workflow_run_dir = kwargs.get("_workflow_run_dir")
+        if workflow_run_dir is not None:
+            requested = Path(path).expanduser()
+            # Strip absolute root so we keep only the relative parts.
+            if requested.is_absolute():
+                parts = list(requested.parts[1:])  # drop "/"
+            else:
+                parts = list(requested.parts)
+            # Remove ".." traversals for safety.
+            parts = [p for p in parts if p not in ("", ".", "..")]
+            # Strip any leading "saved/<category>/<session-id>" prefix
+            # the LLM might have added from observed tool output.
+            _categories = {"downloads", "media", "output", "scripts",
+                           "showcase", "skills", "summaries", "tmp", "tools", "saved"}
+            while parts and parts[0].lower() in _categories:
+                parts = parts[1:]
+            # Strip a UUID-shaped segment (session id) if it leads.
+            if parts and len(parts[0]) >= 32 and parts[0].count("-") >= 4:
+                parts = parts[1:]
+            if not parts:
+                parts = [Path(path).name or "output.txt"]
+            return Path(workflow_run_dir).joinpath(*parts)
+        if os.environ.get("CLAW_WRITE_DIRECT") and kwargs.get("_runtime_base_path") is not None:
+            # Code mode: write straight into the workspace repo (no saved/
+            # scoping), matching shell/read/glob which anchor on the
+            # workspace root. This is what makes an agent's `write index.html`
+            # land in the project folder instead of saved/tmp/<session>/.
+            base = Path(kwargs["_runtime_base_path"]).expanduser().resolve()
+            requested = Path(path).expanduser()
+
+            def _strip_saved_prefix(parts: list[str]) -> list[str]:
+                # The generic agent instructions teach a
+                # saved/<category>/<session>/ output convention; in code
+                # mode `saved/` is GITIGNORED runtime scratch, so a
+                # deliverable written there would silently vanish from
+                # git/history/review. Strip that prefix so the file lands
+                # in the real repo tree instead.
+                if not parts or parts[0].lower() != "saved":
+                    return parts
+                parts = parts[1:]
+                _categories = {"downloads", "media", "output", "scripts",
+                               "showcase", "skills", "summaries", "tmp", "tools"}
+                if parts and parts[0].lower() in _categories:
+                    parts = parts[1:]
+                # Session-ish segment: uuid-shaped, 8+ hex chars, or a
+                # literal "<session>"-style placeholder from a plan.
+                if parts:
+                    seg = parts[0]
+                    if (
+                        (len(seg) >= 32 and seg.count("-") >= 4)
+                        or re.fullmatch(r"[0-9a-fA-F]{8,}", seg)
+                        or (seg.startswith("<") and seg.endswith(">"))
+                    ):
+                        parts = parts[1:]
+                return parts
+
+            if requested.is_absolute():
+                cand = requested.resolve()
+                try:
+                    rel_parts = list(cand.relative_to(base).parts)
+                except ValueError:
+                    rel_parts = [p for p in requested.parts[1:] if p not in ("", ".", "..")]
+            else:
+                rel_parts = [p for p in requested.parts if p not in ("", ".", "..")]
+            rel_parts = _strip_saved_prefix(rel_parts)
+            file_path = base.joinpath(*rel_parts) if rel_parts else base / "output.txt"
+            # Never escape the workspace.
+            try:
+                file_path.resolve().relative_to(base)
+            except ValueError:
+                file_path = base / (requested.name or "output.txt")
+            return file_path
+        saved_root = cls._resolve_saved_root(kwargs)
+        session_id = cls._normalize_session_id(str(kwargs.get("_session_id", "")))
+        return cls._normalize_under_saved(path, saved_root, session_id)
+
     @staticmethod
     async def _report_images(content: str, file_path: Path, suffix: str,
                              kwargs: dict[str, Any]) -> tuple[str, str]:
@@ -216,6 +299,18 @@ class WriteTool(Tool):
             ToolResult with status
         """
         try:
+            # write puts text in a file; a ".docx" made that way is not a Word
+            # document and won't open.
+            if Path(str(path)).suffix.lower() in (".docx", ".docm", ".dotx"):
+                return ToolResult(
+                    success=False,
+                    error="docx_needs_docx_tool",
+                    content=(
+                        "❌ Refused: write makes text files — a .docx written this way "
+                        "won't open in Word. Use the docx tool: action=create with the "
+                        "document as Markdown (or action=edit to change an existing one)."
+                    ),
+                )
             _guard = write_guard.guard_config()
 
             # ── Tier 1 (default-on) — refuse junk content at the boundary ──
@@ -321,85 +416,8 @@ class WriteTool(Tool):
                         error=f"Invalid vfs path (escapes user root): {path}",
                     )
 
-            # Workflow-run override: bypass session scoping entirely,
-            # preserving relative structure but stripping prefixes/traversals.
-            workflow_run_dir = kwargs.get("_workflow_run_dir")
-            if is_vfs_path(path):
-                pass  # file_path already resolved above
-            elif workflow_run_dir is not None:
-                requested = Path(path).expanduser()
-                # Strip absolute root so we keep only the relative parts.
-                if requested.is_absolute():
-                    parts = list(requested.parts[1:])  # drop "/"
-                else:
-                    parts = list(requested.parts)
-                # Remove ".." traversals for safety.
-                parts = [p for p in parts if p not in ("", ".", "..")]
-                # Strip any leading "saved/<category>/<session-id>" prefix
-                # the LLM might have added from observed tool output.
-                _categories = {"downloads", "media", "output", "scripts",
-                               "showcase", "skills", "summaries", "tmp", "tools", "saved"}
-                while parts and parts[0].lower() in _categories:
-                    parts = parts[1:]
-                # Strip a UUID-shaped segment (session id) if it leads.
-                if parts and len(parts[0]) >= 32 and parts[0].count("-") >= 4:
-                    parts = parts[1:]
-                if not parts:
-                    parts = [Path(path).name or "output.txt"]
-                file_path = Path(workflow_run_dir).joinpath(*parts)
-            elif os.environ.get("CLAW_WRITE_DIRECT") and kwargs.get("_runtime_base_path") is not None:
-                # Code mode: write straight into the workspace repo (no saved/
-                # scoping), matching shell/read/glob which anchor on the
-                # workspace root. This is what makes an agent's `write index.html`
-                # land in the project folder instead of saved/tmp/<session>/.
-                base = Path(kwargs["_runtime_base_path"]).expanduser().resolve()
-                requested = Path(path).expanduser()
-
-                def _strip_saved_prefix(parts: list[str]) -> list[str]:
-                    # The generic agent instructions teach a
-                    # saved/<category>/<session>/ output convention; in code
-                    # mode `saved/` is GITIGNORED runtime scratch, so a
-                    # deliverable written there would silently vanish from
-                    # git/history/review. Strip that prefix so the file lands
-                    # in the real repo tree instead.
-                    if not parts or parts[0].lower() != "saved":
-                        return parts
-                    parts = parts[1:]
-                    _categories = {"downloads", "media", "output", "scripts",
-                                   "showcase", "skills", "summaries", "tmp", "tools"}
-                    if parts and parts[0].lower() in _categories:
-                        parts = parts[1:]
-                    # Session-ish segment: uuid-shaped, 8+ hex chars, or a
-                    # literal "<session>"-style placeholder from a plan.
-                    if parts:
-                        seg = parts[0]
-                        if (
-                            (len(seg) >= 32 and seg.count("-") >= 4)
-                            or re.fullmatch(r"[0-9a-fA-F]{8,}", seg)
-                            or (seg.startswith("<") and seg.endswith(">"))
-                        ):
-                            parts = parts[1:]
-                    return parts
-
-                if requested.is_absolute():
-                    cand = requested.resolve()
-                    try:
-                        rel_parts = list(cand.relative_to(base).parts)
-                    except ValueError:
-                        rel_parts = [p for p in requested.parts[1:] if p not in ("", ".", "..")]
-                else:
-                    rel_parts = [p for p in requested.parts if p not in ("", ".", "..")]
-                rel_parts = _strip_saved_prefix(rel_parts)
-                file_path = base.joinpath(*rel_parts) if rel_parts else base / "output.txt"
-                # Never escape the workspace.
-                try:
-                    file_path.resolve().relative_to(base)
-                except ValueError:
-                    file_path = base / (requested.name or "output.txt")
-            else:
-                saved_root = self._resolve_saved_root(kwargs)
-                session_id = self._normalize_session_id(str(kwargs.get("_session_id", "")))
-                file_path = self._normalize_under_saved(path, saved_root, session_id)
+            if not is_vfs_path(path):  # a vfs file_path was resolved above
+                file_path = self.resolve_local_target(path, kwargs)
 
             # Ensure parent directory exists
             file_path.parent.mkdir(parents=True, exist_ok=True)

@@ -214,7 +214,16 @@ _ECO_INTENT_PATTERNS: list[tuple[_re.Pattern[str], frozenset[str]]] = [
     (_re.compile(r"\.pdf\b|pdf\b", _re.I),
      frozenset({"pdf_extract", "summarize_files"})),
     (_re.compile(r"\.docx?\b|word\s+doc", _re.I),
-     frozenset({"docx_extract", "summarize_files"})),
+     frozenset({"docx_extract", "docx", "summarize_files"})),
+    # Word documents to make or change (EN / HR): redlines, tracked changes,
+    # contracts, "a Word file".
+    (_re.compile(r"\bword\b|redline|track\w*\s+change|\bcontract|\bugovor\w*|\bdokument\w*"
+                 r"|pra[ćc]enj\w*\s+promjen\w*|\brevizij\w*", _re.I),
+     frozenset({"docx", "docx_extract"})),
+    # Self-assessment / status (EN / HR): what's connected, is it working.
+    (_re.compile(r"\bstatus\b|\bhealth\b|self[\s-]?check|diagnos\w*|\bconnect\w*|\bserver\b"
+                 r"|\bstanj\w*|\bspoj\w*|\bveze?\b|\bpovezan\w*|\bdijagnost\w*|radi\s+li", _re.I),
+     frozenset({"self_check"})),
     (_re.compile(r"\.xlsx?\b|spreadsheet|excel", _re.I),
      frozenset({"xlsx_extract", "summarize_files"})),
     (_re.compile(r"\.pptx?\b|presentation|powerpoint|slides", _re.I),
