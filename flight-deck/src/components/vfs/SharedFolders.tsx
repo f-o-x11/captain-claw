@@ -58,7 +58,7 @@ import { FileActionSheet } from '../agents/FileActionSheet'
 import { DatastoreBrowser } from '../agents/DatastoreBrowser'
 import { ShareModal } from '../common/ShareModal'
 import { AgentMenu, type AgentMenuItem } from '../layout/KioskAgentDialogs'
-import { Highlight, libraryIconBtn } from '../library/libraryParts'
+import { FullscreenButton, Highlight, libraryIconBtn } from '../library/libraryParts'
 import { FilePreview } from '../library/FilePreview'
 import { isUntrustedFile } from '../../utils/untrustedContent'
 import { DriveConnect } from './DriveConnect'
@@ -701,6 +701,7 @@ export function SharedFolders({ phone = false, canLink = false, onClose, onConne
       <button onClick={refreshAll} className={iconBtn} title="Refresh" aria-label="Refresh">
         <RotateCw className={`h-4 w-4 ${hitsLoading || (open && !entries && !entriesError) ? 'animate-spin' : ''}`} />
       </button>
+      <FullscreenButton />
       <button onClick={onClose} className={iconBtn} title="Close" aria-label="Close">
         <X className="h-4 w-4" />
       </button>
