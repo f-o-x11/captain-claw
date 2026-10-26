@@ -1,10 +1,11 @@
 import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import {
-  Plug, Mail, LayoutGrid, Send, Scale, Mic, Sparkles, MessageCircle, Database, ChevronRight, ChevronLeft, Cable,
+  Plug, Mail, LayoutGrid, Send, Scale, Mic, Sparkles, MessageCircle, Database, ChevronRight, ChevronLeft, Cable, Smartphone,
 } from 'lucide-react'
 import GoogleConnection from '../connections/GoogleConnection'
 import MicrosoftConnection from '../connections/MicrosoftConnection'
 import TelegramConnection from '../connections/TelegramConnection'
+import WhatsAppWebConnection from '../connections/WhatsAppWebConnection'
 import CodexConnection from '../connections/CodexConnection'
 import AntigravityConnection from '../connections/AntigravityConnection'
 import MCPConnection from '../connections/MCPConnection'
@@ -19,6 +20,7 @@ import { JevTeamKey, SonioxTeamKey, SharedMCPServers } from '../admin/SharedCred
 import {
   getOAuthClientConfig, getAdminTelegram, getSharedJevKey, getSharedSonioxKey,
 } from '../../services/sharedIntegrations'
+import { getWhatsAppWebAdmin } from '../../services/whatsappWeb'
 import { useMCPStore } from '../../stores/mcpStore'
 import { useCodexAuthStore } from '../../stores/codexAuthStore'
 import { useConsoleStore } from '../../stores/consoleStore'
@@ -30,7 +32,7 @@ import { Page, PageHeader, Dot } from './parts'
 // own connection. The same cards as Connections and Admin → Integrations; all
 // stay mounted so sign-in popups and half-typed forms survive switching.
 
-type ServiceId = 'google' | 'microsoft' | 'telegram' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'codex' | 'antigravity' | 'whatsapp' | 'typesense'
+type ServiceId = 'google' | 'microsoft' | 'telegram' | 'whatsapp_web' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'codex' | 'antigravity' | 'whatsapp' | 'typesense'
 
 interface Service {
   id: ServiceId
@@ -45,6 +47,7 @@ const SERVICES: Service[] = [
   { id: 'google', label: 'Google', hint: 'Gmail, Calendar and Drive — each person signs in with their own account', icon: Mail, everyone: true },
   { id: 'microsoft', label: 'Microsoft 365', hint: 'Outlook, Calendar and OneDrive — each person signs in', icon: LayoutGrid, everyone: true },
   { id: 'telegram', label: 'Telegram', hint: 'One team bot people talk to their agents through', icon: Send, everyone: true },
+  { id: 'whatsapp_web', label: 'WhatsApp Web', hint: 'Each person links their own WhatsApp as a device (unofficial client)', icon: Smartphone, everyone: true },
   { id: 'mcp', label: 'MCP servers', hint: 'Extra tools for agents from MCP servers', icon: Plug, everyone: true },
   // The admin's own links; everyone links their own systems from Connections.
   { id: 'systems', label: 'Systems', hint: 'Other systems that send your agents messages and files', icon: Cable, everyone: true },
@@ -89,6 +92,13 @@ function useStatuses(accounts: boolean, oauth: boolean): Partial<Record<ServiceI
         : !t.config.enabled
           ? { tone: 'pending', text: 'Bot paused' }
           : t.status.running ? { tone: 'on', text: `@${t.config.bot_username || 'bot'} running` } : { tone: 'pending', text: 'Bot not running' }))
+      .catch(() => {})
+    getWhatsAppWebAdmin()
+      .then((w) => put('whatsapp_web', w.kill_switch
+        ? { tone: 'off', text: 'Switched off (FD_WHATSAPP_WEB)' }
+        : !w.installed
+          ? { tone: 'off', text: 'Not installed' }
+          : w.allowed ? { tone: 'on', text: w.service ? 'Allowed · service running' : 'Allowed' } : { tone: 'off', text: 'Off' }))
       .catch(() => {})
     getSharedJevKey()
       .then((k) => put('jev', k.key_set ? { tone: k.verified === false ? 'pending' : 'on', text: 'Team key shared' } : { tone: 'off', text: 'No team key' }))
@@ -215,6 +225,7 @@ export function ConnectionsConsole() {
           {panel('google', null, <GoogleConnection />)}
           {panel('microsoft', null, <MicrosoftConnection />)}
           {panel('telegram', accounts ? <SharedTelegramBotAdmin /> : null, <TelegramConnection />)}
+          {panel('whatsapp_web', null, <WhatsAppWebConnection />)}
           {panel('mcp', accounts ? <SharedMCPServers refreshTick={0} inline /> : null, <><MCPConnection /><MCPAgentAccess /></>)}
           {panel('systems', null, <AgentLinksConnection active={active === 'systems'} onStatus={setSystems} />)}
           {panel('jev', accounts ? <JevTeamKey refreshTick={0} /> : null, <JevConnection />)}

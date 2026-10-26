@@ -1,5 +1,5 @@
 import { useState, type ComponentType, type ReactNode } from 'react'
-import { Plug, Mail, LayoutGrid, Sparkles, MessageCircle, Database, Scale, Send, Mic, Cable } from 'lucide-react'
+import { Plug, Mail, LayoutGrid, Sparkles, MessageCircle, Database, Scale, Send, Mic, Cable, Smartphone } from 'lucide-react'
 import GoogleConnection from '../components/connections/GoogleConnection'
 import MicrosoftConnection from '../components/connections/MicrosoftConnection'
 import CodexConnection from '../components/connections/CodexConnection'
@@ -12,6 +12,7 @@ import WhatsAppNudgeConnection from '../components/connections/WhatsAppNudgeConn
 import JevConnection from '../components/connections/JevConnection'
 import SonioxConnection from '../components/connections/SonioxConnection'
 import TelegramConnection from '../components/connections/TelegramConnection'
+import WhatsAppWebConnection from '../components/connections/WhatsAppWebConnection'
 import type { MyTelegram } from '../services/sharedIntegrations'
 import { useGoogleAuthStore } from '../stores/googleAuthStore'
 import { useMicrosoftAuthStore } from '../stores/microsoftAuthStore'
@@ -20,7 +21,7 @@ import { useMCPStore } from '../stores/mcpStore'
 import { useJevStore } from '../stores/jevStore'
 import { useSonioxStore } from '../stores/sonioxStore'
 
-export type TabId = 'google' | 'microsoft' | 'telegram' | 'codex' | 'antigravity' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'whatsapp' | 'typesense'
+export type TabId = 'google' | 'microsoft' | 'telegram' | 'whatsapp_web' | 'codex' | 'antigravity' | 'mcp' | 'systems' | 'jev' | 'soniox' | 'whatsapp' | 'typesense'
 
 interface TabDef {
   id: TabId
@@ -35,6 +36,8 @@ const TABS: TabDef[] = [
   { id: 'microsoft', label: 'Microsoft', icon: LayoutGrid },
   // The deck's shared bot — a person's own link to it, so the kiosk shows it too.
   { id: 'telegram', label: 'Telegram', icon: Send },
+  // The person's own WhatsApp, linked as a device — the kiosk shows it too.
+  { id: 'whatsapp_web', label: 'WhatsApp Web', icon: Smartphone },
   { id: 'codex', label: 'ChatGPT', icon: Sparkles, deckOnly: true },
   { id: 'antigravity', label: 'Antigravity', icon: Sparkles, deckOnly: true },
   { id: 'mcp', label: 'MCP Servers', icon: Plug },
@@ -178,6 +181,7 @@ export default function ConnectionsPage({ kiosk = false, initialTab }: { kiosk?:
         {panel('google', <GoogleConnection />)}
         {panel('microsoft', <MicrosoftConnection />)}
         {panel('telegram', <TelegramConnection onStatus={setTelegram} />)}
+        {panel('whatsapp_web', <WhatsAppWebConnection />)}
         {panel('codex', <CodexConnection />)}
         {panel('antigravity', <AntigravityConnection />)}
         {panel('mcp', <><MCPConnection /><MCPAgentAccess /></>)}

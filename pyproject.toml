@@ -107,6 +107,13 @@ faces = [
     "sqlite-vec>=0.1.6",
     "opencv-python-headless>=4.9.0",
 ]
+whatsapp-web = [
+    # The user's own WhatsApp as a linked device (Flight Deck only; see
+    # docs/whatsapp-web-plan.md). Pinned exactly: the service refuses any other
+    # version, because neonize would fetch a native library it doesn't bundle.
+    # libmagic is optional: without it a built-in file-type sniffer is used.
+    "neonize==0.5.2",
+]
 build = [
     "pyinstaller>=6.0.0",
 ]
