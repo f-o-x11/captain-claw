@@ -34,6 +34,7 @@ import json
 import logging
 import re
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from email.headerregistry import Address
 from email.message import EmailMessage
 from typing import Any
@@ -872,10 +873,29 @@ def describe_repeat(match: dict[str, str]) -> str:
             f"{match.get('message_id') or '?'} ({what})")
 
 
-def repeat_refusal(matches: list[dict[str, str]], *, lead: str) -> str:
+def repeat_way_past(*, reply: bool = False) -> str:
+    """How every repeat refusal (this module's and microsoft_mail's) ends: don't
+    retry, the user's explicit override, and — unless it is a *reply*, which
+    the thread decides rather than the subject — how the next edition of a
+    recurring email (a scheduled report) gets past it: a dated subject, which
+    :func:`subjects_match` never takes for the earlier one (other numbers)."""
+    text = (" Don't retry. Only if the user explicitly asks for another, separate copy, "
+            "call again with allow_repeat=true.")
+    if reply:
+        return text
+    today = datetime.now(timezone.utc).date().isoformat()
+    return text + (
+        " A new edition of a recurring email (a scheduled or weekly report with new "
+        f'content) is not a repeat: put its date in the subject (e.g. "… — {today}") '
+        "and call again, without allow_repeat."
+    )
+
+
+def repeat_refusal(matches: list[dict[str, str]], *, lead: str, reply: bool = False) -> str:
     """The refusal for :func:`find_repeats`' *matches* — what exists, what to do
-    instead, and the one way past it. *lead* says what didn't happen ("Not
-    created", "Not sent"). Always contains :data:`REPEAT_MARK`."""
+    instead, and the ways past it (:func:`repeat_way_past`; *reply*: the email
+    goes into a thread). *lead* says what didn't happen ("Not created", "Not
+    sent"). Always contains :data:`REPEAT_MARK`."""
     first = matches[0]
     more = f" and {len(matches) - 1} more like it" if len(matches) > 1 else ""
     draft_id = next(
@@ -891,10 +911,7 @@ def repeat_refusal(matches: list[dict[str, str]], *, lead: str) -> str:
             f" To send that draft use google_mail action=send_draft draft_id={draft_id}; "
             f"to change it use action=update_draft draft_id={draft_id}."
         )
-    return text + (
-        " Don't retry. Only if the user explicitly asks for another, separate copy, "
-        "call again with allow_repeat=true."
-    )
+    return text + repeat_way_past(reply=reply)
 
 
 def is_repeat_refusal(text: str) -> bool:

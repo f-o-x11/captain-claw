@@ -735,7 +735,8 @@ async def _compose_checked(
         if repeats:
             raise HTTPException(
                 status_code=409,
-                detail=gmail_compose.repeat_refusal(repeats, lead="Duplicate: not sent"),
+                detail=gmail_compose.repeat_refusal(
+                    repeats, lead="Duplicate: not sent", reply=bool(thread_id)),
             )
     return _Composed(
         to=to, cc=cc, bcc=bcc, subject=subject, body=body, html_body=html_body,

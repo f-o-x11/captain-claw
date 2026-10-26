@@ -42,7 +42,7 @@ import {
   type ExportFormat,
   type RowsPage,
 } from '../../services/dataLibraryApi'
-import { FacetGroup, Highlight, ScanStatus, libraryIconBtn as iconBtn } from './libraryParts'
+import { FacetGroup, FullscreenButton, Highlight, ScanStatus, libraryIconBtn as iconBtn } from './libraryParts'
 
 // ── Data library ────────────────────────────────────────────────────
 //
@@ -319,6 +319,7 @@ export function DataLibrary({ phone = false, initialAgent, onClose, onOpenAgent 
       <button onClick={rescan} disabled={running} className={iconBtn} title="Look for new tables" aria-label="Look for new tables">
         <RotateCw className={`h-4 w-4 ${running ? 'animate-spin' : ''}`} />
       </button>
+      <FullscreenButton />
       <button onClick={onClose} className={iconBtn} title="Close" aria-label="Close">
         <X className="h-4 w-4" />
       </button>
@@ -681,6 +682,7 @@ function TableView({ item, terms, phone, onBack, onClose, onChanged, onRescan, o
       <button onClick={refresh} disabled={refreshing} className={`${iconBtn} shrink-0`} title="Refresh — the table as it is now" aria-label="Refresh">
         <RotateCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
       </button>
+      <FullscreenButton className={`${iconBtn} shrink-0`} />
       <button onClick={onClose} className={`${iconBtn} shrink-0`} title="Close" aria-label="Close">
         <X className="h-4 w-4" />
       </button>

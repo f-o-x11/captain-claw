@@ -1,12 +1,27 @@
-import type { ReactNode } from 'react'
-import { AlertTriangle, Loader2, Sparkles } from 'lucide-react'
+import { useContext, type ReactNode } from 'react'
+import { AlertTriangle, Loader2, Maximize2, Minimize2, Sparkles } from 'lucide-react'
 import { fmtRelative } from '../../services/schedulerApi'
 import type { Facet, LibraryState } from '../../services/fileLibraryApi'
+import { DialogFullscreen } from './dialogFullscreen'
 
 // Pieces the File library and the Data library share: the scan's progress
-// line, a filter list with counts, and search-term highlighting.
+// line, a filter list with counts, search-term highlighting, and the
+// fullscreen switch (Shared folders has it too).
 
 export const libraryIconBtn = 'rounded-lg p-2 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50'
+
+/** Fills the window with the host dialog (DialogFullscreen), or back.
+ *  Nothing without a host that can. */
+export function FullscreenButton({ className = libraryIconBtn }: { className?: string }) {
+  const host = useContext(DialogFullscreen)
+  if (!host) return null
+  const label = host.fullscreen ? 'Exit fullscreen' : 'Fullscreen'
+  return (
+    <button onClick={host.toggle} className={className} title={label} aria-label={label} aria-pressed={host.fullscreen}>
+      {host.fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+    </button>
+  )
+}
 
 type Tone = 'violet' | 'emerald'
 const TONE: Record<Tone, { icon: string; bar: string }> = {

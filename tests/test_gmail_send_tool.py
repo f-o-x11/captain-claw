@@ -23,6 +23,7 @@ import email
 import email.policy
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -651,9 +652,18 @@ def test_repeat_refusal_wording():
     assert "send_draft draft_id=r-1" in text and "update_draft draft_id=r-1" in text
     assert "allow_repeat=true" in text and "Don't retry" in text
     assert gmail_compose.is_repeat_refusal(text)
+    # A recurring email's next edition is pointed at a dated subject (today's date).
+    today = datetime.now(timezone.utc).date().isoformat()
+    assert "recurring email" in text and f"— {today}" in text
     only_sent = gmail_compose.repeat_refusal([sent], lead="Not sent")
     assert "the email sent on 2026-10-01 09:30, Message ID s1" in only_sent
     assert "send_draft" not in only_sent  # no draft to point at
+    # A reply is matched by its thread, not its subject: no dated-subject advice.
+    reply = gmail_compose.repeat_refusal([sent], lead="Not sent", reply=True)
+    assert "allow_repeat=true" in reply and "recurring email" not in reply
+    # The dated subject really is a different email to the check.
+    assert not gmail_compose.subjects_match(f"Report — {today}", "Report")
+    assert not gmail_compose.subjects_match("Report — 2026-10-26", "Report — 2026-10-19")
     assert not gmail_compose.is_repeat_refusal("Message or thread not found.")
 
 

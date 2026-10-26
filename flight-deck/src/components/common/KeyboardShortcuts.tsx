@@ -7,6 +7,7 @@ import { useAuthStore, selectKioskLocked } from '../../stores/authStore'
 const shortcuts = [
   { keys: ['Cmd/Ctrl', 'D'], action: 'Toggle Director' },
   { keys: ['Cmd/Ctrl', 'J'], action: 'Toggle Chat Panel / Queue' },
+  { keys: ['Cmd/Ctrl', 'Enter'], action: 'Queue the chat message (Auto)' },
   { keys: ['Cmd/Ctrl', 'K'], action: 'Toggle Shortcuts Help' },
   { keys: ['Cmd/Ctrl', '\\'], action: 'Simple / Full view' },
   { keys: ['Cmd/Ctrl', '['], action: 'Previous Chat Tab' },

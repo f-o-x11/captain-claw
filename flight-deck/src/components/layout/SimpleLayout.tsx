@@ -56,6 +56,7 @@ import { FileLibrary } from '../library/FileLibrary'
 import { useDataLibraryStore } from '../../stores/dataLibraryStore'
 import { DataLibrary } from '../library/DataLibrary'
 import { SharedFolders } from '../vfs/SharedFolders'
+import { DialogFullscreen } from '../library/dialogFullscreen'
 import { isManagedAgent } from '../../utils/managedAgents'
 import { SHARED_PREFIX, sharedCaps, sharedContainerId } from '../../utils/sharedAgent'
 import { CHAT_ONLY_TEXT, workspaceVisible } from '../../utils/sharedWorkspace'
@@ -1117,21 +1118,25 @@ function KioskDialog({ label, onClose, children }: { label: string; onClose: () 
 // Wider than the other kiosk dialogs: a list beside the selected item's
 // detail (the library also has its filters). Escape is the component's
 // (Scheduled tasks keeps an unsaved edit open; the library closes its viewer
-// first).
+// first). Off a phone it can fill the window — the libraries and shared
+// folders put the switch in their header (FullscreenButton).
 
 function KioskWideDialog({ label, phone, widest = false, onClose, children }: {
   label: string; phone: boolean; widest?: boolean; onClose: () => void; children: ReactNode
 }) {
+  const [fullscreen, setFullscreen] = useState(false)
+  const host = useMemo(() => (phone ? null : { fullscreen, toggle: () => setFullscreen((v) => !v) }), [phone, fullscreen])
+  const big = fullscreen && !phone
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 wide:items-center wide:p-4" onClick={phone ? undefined : onClose}>
+    <div className={`fixed inset-0 z-50 flex items-stretch justify-center bg-black/60 wide:items-center ${big ? '' : 'wide:p-4'}`} onClick={phone ? undefined : onClose}>
       <div
         role="dialog"
         aria-label={label}
-        className={`relative flex h-[100dvh] w-full flex-col overflow-hidden bg-zinc-950 pb-[env(safe-area-inset-bottom)] shadow-2xl wide:h-[88vh] wide:rounded-xl wide:border wide:border-zinc-800 wide:pb-0 ${
-          widest ? 'wide:max-w-6xl' : 'wide:max-w-5xl'}`}
+        className={`relative flex h-[100dvh] w-full flex-col overflow-hidden bg-zinc-950 pb-[env(safe-area-inset-bottom)] shadow-2xl wide:pb-0 ${big ? ''
+          : `wide:h-[88vh] wide:rounded-xl wide:border wide:border-zinc-800 ${widest ? 'wide:max-w-6xl' : 'wide:max-w-5xl'}`}`}
         onClick={(e) => e.stopPropagation()}
       >
-        {children}
+        <DialogFullscreen.Provider value={host}>{children}</DialogFullscreen.Provider>
       </div>
     </div>,
     document.body,
