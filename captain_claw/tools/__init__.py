@@ -81,6 +81,8 @@ from captain_claw.tools.project_memory import ProjectMemoryTool
 from captain_claw.tools.terminal import TerminalTool
 from captain_claw.tools.vfs import VfsTool
 from captain_claw.tools.cv import CvTool
+from captain_claw.tools.docx_tool import DocxTool
+from captain_claw.tools.self_check import SelfCheckTool
 
 __all__ = [
     "Tool",
@@ -104,6 +106,7 @@ __all__ = [
     "WebSearchTool",
     "PdfExtractTool",
     "DocxExtractTool",
+    "DocxTool",
     "XlsxExtractTool",
     "PptxExtractTool",
     "PocketTTSTool",
@@ -164,4 +167,5 @@ __all__ = [
     "TerminalTool",
     "VfsTool",
     "CvTool",
+    "SelfCheckTool",
 ]

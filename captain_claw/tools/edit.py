@@ -127,6 +127,14 @@ class EditTool(Tool):
         **kwargs: Any,
     ) -> ToolResult:
         try:
+            # A Word file is a zip of XML, not text: a text edit would break it
+            # and leave no tracked change.
+            if Path(str(path)).suffix.lower() in (".docx", ".docm", ".dotx"):
+                return ToolResult(
+                    success=False,
+                    error="edit changes text files. For a Word document use the docx "
+                          "tool (action=edit) — its changes are tracked in Word.",
+                )
             # Read-only linked folders (e.g. Google Drive mounts) refuse edits
             # up front — before action/param validation — so a ro mount is
             # rejected the same way regardless of what edit was attempted.
