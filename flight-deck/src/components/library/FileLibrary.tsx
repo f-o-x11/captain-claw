@@ -50,7 +50,7 @@ import {
   type LibrarySort,
   type LibraryState,
 } from '../../services/fileLibraryApi'
-import { FacetGroup, Highlight, ScanStatus, libraryIconBtn } from './libraryParts'
+import { FacetGroup, FullscreenButton, Highlight, ScanStatus, libraryIconBtn } from './libraryParts'
 import { FilePreview } from './FilePreview'
 import { isUntrustedFile } from '../../utils/untrustedContent'
 
@@ -429,6 +429,7 @@ export function FileLibrary({ phone = false, initialAgent, onClose, onOpenAgent,
       <button onClick={rescan} disabled={running} className={iconBtn} title="Look for new files" aria-label="Look for new files">
         <RotateCw className={`h-4 w-4 ${running ? 'animate-spin' : ''}`} />
       </button>
+      <FullscreenButton />
       <button onClick={onClose} className={iconBtn} title="Close" aria-label="Close">
         <X className="h-4 w-4" />
       </button>
