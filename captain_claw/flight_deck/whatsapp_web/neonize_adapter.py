@@ -281,6 +281,15 @@ class NeonizeAdapter:
     async def pair_code(self, phone: str) -> str:
         return str(await self._client.PairPhone(phone, True))
 
+    async def download(self, field: str, raw_hex: str) -> bytes:
+        """A message's media, from WhatsApp's servers (decrypted). *field* and
+        *raw_hex* are what :func:`parse.content` kept: the media sub-message."""
+        from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
+
+        msg = Message()
+        getattr(msg, field).MergeFromString(bytes.fromhex(raw_hex))
+        return bytes(await self._client.download_any(msg) or b"")
+
     async def logout(self) -> None:
         await self._client.logout()
 

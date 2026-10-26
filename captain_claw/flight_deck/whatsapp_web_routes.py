@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from captain_claw.flight_deck import fd_crypto
@@ -281,7 +281,8 @@ def _readable(s: sup.Supervisor, owner: str) -> bool:
     return link.get("state") in _READABLE and bool(link.get("linked_at"))
 
 
-async def _agent_call(request: Request, path: str, body: dict[str, Any] | None = None) -> tuple[str, dict]:
+async def _agent_ready(request: Request) -> tuple[str, sup.Supervisor]:
+    """(owner, supervisor) for an agent call, or the HTTP refusal."""
     reason = await _unavailable_reason(get_db())
     if reason:
         raise HTTPException(status_code=409, detail=reason)
@@ -289,6 +290,11 @@ async def _agent_call(request: Request, path: str, body: dict[str, Any] | None =
     s = _supervisor()
     if not _readable(s, owner):
         raise HTTPException(status_code=409, detail=_NOT_LINKED)
+    return owner, s
+
+
+async def _agent_call(request: Request, path: str, body: dict[str, Any] | None = None) -> tuple[str, dict]:
+    owner, s = await _agent_ready(request)
     try:
         return owner, await s.request("GET" if body is None else "POST", f"/links/{owner}{path}", body)
     except (sup.ServiceDown, sup.ServiceError) as exc:
@@ -338,6 +344,24 @@ class AgentContactsBody(BaseModel):
 async def agent_contacts(body: AgentContactsBody, request: Request) -> dict[str, Any]:
     _owner, data = await _agent_call(request, "/contacts", body.model_dump())
     return data
+
+
+class AgentAttachmentBody(BaseModel):
+    chat: str
+    id: str
+
+
+@router.post("/fd/whatsapp-web/agent/attachment")
+async def agent_attachment(body: AgentAttachmentBody, request: Request) -> Response:
+    """One message's file, downloaded now from WhatsApp's servers: the bytes,
+    with its details (JSON) in ``X-WAW-Meta``."""
+    owner, s = await _agent_ready(request)
+    try:
+        content, headers = await s.request_raw("POST", f"/links/{owner}/attachment", body.model_dump())
+    except (sup.ServiceDown, sup.ServiceError) as exc:
+        raise _service_error(exc) from None
+    return Response(content=content, media_type=headers.get("content-type") or "application/octet-stream",
+                    headers={"X-WAW-Meta": headers.get("x-waw-meta") or "{}"})
 
 
 @router.post("/fd/whatsapp-web/agent/news")

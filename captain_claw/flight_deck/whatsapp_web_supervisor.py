@@ -323,6 +323,31 @@ class Supervisor:
             return data if isinstance(data, dict) else {}
         raise ServiceDown("The WhatsApp Web service isn't answering")
 
+    async def request_raw(self, method: str, path: str, body: dict[str, Any] | None = None, *,
+                          timeout: float = 180.0) -> tuple[bytes, dict[str, str]]:
+        """Like :meth:`request`, for a route that answers with bytes (a file):
+        returns (content, lower-cased headers)."""
+        for attempt in (1, 2):
+            await self.ensure_running()
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    r = await client.request(
+                        method, f"http://127.0.0.1:{self._port}{path}", json=body,
+                        headers={"Authorization": f"Bearer {self._secret()}"})
+            except httpx.TransportError:
+                self._port = 0
+                if attempt == 2:
+                    raise ServiceDown("The WhatsApp Web service isn't answering") from None
+                continue
+            if r.status_code >= 400:
+                try:
+                    detail = (r.json() or {}).get("detail")
+                except ValueError:
+                    detail = ""
+                raise ServiceError(r.status_code, str(detail or f"HTTP {r.status_code}"))
+            return r.content, {k.lower(): v for k, v in r.headers.items()}
+        raise ServiceDown("The WhatsApp Web service isn't answering")
+
     # ── bells + restarts ────────────────────────────────────────────
 
     async def _drain_loop(self) -> None:

@@ -17,16 +17,18 @@ person and only ever passes their own id.
 * ``POST   /links/{user_id}/contacts``   ``{query, limit}``
 * ``POST   /links/{user_id}/news``       ``{agent}`` → what's new for that agent (moves its cursor)
 * ``PUT    /links/{user_id}/retention``  ``{days}`` (null = keep everything)
+* ``POST   /links/{user_id}/attachment`` ``{chat, id}`` → the file's bytes, details in ``X-WAW-Meta``
 * ``GET    /events?after=<seq>``         bells for Flight Deck to ring
 """
 
 from __future__ import annotations
 
 import hmac
+import json
 import os
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from captain_claw.flight_deck.whatsapp_web.engine import Engine, LinkError
@@ -58,6 +60,11 @@ class ContactsBody(BaseModel):
 
 class NewsBody(BaseModel):
     agent: str
+
+
+class AttachmentBody(BaseModel):
+    chat: str
+    id: str
 
 
 class RetentionBody(BaseModel):
@@ -139,6 +146,16 @@ def build_app(engine: Engine, secret: str, *, version: str = "", lifespan: Any =
     @app.post("/links/{user_id}/news", dependencies=auth)
     async def news(user_id: str, body: NewsBody) -> dict[str, Any]:
         return await answer(engine.news)(user_id, agent=body.agent)
+
+    @app.post("/links/{user_id}/attachment", dependencies=auth)
+    async def attachment(user_id: str, body: AttachmentBody) -> Response:
+        """The file's bytes; its details (JSON, ASCII) in ``X-WAW-Meta``."""
+        try:
+            data, meta = await engine.attachment(user_id, chat=body.chat, message_id=body.id)
+        except LinkError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from None
+        return Response(content=data, media_type=meta.get("mimetype") or "application/octet-stream",
+                        headers={"X-WAW-Meta": json.dumps(meta, ensure_ascii=True)})
 
     @app.put("/links/{user_id}/retention", dependencies=auth)
     async def retention(user_id: str, body: RetentionBody) -> dict[str, Any]:

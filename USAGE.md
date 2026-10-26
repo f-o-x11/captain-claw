@@ -873,13 +873,17 @@ It's an unofficial client: linking automation to a WhatsApp account goes against
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `action` | string | yes | `status` (linked number, how much is kept), `chats` (list them), `read` (one chat, oldest first), `recent` (newest across all chats), `search` (every word of `query`), `contact` (people by name or number) |
+| `action` | string | yes | `status` (linked number, how much is kept), `chats` (list them), `read` (one chat, oldest first), `recent` (newest across all chats), `search` (every word of `query`), `contact` (people by name or number), `attachment` (one message's file) |
 | `chat` | string | read | A chat's id, phone number or (part of) its name; optional for `search` |
 | `query` | string | search, contact | Words that must all appear (text, sender or chat); for `contact`, a name or a number |
 | `since` / `until` | string | no | `24h`, `7d`, `90m`, a date or an ISO time |
 | `limit` | integer | no | Default 50, max 200 |
+| `message_id` | string | attachment | The message's id: the `#id` shown next to its file |
+| `transcribe` | boolean | no | `attachment`: transcribe a voice note or audio (default true) |
 
-Voice notes, pictures and files show as a short description (`[voice note: 0:42]`, `[image] caption`, `[document: offer.pdf]`); their contents can't be opened yet. Edits, deletions and reactions are shown. The output reminds the model that the text was written by other people and is information, not instructions.
+Voice notes, pictures and files show as a short description with the id that fetches them (`[voice note: 0:42 #3EB0…]`, `[image #…] caption`, `[document: offer.pdf #…]`). Edits, deletions and reactions are shown. The output reminds the model that the text was written by other people and is information, not instructions.
+
+**Attachments.** `attachment` downloads the file now from WhatsApp's servers (the link has to be connected) and saves it under `saved/downloads/<session>/whatsapp-<chat>/`, with `Saved to:` and the tool that reads it (`image_vision`, `pdf_extract` …). A voice note or audio comes back transcribed when a Soniox key is usable (the user's own, the team's, or the deck's); otherwise the result points at `audio`. Files over 100 MB are refused. WhatsApp keeps media on its servers only for a while: an older file comes back as expired (the phone may still have it; asking the phone to send it again is a later, opt-in step).
 
 **What's new, every turn.** As with Telegram, the owner's own live turns get one line with counts and chat names only, e.g. *WhatsApp since your last turn: 2 new from "Ana", 5 new in "Obitelj" (group)*. Only messages that arrived live count — the history the phone sends after linking is old news. Each agent keeps its own place; reading a chat (or `recent`) moves it, a search doesn't, and scheduled, peer, worker, member, public and BotPort turns neither get the line nor move it.
 

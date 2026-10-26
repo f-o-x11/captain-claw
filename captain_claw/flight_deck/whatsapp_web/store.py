@@ -471,6 +471,20 @@ class Store:
                 break
         return out
 
+    def media(self, chat_jid: str, message_id: str) -> dict[str, Any] | None:
+        """One message's attachment details, unsealed (with what a download
+        needs), or None when there's no such message."""
+        with self._lock:
+            r = self._db.execute(
+                "SELECT id, kind, ts, from_me, sender_jid, deleted, media FROM messages WHERE chat_jid=? AND id=?",
+                (chat_jid, str(message_id or "").strip().lstrip("#"))).fetchone()
+        if r is None:
+            return None
+        media = _unseal(r["media"]) if r["media"] else None
+        return {"id": r["id"], "kind": r["kind"], "ts": int(r["ts"] or 0), "from_me": bool(r["from_me"]),
+                "sender_jid": r["sender_jid"], "deleted": bool(r["deleted"]),
+                "media": media if isinstance(media, dict) else None}
+
     def contacts(self, query: str = "", limit: int = 20) -> list[dict[str, Any]]:
         """People (address book, push names, everyone who wrote) matching *query*."""
         q = str(query or "").casefold().strip()

@@ -1,11 +1,12 @@
 # whatsapp_web — read the owner's own WhatsApp, like mail
 
-**Status:** Phases 0 and 1 are implemented: P0 (linking) on `feat/whatsapp-web-p0`, and P1
-(the store, history and live ingest, and the read-only `whatsapp_web` tool) on
-`feat/whatsapp-web-p1`, which builds on it. Both are covered by unit tests, including parser
-tests on real neonize protos and a test that spawns the real service. Neither has been run with
-a real phone yet; the PoC (2026-10-26, below) is still the only live evidence. The open
-questions are decided (see "Decisions").
+**Status:** Phases 0–2 are implemented, each on its own stacked branch: P0 linking
+(`feat/whatsapp-web-p0`), P1 the store, history and live ingest and the read-only `whatsapp_web`
+tool (`feat/whatsapp-web-p1`), P2 attachments and voice-note transcription
+(`feat/whatsapp-web-p2`). They're covered by unit tests, including parser tests on real neonize
+protos and a test that spawns the real service. None has been run with a real phone yet; the PoC
+(2026-10-26, below) is still the only live evidence. The open questions are decided (see
+"Decisions").
 **Origin:** we tried `whatsapp-mcp-pro` (a Go bridge on whatsmeow plus a Python MCP server)
 and wanted the same reach without MCP or Go builds: one internal tool, `whatsapp_web`,
 that reads the user's own WhatsApp account the way `google_mail` and `telegram_inbox`
@@ -353,7 +354,15 @@ The tool never sets presence and never marks messages read.
   - the counts per kind match what was received, minus the technical-only kinds;
   - an agent answers "what did <person> say about X last week" from `search` + `read`.
 
-### P2 — attachments and voice notes
+### P2 — attachments and voice notes ✓ (implemented; not live-tested)
+
+As built: the tool's `attachment` action (`chat` + `message_id`, the `#id` every file line now
+shows, even in cross-chat listings) goes through `/fd/whatsapp-web/agent/attachment` → the
+service's `/links/{user}/attachment` → `download_any` on the media sub-message the store kept.
+Voice notes and audio are transcribed in the same call when Soniox is usable
+(`transcribe=false` skips it). Refusals have their own status: deleted 410, expired on
+WhatsApp's servers 410, not connected 409, over 100 MB 413, no file 404.
+
 
 - `attachment` via `download_any` from the stored media sub-message into `saved/`; voice
   notes through `audio transcribe`.

@@ -50,11 +50,16 @@ _STORE_FILES = ("store.sqlite3", "store.sqlite3-wal", "store.sqlite3-shm", "stor
 # Events that only feed the store: state.json isn't rewritten for each.
 _STORE_ONLY = frozenset({"message", "directory"})
 _PURGE_EVERY = 3600.0
+# Bigger attachments are refused rather than pulled into memory.
+MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024
+# What WhatsApp's servers say when a file is gone (media expires there).
+_GONE_MARKERS = ("404", "410", "not found", "expired", "gone", "no longer")
 
 
 class Adapter(Protocol):
     async def connect(self) -> None: ...
     async def pair_code(self, phone: str) -> str: ...
+    async def download(self, field: str, raw_hex: str) -> bytes: ...
     async def logout(self) -> None: ...
     async def stop(self) -> None: ...
 
@@ -493,6 +498,51 @@ class Engine:
             return {"connected": False}
         store = self._open_store(link)
         return {"connected": True, **await asyncio.to_thread(store.news, agent or "_", now=self._clock())}
+
+    async def attachment(self, user_id: str, *, chat: str, message_id: str) -> tuple[bytes, dict[str, Any]]:
+        """A message's file (photo, voice note, document …), downloaded now from
+        WhatsApp's servers — the link has to be up. Returns (bytes, details)."""
+        store = self._reader(user_id)
+        link = self._links[user_id]
+        try:
+            found = await asyncio.to_thread(store.find_chat, chat)
+        except ChatNotFound as exc:
+            options = "; ".join(f"{c['title']} (id {c['jid']})" for c in exc.candidates)
+            raise LinkError(404, f"{exc}{': ' + options if options else ''}") from None
+        item = await asyncio.to_thread(store.media, found["jid"], message_id)
+        if item is None:
+            raise LinkError(404, f"No message #{message_id} in {found['title']}")
+        if item["deleted"]:
+            raise LinkError(410, "That message was deleted, and its file with it")
+        media = item["media"] or {}
+        if not media.get("raw") or not media.get("field"):
+            raise LinkError(404, f"Message #{message_id} has no file (it's {item['kind']})")
+        if int(media.get("size") or 0) > MAX_ATTACHMENT_BYTES:
+            raise LinkError(413, f"The file is too large ({int(media['size']) // (1024 * 1024)} MB; "
+                                 f"the limit is {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB)")
+        if link.adapter is None or link.state.state not in ("connected", "disconnected"):
+            raise LinkError(409, "WhatsApp isn't connected right now, and files come from WhatsApp's "
+                                 "servers: the user can check the link in Flight Deck → Connections")
+        try:
+            data = await link.adapter.download(str(media["field"]), str(media["raw"]))
+        except Exception as exc:
+            text = str(exc)
+            if any(m in text.lower() for m in _GONE_MARKERS):
+                raise LinkError(410, "This file is no longer on WhatsApp's servers (it expired). The "
+                                     "phone may still have it.") from None
+            raise LinkError(502, f"WhatsApp didn't hand the file over: {text or type(exc).__name__}") from None
+        if not data:
+            raise LinkError(502, "WhatsApp handed over an empty file")
+        if len(data) > MAX_ATTACHMENT_BYTES:
+            raise LinkError(413, "The file is too large")
+        names = await asyncio.to_thread(store.chats)
+        title = next((c["title"] for c in names if c["jid"] == found["jid"]), found["title"])
+        return data, {
+            "id": item["id"], "kind": item["kind"], "chat": title, "chat_jid": found["jid"],
+            "ts": item["ts"], "from_me": item["from_me"], "mimetype": str(media.get("mimetype") or ""),
+            "file_name": str(media.get("file_name") or ""), "seconds": int(media.get("seconds") or 0),
+            "size": len(data),
+        }
 
     async def set_retention(self, user_id: str, days: int | None) -> dict[str, Any]:
         if days is not None and days not in RETENTION_CHOICES:

@@ -13,6 +13,7 @@ Flight Deck there is no linked WhatsApp.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -214,6 +215,33 @@ async def messages(
     return await _post("/fd/whatsapp-web/agent/messages", {
         "chat": chat, "query": query, "since": since, "until": until, "limit": limit,
     })
+
+
+async def attachment(*, chat: str, message_id: str) -> tuple[bytes, dict[str, Any]]:
+    """One message's file (downloaded by Flight Deck from WhatsApp's servers)
+    and its details: kind, mimetype, file_name, seconds, size, chat, ts."""
+    if _member_call():
+        raise WhatsAppWebError(0, MEMBER_REFUSED)
+    if not _fd_base():
+        raise WhatsAppWebError(0, "The user's WhatsApp lives in Flight Deck, and this agent isn't running under one")
+    try:
+        async with httpx.AsyncClient(timeout=240) as client:
+            resp = await client.post(f"{_fd_base()}/fd/whatsapp-web/agent/attachment",
+                                     json={"chat": chat, "id": message_id}, headers=_fd_headers())
+    except Exception as exc:
+        raise WhatsAppWebError(0, f"Could not reach Flight Deck for WhatsApp: {type(exc).__name__}") from None
+    if resp.status_code != 200:
+        detail = _detail(resp)
+        if resp.status_code in (404, 405) and detail in ("", "Not Found", "Method Not Allowed"):
+            detail = _OLD_DECK
+        if resp.status_code in (401, 403):
+            _mark(False)
+        raise WhatsAppWebError(resp.status_code, detail or f"Flight Deck refused (HTTP {resp.status_code})")
+    try:
+        meta = json.loads(resp.headers.get("x-waw-meta") or "{}")
+    except ValueError:
+        meta = {}
+    return resp.content, meta if isinstance(meta, dict) else {}
 
 
 async def contacts(*, query: str = "", limit: int = 20) -> dict[str, Any]:
