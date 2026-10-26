@@ -49,9 +49,9 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.20"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.21"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.19.0"
+#define FW_VERSION "0.19.1"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -271,6 +271,7 @@ static constexpr uint8_t kBright = 128;
 static constexpr uint32_t kFlashMs = 700;    // white / normal, every 100 ms
 static constexpr uint16_t kGreen = ui::rgb(40, 200, 90), kRed = ui::rgb(230, 50, 50);
 static constexpr uint16_t kYellow = ui::rgb(250, 200, 40), kCyan = ui::rgb(60, 210, 240);
+static constexpr uint16_t kMagenta = ui::rgb(235, 40, 170);  // what waits in Flight Deck
 static constexpr uint16_t kOrange = ui::rgb(255, 150, 40), kText = ui::rgb(230, 230, 230);
 static constexpr size_t kMaxImage = 256 * 1024;
 static constexpr uint64_t kButtonPins = (1ULL << board::kTalkPin) | (1ULL << board::kSidePin) |
@@ -1914,6 +1915,14 @@ static void waitingCue() {
   if (settings.cueBuzz) buzzTicks(2, 120, 140);
   leds::notify();
   touch();
+  // What came, on the screen at once (a press goes back) — not over an
+  // answer, a menu or a question; the paper's lights say it.
+  if (!board::kEpaper && (mode == Mode::Idle || mode == Mode::Home || mode == Mode::Backdrop ||
+                          mode == Mode::Notice)) {
+    String body = waitingLine.length() ? waitingLine : String("Something new");
+    body += "\n\nOpen the bell";  // Flight Deck's notifications (the badge up top says how many wait)
+    notice("Flight Deck", body, kMagenta);
+  }
 }
 
 static void waitingCuePoll() {
@@ -1999,9 +2008,7 @@ static void onText(const char* payload, size_t len) {
     const int was = waitingCount;
     waitingCount = rtcWaiting = max(0, (int)(doc["count"] | 0));
     leds::setWaiting(waitingCount > 0);
-#if defined(PAPER_B)
     ui::setWaiting(waitingCount);
-#endif
     String line = doc["text"] | "";
     if (line.length()) {
       waitingLine = line;
@@ -2907,9 +2914,7 @@ void setup() {
   leds::setLevel(settings.ledLevel);
   waitingCount = rtcWaiting;  // as last heard, until the deck says again
   leds::setWaiting(waitingCount > 0);
-#if defined(PAPER_B)
   ui::setWaiting(waitingCount);
-#endif
 #if defined(BOARD_PAPERCOLOR)
   paperPower();
 #endif

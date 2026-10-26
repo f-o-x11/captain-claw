@@ -13,6 +13,9 @@ goes to every channel the user switched on in their autonomy config:
     device that was asleep beeps for what came meanwhile when it next
     connects (``device_connected``), once.
 
+And always the bell — Flight Deck's own notifications, in the full view and
+the kiosk alike: where the text is read, and a proposal approved or rejected.
+
 The devices' count follows the ledger: every status change calls
 ``waiting_may_have_changed`` (autonomy.py), which sends a silent update
 when the number moved.
@@ -34,6 +37,10 @@ _log = logging.getLogger(__name__)
 # for this long; after that it only shows the count.
 UNSEEN_KEEP_S = 24 * 3600.0
 DEVICE_LINE_MAX = 120
+# A bell notification's ref type, by its type (the action's id is the ref):
+# the bell offers Approve / Reject on a proposal while it waits.
+BELL_REF = "autonomy_action"
+_BELL_REFS = {"autonomy_proposal": BELL_REF, "autonomy_nudge": "autonomy_nudge"}
 
 # The newest thing that beeped for each user (wall time, its line), when each
 # device last beeped (keyed by user + device id), and the waiting count each
@@ -79,16 +86,20 @@ def _device_key(user_id: str, device_id: str) -> str:
 
 async def notify_owner(
     user_id: str, kind: str, text: str, *, device_text: str = "", cfg: dict[str, Any] | None = None,
+    bell: tuple[str, str, str] | None = None, action_id: str = "",
 ) -> dict[str, Any]:
     """Send ``text`` to each channel ``user_id`` switched on. ``kind`` ("nudge",
     "proposal", "test") names the log lines; ``device_text`` is the devices'
-    line (default: the text's first). Returns what each channel did, None
+    line (default: the text's first); ``bell`` = (type, title, body) goes to
+    the bell first, about ``action_id``. Returns what each channel did, None
     where it is off: WhatsApp ``[sent, total]``, Telegram ``True/False``,
-    devices how many beeped. Never raises."""
-    out: dict[str, Any] = {"whatsapp": None, "telegram": None, "devices": None}
+    devices how many beeped, the bell ``True/False``. Never raises."""
+    out: dict[str, Any] = {"whatsapp": None, "telegram": None, "devices": None, "bell": None}
     text = str(text or "").strip()
     if not text:
         return out
+    if bell:
+        out["bell"] = await _to_bell(user_id, *bell, action_id=action_id)
     try:
         cfg = cfg or resolve_config(user_id)
     except Exception as exc:  # noqa: BLE001
@@ -145,6 +156,21 @@ async def notify_owner(
     return out
 
 
+async def _to_bell(user_id: str, bell_type: str, title: str, body: str, *, action_id: str = "") -> bool:
+    """One bell notification for the user (``local`` with sign-in off)."""
+    try:
+        from captain_claw.flight_deck.auth import get_db
+
+        await get_db().add_notification(
+            _norm_user(user_id), bell_type, title.strip()[:200], body.strip()[:2000],
+            ref_type=_BELL_REFS.get(bell_type, "") if action_id else "", ref_id=action_id,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _log.debug("bell notification for %s failed: %s", user_id, exc)
+        return False
+
+
 async def _push_devices(user_id: str, count: int, text: str, beep: bool) -> list[str]:
     from captain_claw.flight_deck.device_bridge import push_waiting
 
@@ -161,9 +187,13 @@ async def notify_proposal(user_id: str, action: dict[str, Any]) -> dict[str, Any
         _log.debug("proposal notify: no count for %s: %s", user_id, exc)
         waiting = 1
     title = str(action.get("title") or "").strip()
+    rationale = str(action.get("rationale") or "").strip()
     return await notify_owner(
         user_id, "proposal", proposal_text(action, waiting),
-        device_text=f"Approve in Flight Deck: {title}" if title else "A proposal waits in Flight Deck",
+        device_text=f"Waiting for your approval: {title}" if title else "A proposal waits in Flight Deck",
+        bell=("autonomy_proposal", "Waiting for your approval",
+              (title or "A new proposal") + (f"\n{rationale[:600]}" if rationale else "")),
+        action_id=str(action.get("id") or ""),
     )
 
 

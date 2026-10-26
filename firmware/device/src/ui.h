@@ -197,10 +197,12 @@ void linksChanged();
 void hold(bool recording);
 // Where the notes are kept changed (a microSD card put in or taken out).
 void notesChanged();
-// How many proposals wait in Flight Deck, as last heard: the dashboard
-// asleep says so (awake, the links list it).
-void setWaiting(int count);
 #endif
+
+// How many proposals wait in Flight Deck, as last heard (0: none): a magenta
+// badge on every screen — the watch's top row, the stick's status bar — and
+// on the B paper's dashboard (asleep, under how to wake it).
+void setWaiting(int count);
 
 // Conversation views (text mode).
 void showListening(int level, uint32_t elapsedMs);

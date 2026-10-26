@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Bell, X, CheckCheck, Trash2, AlertTriangle, Info, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Bell, X, CheckCheck, Trash2, AlertTriangle, Info, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react'
 import { useNotificationStore, type Notification, type NotificationType } from '../../stores/notificationStore'
+import { fetchWaitingProposalIds, resolveProposal } from '../../services/notifications'
 import { useAuthStore, selectKioskLocked } from '../../stores/authStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSharedAgentStore } from '../../stores/sharedAgentStore'
@@ -90,6 +91,16 @@ function NotificationDropdown({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (aboutAgents) void useSharedAgentStore.getState().fetch()
   }, [aboutAgents])
+  // Autonomous Work proposals: which still wait for an answer (those get
+  // Approve / Reject here — the kiosk has no other place to answer them).
+  const aboutProposals = notifications.some((n) => n.refType === 'autonomy_action')
+  const [waiting, setWaiting] = useState<Set<string> | null>(null)
+  const loadWaiting = () => {
+    fetchWaitingProposalIds().then(setWaiting).catch(() => setWaiting(null))
+  }
+  useEffect(() => {
+    if (aboutProposals) loadWaiting()
+  }, [aboutProposals])
 
   const activate = (action: SharedNotificationAction) => {
     if (action.kind === 'none') return
@@ -146,6 +157,9 @@ function NotificationDropdown({ onClose }: { onClose: () => void }) {
               key={n.id}
               notification={n}
               action={sharedNotificationAction(n.refType, n.refId, sharedAgents, layout)}
+              proposal={n.refType === 'autonomy_action' && n.refId && waiting
+                ? (waiting.has(n.refId) ? 'waiting' : 'answered') : undefined}
+              onAnswered={() => { markRead(n.id); loadWaiting() }}
               onRead={() => markRead(n.id)}
               onActivate={activate}
               onRemove={() => remove(n.id)}
@@ -157,22 +171,62 @@ function NotificationDropdown({ onClose }: { onClose: () => void }) {
   )
 }
 
-function NotificationItem({ notification: n, action, onRead, onActivate, onRemove }: {
+// A proposal's answer, from the bell: Approve sends it to your agent, Reject
+// drops it (and teaches Autonomous Work not to suggest its like).
+function ProposalButtons({ id, onAnswered }: { id: string; onAnswered: () => void }) {
+  const [busy, setBusy] = useState<'approve' | 'reject' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const answer = async (approve: boolean) => {
+    setBusy(approve ? 'approve' : 'reject'); setError(null)
+    try {
+      await resolveProposal(id, approve)
+      onAnswered()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const btn = 'flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium disabled:opacity-50'
+  return (
+    <div className="mt-1" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-1.5">
+        <button disabled={busy !== null} onClick={() => answer(true)}
+          className={`${btn} bg-emerald-600 text-white hover:bg-emerald-500`}>
+          {busy === 'approve' && <Loader2 className="h-3 w-3 animate-spin" />} Approve
+        </button>
+        <button disabled={busy !== null} onClick={() => answer(false)}
+          className={`${btn} bg-zinc-800 text-zinc-300 hover:bg-zinc-700`}>
+          {busy === 'reject' && <Loader2 className="h-3 w-3 animate-spin" />} Reject
+        </button>
+      </div>
+      {error && <p className="mt-0.5 text-[10px] text-red-600 dark:text-red-400">{error}</p>}
+    </div>
+  )
+}
+
+function NotificationItem({ notification: n, action, proposal, onAnswered, onRead, onActivate, onRemove }: {
   notification: Notification
   action: SharedNotificationAction
+  proposal?: 'waiting' | 'answered'
+  onAnswered: () => void
   onRead: () => void
   onActivate: (action: SharedNotificationAction) => void
   onRemove: () => void
 }) {
   const Icon = typeIcon[n.type]
   const color = typeColor[n.type]
+  // Autonomous Work's text (a nudge, a proposal's why) keeps its lines; a
+  // long one opens up on a click.
+  const autonomy = n.refType === 'autonomy_action' || n.refType === 'autonomy_nudge'
+  const [expanded, setExpanded] = useState(false)
 
   return (
     <div
       className={`group flex items-start gap-2 border-b border-zinc-800/40 px-3 py-2 hover:bg-zinc-900/30 cursor-pointer ${
         !n.read ? 'bg-zinc-900/20' : ''
       }`}
-      onClick={() => { onRead(); onActivate(action) }}
+      onClick={() => { onRead(); onActivate(action); if (autonomy) setExpanded((v) => !v) }}
       title={action.kind === 'chat' ? `Chat with ${action.name}` : undefined}
     >
       <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${color}`} />
@@ -181,7 +235,11 @@ function NotificationItem({ notification: n, action, onRead, onActivate, onRemov
           <span className="text-xs font-medium text-zinc-200">{n.title}</span>
           {!n.read && <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />}
         </div>
-        <p className="text-[10px] text-zinc-500 mt-0.5">{n.message}</p>
+        <p className={`text-[10px] text-zinc-500 mt-0.5 ${autonomy ? `whitespace-pre-line ${expanded ? '' : 'line-clamp-6'}` : ''}`}>
+          {n.message}
+        </p>
+        {proposal === 'waiting' && n.refId && <ProposalButtons id={n.refId} onAnswered={onAnswered} />}
+        {proposal === 'answered' && <p className="mt-0.5 text-[10px] text-zinc-600">No longer waiting.</p>}
         {action.kind !== 'none' && (
           <p className="mt-0.5 text-[10px] text-sky-700 dark:text-sky-400">{action.hint}</p>
         )}
