@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { isDesktopApp } from '../../services/desktopShell'
+import { isAppShell } from '../../services/desktopShell'
 import { MessageCircle, Loader2, Check, AlertCircle, ChevronDown, Send } from 'lucide-react'
 import { useAuthStore, refreshAccessToken } from '../../stores/authStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -222,7 +222,7 @@ export default function WhatsAppNudgeConnection() {
             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               Autonomous Work isn't running for you, so no nudges are sent yet.
               {/* The desktop app has no full Flight Deck to send you to. */}
-              {!isDesktopApp() && (
+              {!isAppShell() && (
                 <>
                   {' '}
                   <button

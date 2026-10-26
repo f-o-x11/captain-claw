@@ -10,7 +10,7 @@ import {
   useConsoleStore, leaveConsole, enterKioskView, pageFromPath, CONSOLE_PATH, type ConsolePage,
 } from '../../stores/consoleStore'
 import { APP_VERSION } from '../../version'
-import { isDesktopApp } from '../../services/desktopShell'
+import { isAppShell } from '../../services/desktopShell'
 import { hasTierSets, TIER_SETS_EVENT } from '../../services/tierConfig'
 import { fetchWaitlistPending } from './consoleApi'
 import { OverviewPage } from './OverviewPage'
@@ -157,7 +157,7 @@ function Brand() {
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold tracking-tight text-zinc-100" title={name}>{name}</div>
         {/* The desktop app has two views of the deck: say which one this is. */}
-        {isDesktopApp()
+        {isAppShell()
           ? <div className="text-[11px] font-medium text-violet-600 dark:text-violet-400">Admin view</div>
           : <div className="text-[11px] text-zinc-500">Admin console</div>}
       </div>
@@ -217,7 +217,7 @@ function Footer() {
   return (
     <div className="space-y-0.5 border-t border-zinc-800 p-3">
       {/* The desktop app has no full Flight Deck: its other side is the users' kiosk. */}
-      {isDesktopApp() ? (
+      {isAppShell() ? (
         <button onClick={enterKioskView} className={row} title="The kiosk your users get: their agents and chats">
           <MessagesSquare className="h-[18px] w-[18px] text-zinc-500" /> Switch to user view
         </button>

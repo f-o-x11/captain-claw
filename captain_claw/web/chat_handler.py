@@ -161,7 +161,7 @@ async def _generate_task_name(
 # chat. Delegated results and flow consults stay where they are: they carry
 # on a conversation (or a flow step) that lives in the main chat.
 REROUTED_AUTOMATION_KINDS = frozenset({
-    "fd_scheduler", "cron", "autonomy", "autonomy_tool", "plan", "peer", "botport", "mcp_task",
+    "fd_scheduler", "cron", "autonomy", "autonomy_tool", "plan", "peer", "botport", "mcp_task", "link",
 })
 MIRRORED_AUTOMATION_KINDS = frozenset({"fd_scheduler", "cron", "autonomy", "autonomy_tool", "plan"})
 
@@ -182,29 +182,34 @@ def _reply_waid(whatsapp_waid: str | None, origin: dict | None,
 # audio — no documents.
 _DEVICE_IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"})
 _DEVICE_AUDIO_EXT = frozenset({".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac"})
+_LINK_MAX_FILES = 10  # files one turn hands back to a connected system
 
 
 async def _send_device_media(
     send: Any, agent: Any, turn_start_idx: int, reply: str, started_at: float,
+    *, link: bool = False,
 ) -> None:
     """After a turn that came from a handheld device: name the pictures and
     audio it made, so Flight Deck fetches them (``/api/media``) and shows or
-    plays them there. Never raises."""
+    plays them there. A connected system's turn (*link*, an agent link) names
+    every file the turn made for it — documents too, ``kind`` "file" (Flight
+    Deck fetches those with ``/api/files/download``). Never raises."""
     from captain_claw.tools.whatsapp_send_file import collect_turn_media
 
     try:
         paths = await collect_turn_media(
             agent, turn_start_idx, reply, started_at,
-            nameable=set(_DEVICE_IMAGE_EXT | _DEVICE_AUDIO_EXT))
+            nameable=None if link else set(_DEVICE_IMAGE_EXT | _DEVICE_AUDIO_EXT))
         items = []
         for path in paths:
             ext = path.suffix.lower()
-            kind = "image" if ext in _DEVICE_IMAGE_EXT else "audio" if ext in _DEVICE_AUDIO_EXT else ""
+            kind = ("image" if ext in _DEVICE_IMAGE_EXT else "audio" if ext in _DEVICE_AUDIO_EXT
+                    else "file" if link else "")
             if kind:
                 items.append({"path": str(path), "name": path.name, "kind": kind})
         if items:
             send({
-                "type": "turn_media", "items": items[:6],
+                "type": "turn_media", "items": items[:_LINK_MAX_FILES if link else 6],
                 "timestamp": datetime.now(UTC).isoformat(),
             })
     except Exception as exc:
@@ -302,13 +307,17 @@ def _sync_automation_agent(server: Any, agent: Any) -> None:
 # lane goes back to its own session when the turn ends. So each task's runs
 # read as one conversation (searchable like any session, resumable in chat)
 # and the agent sees what it said last time.
+#
+# A connected system (an agent link, automation kind "link") rides the same
+# marker with ``link: true``: each link talks in a session of its own.
 
 _TASK_ID_MAX = 64
 
 
 def task_marker(raw: Any) -> dict | None:
     """``automation.task`` from a frame, cleaned: ``{id, name, session_id,
-    mirror}``, or None when it names no task."""
+    mirror}`` (and ``link`` for an agent link's), or None when it names no
+    task."""
     if not isinstance(raw, dict):
         return None
     tid = re.sub(r"[^A-Za-z0-9_-]", "", str(raw.get("id") or ""))[:_TASK_ID_MAX]
@@ -319,11 +328,12 @@ def task_marker(raw: Any) -> dict | None:
         "id": tid, "name": name,
         "session_id": str(raw.get("session_id") or "").strip()[:128],
         "mirror": raw.get("mirror") is not False,
+        **({"link": True} if raw.get("link") is True else {}),
     }
 
 
 def task_session_name(task: dict) -> str:
-    return f"⏰ {task['name']}"
+    return f"{'🔗' if task.get('link') else '⏰'} {task['name']}"
 
 
 def _live_session(server: Any, session_id: str) -> Any:
@@ -1776,6 +1786,11 @@ async def _run_agent(
             if turn_channel == "device":
                 asyncio.create_task(_send_device_media(
                     send, agent, _wa_turn_start, str(response or ""), _wa_started_at))
+            elif automation is not None and automation.kind == "link":
+                # A connected system: the files the turn made for it are named
+                # before "ready", so they reach it with the answer.
+                await _send_device_media(
+                    send, agent, _wa_turn_start, str(response or ""), _wa_started_at, link=True)
 
             # A person's reply that came out garbled gets a /new hint (Jev
             # judges; it runs beside the next-steps call, awaited below so the

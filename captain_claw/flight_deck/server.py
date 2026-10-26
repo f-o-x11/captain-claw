@@ -947,6 +947,16 @@ async def lifespan(app: FastAPI):
     _app_rt = _get_app_runtime()
     await _app_rt.start()
     app.state.app_runtime = _app_rt
+    # ── Outbound agent links: Flight Deck connects out to the systems that
+    # won't take connections from agents (agent_link_out.py).
+    try:
+        from captain_claw.flight_deck import agent_link_out as _link_out
+
+        _n_out = await _link_out.start_all()
+        if _n_out:
+            print(f"Flight Deck: connecting out for {_n_out} agent link(s)")
+    except Exception as _out_exc:
+        print(f"Flight Deck: outbound agent links not started: {_out_exc}")
     # ── FD scheduler (proactive push: agent prompts on a timer → WhatsApp /
     # channel). Disable with FD_SCHEDULER_DISABLED=true. ──
     if os.environ.get("FD_SCHEDULER_DISABLED", "").lower() not in ("true", "1", "yes"):
@@ -1162,6 +1172,12 @@ async def lifespan(app: FastAPI):
     except Exception as _exc:
         print(f"Flight Deck: BotPort link not started: {_exc}")
     yield
+    try:
+        from captain_claw.flight_deck import agent_link_out as _link_out
+
+        await _link_out.stop_all()
+    except Exception:
+        pass
     try:
         from captain_claw.flight_deck.botport_link import get_link as _get_botport_link
 
@@ -1486,6 +1502,8 @@ from captain_claw.flight_deck.app_files_routes import router as app_files_router
 from captain_claw.flight_deck.app_builtin_routes import router as app_builtin_router
 from captain_claw.flight_deck.app_code_routes import router as app_code_router
 from captain_claw.flight_deck.glasses_bridge import router as glasses_router
+from captain_claw.flight_deck.agent_link import router as agent_link_router
+from captain_claw.flight_deck.agent_link_http import router as agent_link_http_router
 from captain_claw.flight_deck.device_bridge import router as device_router
 from captain_claw.flight_deck.device_firmware import router as device_firmware_router
 from captain_claw.flight_deck.device_backgrounds import router as device_backgrounds_router
@@ -1573,6 +1591,10 @@ app.include_router(app_code_router)
 app.include_router(glasses_router)
 # Handheld voice device (M5Stack StickS3): /device/ws.
 app.include_router(device_router)
+# Agent links: a connected system talks to one agent (/link/ws, /fd/links),
+# or over HTTP and a webhook, and the agent sends it messages (/fd/agent-links).
+app.include_router(agent_link_router)
+app.include_router(agent_link_http_router)
 # Over-the-air firmware for the devices (docs/device-ota-plan.md).
 app.include_router(device_firmware_router)
 # A picture behind the StopWatch's screens, sent by the owner's agent.

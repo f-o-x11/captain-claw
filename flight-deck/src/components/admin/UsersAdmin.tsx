@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { isDesktopApp } from '../../services/desktopShell'
+import { isAppShell } from '../../services/desktopShell'
 import {
   UserPlus,
   Trash2,
@@ -652,7 +652,7 @@ function SetPasswordSection({ userId, email, isSelf, onSet }: {
     return (
       <div className="border-t border-zinc-800 pt-3 text-xs text-zinc-500">
         <KeyRound className="h-3 w-3 inline mr-1" />
-        {isDesktopApp()
+        {isAppShell()
           ? 'Change your own password in your profile: the user kiosk → Settings → Profile.'
           : <>Change your own password on your{' '}
               <button onClick={() => setView('profile')} className="text-violet-400 underline underline-offset-2 hover:no-underline">
