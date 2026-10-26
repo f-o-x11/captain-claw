@@ -161,6 +161,19 @@ export interface WhatsAppWebSending {
   chats?: { jid: string; title: string; kind: 'direct' | 'group'; number: string; messages: number; last_ts: number | null }[]
   // Whitelist entries refused on save (no conversation with them).
   dropped?: string[]
+  autoreply?: WhatsAppWebAutoreply
+}
+
+// Auto-replies: whitelisted chats where the agent answers by itself when it's
+// mentioned (its name, a trigger word, or a reply to its message), and keeps
+// talking for a while when it has something to add.
+export interface WhatsAppWebAutoreply {
+  chats: string[]
+  // The agent that answers (its ref); "" = none picked yet.
+  agent: string
+  triggers: string[]
+  kill_switch: boolean
+  agents: { ref: string; name: string; running: boolean; eligible: boolean; reason: string }[]
 }
 
 export interface WhatsAppWebSendingChanges {
@@ -169,6 +182,7 @@ export interface WhatsAppWebSendingChanges {
   daily_limit?: number
   signature?: string
   signature_on?: boolean
+  autoreply?: { chats?: string[]; agent?: string; triggers?: string[] }
 }
 
 export const getWhatsAppWebSending = () => fdFetch<WhatsAppWebSending>('/fd/whatsapp-web/sending')

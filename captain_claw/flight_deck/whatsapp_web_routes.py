@@ -13,7 +13,9 @@ end of it: :mod:`.whatsapp_web_supervisor`).
 Agents send only through ``/fd/whatsapp-web/agent/send``: automatic once the
 user turned sending on, and only to chats on their whitelist (the gate is the
 service's, :meth:`Engine.send`); ``FD_WHATSAPP_WEB_SEND=off`` refuses every
-send. Nothing here reacts, marks read or changes presence.
+send. Auto-replies (:mod:`.whatsapp_web_autoreply`) go through the same gate;
+the user picks their chats, the agent and its trigger words with the sending
+rules. Nothing here reacts, marks read or changes presence.
 """
 
 from __future__ import annotations
@@ -23,7 +25,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from captain_claw.flight_deck import fd_crypto
+from captain_claw.flight_deck import fd_crypto, whatsapp_web_autoreply as autoreply
+from captain_claw.flight_deck import gmail_autoreply_writer as writer
 from captain_claw.flight_deck import whatsapp_web_supervisor as sup
 from captain_claw.flight_deck.admin_routes import require_admin
 from captain_claw.flight_deck.auth import get_current_user, get_db
@@ -266,11 +269,28 @@ async def get_sending(user: dict = Depends(get_current_user)) -> dict[str, Any]:
     try:
         policy = await s.request("GET", f"/links/{user['id']}/send-policy")
         chats = (await s.request("GET", f"/links/{user['id']}/chats")).get("chats") or []
+        auto = await s.request("GET", f"/links/{user['id']}/autoreply")
     except (sup.ServiceDown, sup.ServiceError) as exc:
         raise _service_error(exc) from None
+    agents = await writer.list_eligible_agents(get_db(), user["id"])
     return {"available": True, "kill_switch": sup.send_kill_switch(), **policy,
             "chats": [{k: c.get(k) for k in ("jid", "title", "kind", "number", "messages", "last_ts")}
-                      for c in chats]}
+                      for c in chats],
+            "autoreply": {
+                # A chat taken off the whitelist keeps no auto-reply.
+                "chats": [j for j in auto.get("chats") or [] if j in (policy.get("allowed") or [])],
+                "agent": auto.get("agent") or "",
+                "triggers": auto.get("triggers") or [],
+                "kill_switch": autoreply.kill_switch(),
+                "agents": [{k: a.get(k) for k in ("ref", "name", "running", "eligible", "reason")}
+                           for a in agents],
+            }}
+
+
+class AutoreplyBody(BaseModel):
+    chats: list[str] | None = None
+    agent: str | None = None
+    triggers: list[str] | None = None
 
 
 class SendingBody(BaseModel):
@@ -279,6 +299,7 @@ class SendingBody(BaseModel):
     daily_limit: int | None = None
     signature: str | None = None
     signature_on: bool | None = None
+    autoreply: AutoreplyBody | None = None
 
 
 @router.put("/fd/whatsapp-web/sending")
@@ -289,8 +310,15 @@ async def set_sending(body: SendingBody, user: dict = Depends(get_current_user))
     s = _supervisor()
     if not s.user_has_link(user["id"]):
         raise HTTPException(status_code=409, detail="Link WhatsApp first")
+    auto = body.autoreply.model_dump() if body.autoreply is not None else None
+    if auto and auto.get("agent"):
+        agents = await writer.list_eligible_agents(get_db(), user["id"])
+        if not any(a["ref"] == auto["agent"] for a in agents):
+            raise HTTPException(status_code=422, detail="Pick one of your own agents to answer")
     try:
-        await s.request("PUT", f"/links/{user['id']}/send-policy", body.model_dump())
+        await s.request("PUT", f"/links/{user['id']}/send-policy", body.model_dump(exclude={"autoreply"}))
+        if auto is not None:
+            await s.request("PUT", f"/links/{user['id']}/autoreply", auto)
     except (sup.ServiceDown, sup.ServiceError) as exc:
         raise _service_error(exc) from None
     return await get_sending(user)

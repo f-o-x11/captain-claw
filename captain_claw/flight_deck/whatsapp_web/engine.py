@@ -31,7 +31,14 @@ from captain_claw.flight_deck.whatsapp_web.link_state import (
     normalize_phone,
     now_iso,
 )
-from captain_claw.flight_deck.whatsapp_web.store import MAX_DAILY_LIMIT, RETENTION_CHOICES, ChatNotFound, Store
+from captain_claw.flight_deck.whatsapp_web.store import (
+    MAX_DAILY_LIMIT,
+    MAX_TRIGGER_CHARS,
+    MAX_TRIGGERS,
+    RETENTION_CHOICES,
+    ChatNotFound,
+    Store,
+)
 
 log = logging.getLogger("whatsapp_web.engine")
 
@@ -260,9 +267,14 @@ class Engine:
             asyncio.get_running_loop().create_task(self._after_terminal(link, name))
         if name in ("history", "message", "directory"):
             try:
-                await asyncio.to_thread(self._ingest, link, name, data)
+                incoming = await asyncio.to_thread(self._ingest, link, name, data)
             except Exception as exc:
                 log.error("whatsapp_web: storing %s for %s failed: %s", name, link.user_id, exc)
+                incoming = None
+            if incoming:
+                # For Flight Deck's auto-replies (whatsapp_web_autoreply): a new
+                # message in a chat the user lets the agent answer by itself.
+                self._push_event(link, {"kind": "incoming", **incoming})
         if name not in _STORE_ONLY:
             self._save(link)
         if notice is not None:
@@ -273,8 +285,10 @@ class Engine:
             })
             del self._events[:-_MAX_EVENTS]
 
-    def _ingest(self, link: _Link, name: str, data: dict[str, Any]) -> None:
-        """Write one event's rows (worker thread; the store serialises itself)."""
+    def _ingest(self, link: _Link, name: str, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Write one event's rows (worker thread; the store serialises itself).
+        For a live message in an auto-reply chat, what Flight Deck needs to
+        decide whether the agent answers."""
         if (not link.state.linked_at or link.state.state == "logged_out"
                 or self._links.get(link.user_id) is not link):
             return  # unlinked or logged out while this event was on its way
@@ -289,9 +303,45 @@ class Engine:
             store.ingest(data.get("rows") or [], live=False)
         elif name == "message":
             store.ingest([data], live=True)
+            return self._autoreply_candidate(link, store, data)
         elif name == "directory":
             store.put_contacts(data.get("contacts") or [])
             store.put_groups(data.get("groups") or [])
+
+    @staticmethod
+    def _autoreply_candidate(link: _Link, store: Store, row: dict[str, Any]) -> dict[str, Any] | None:
+        """A message written in a chat that's whitelisted, has auto-reply on,
+        while sending is on — else None. The user's own count too (they can call
+        the agent in), never an agent's send, an edit, reaction or deletion."""
+        if row.get("op") != "message" or not row.get("id"):
+            return None
+        config = store.autoreply_config()
+        if not config["chats"] or not config["agent"]:
+            return None
+        chat = store.canon(str(row.get("chat") or ""))
+        policy = store.send_policy()
+        if not policy["enabled"] or chat not in policy["allowed"] or chat not in config["chats"]:
+            return None
+        activity = store.agent_activity(chat)
+        if row.get("from_me") and str(row["id"]) in activity["agent_ids"]:
+            return None
+        title, is_group = store.chat_title(chat)
+        sender = store.canon(str(row.get("sender") or ""))
+        return {
+            "user_id": link.user_id, "chat_jid": chat, "chat": title, "is_group": is_group,
+            "id": str(row["id"]), "ts": int(row.get("ts") or 0), "kind_of_message": str(row.get("kind") or "text"),
+            "from_owner": bool(row.get("from_me")),
+            "sender": "" if row.get("from_me") else store.sender_name(sender, str(row.get("push_name") or "")),
+            "text": str(row.get("text") or "")[:2000],
+            "reply_to_agent": bool(row.get("reply_to")) and row["reply_to"] in activity["agent_ids"],
+            "last_agent_ts": activity["last_agent_ts"], "last_owner_ts": activity["last_owner_ts"],
+            "agent": config["agent"], "triggers": config["triggers"],
+        }
+
+    def _push_event(self, link: _Link, event: dict[str, Any]) -> None:
+        self._seq += 1
+        self._events.append({"seq": self._seq, "user_id": link.user_id, "at": now_iso(self._clock()), **event})
+        del self._events[:-_MAX_EVENTS]
 
     async def _after_terminal(self, link: _Link, name: str) -> None:
         async with self._lock(link.user_id):
@@ -662,9 +712,54 @@ class Engine:
                                      "out. Don't send it again before the user checks the chat.") from None
             raise LinkError(502, f"WhatsApp refused the message to {found['title']}: {text_err}") from None
         await asyncio.to_thread(store.finish_send, rowid, "sent", wa_id=wa_id)
+        # WhatsApp doesn't echo a linked device's own sends back: keep the
+        # message, so the chat reads as it is (agents, auto-replies).
+        try:
+            await asyncio.to_thread(store.ingest, [{
+                "op": "message", "chat": jid, "id": wa_id, "sender": link.state.jid or "", "from_me": True,
+                "is_group": jid.endswith("@g.us"), "ts": int(now), "push_name": "", "kind": "text",
+                "text": composed, "media": None, "reply_to": "",
+            }], live=False)
+        except Exception as exc:
+            log.warning("whatsapp_web: keeping a sent message for %s failed: %s", user_id, type(exc).__name__)
         self._bell(link, f"{agent or 'An agent'} sent a WhatsApp message", f"To {found['title']}: {body[:160]}")
         return {"status": "sent", "id": wa_id, "chat": found["title"], "chat_jid": jid, "text": composed,
                 "signed": composed != body}
+
+    # ── auto-replies (Flight Deck decides and writes; see whatsapp_web_autoreply) ──
+
+    async def autoreply_config(self, user_id: str) -> dict[str, Any]:
+        store = self._reader(user_id)
+        return await asyncio.to_thread(store.autoreply_config)
+
+    async def set_autoreply_config(self, user_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        """Which chats the agent answers by itself (only whitelisted ones), which
+        agent (Flight Deck checks it's the user's own), extra trigger words."""
+        store = self._reader(user_id)
+        config = await asyncio.to_thread(store.autoreply_config)
+        policy = await asyncio.to_thread(store.send_policy)
+        dropped: list[str] = []
+        if changes.get("chats") is not None:
+            wanted = list(dict.fromkeys(str(j).strip() for j in changes["chats"] if str(j).strip()))
+            config["chats"] = [j for j in wanted if j in policy["allowed"]]
+            dropped = [j for j in wanted if j not in policy["allowed"]]
+        if changes.get("agent") is not None:
+            config["agent"] = str(changes["agent"]).strip()[:200]
+        if changes.get("triggers") is not None:
+            words: list[str] = []
+            for raw in changes["triggers"]:
+                word = " ".join(str(raw).split())
+                if not word:
+                    continue
+                if not 2 <= len(word) <= MAX_TRIGGER_CHARS:
+                    raise LinkError(422, f"A trigger word is 2 to {MAX_TRIGGER_CHARS} characters")
+                if word.casefold() not in {w.casefold() for w in words}:
+                    words.append(word)
+            if len(words) > MAX_TRIGGERS:
+                raise LinkError(422, f"At most {MAX_TRIGGERS} trigger words")
+            config["triggers"] = words
+        await asyncio.to_thread(store.set_autoreply_config, config)
+        return {**config, "dropped": dropped}
 
     def _bell(self, link: _Link, title: str, body: str) -> None:
         self._seq += 1
