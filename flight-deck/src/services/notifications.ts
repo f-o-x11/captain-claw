@@ -43,3 +43,28 @@ export async function markNotificationRead(id: string): Promise<void> {
 export async function markAllNotificationsRead(): Promise<void> {
   try { await fdFetch('/fd/notifications/read-all', { method: 'POST' }) } catch { /* ignore */ }
 }
+
+// ── Autonomous Work proposals in the bell (ref_type 'autonomy_action') ──
+
+/** The ids of this user's proposals still waiting for approval. */
+export async function fetchWaitingProposalIds(): Promise<Set<string>> {
+  const r = await fdFetch('/fd/autonomy/actions?status_filter=awaiting_approval&limit=200')
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  const data = await r.json()
+  const actions: { id?: string }[] = Array.isArray(data?.actions) ? data.actions : []
+  return new Set(actions.map((a) => String(a.id || '')).filter(Boolean))
+}
+
+/** Approve or reject a waiting proposal; throws with the deck's reason. */
+export async function resolveProposal(id: string, approve: boolean): Promise<void> {
+  const r = await fdFetch(`/fd/autonomy/actions/${encodeURIComponent(id)}/${approve ? 'approve' : 'reject'}`,
+    { method: 'POST' })
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`
+    try {
+      const d = await r.json()
+      if (typeof d?.detail === 'string') detail = d.detail
+    } catch { /* keep the status */ }
+    throw new Error(detail)
+  }
+}

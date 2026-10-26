@@ -19,6 +19,10 @@ function mapServerType(t: string): NotificationType {
   if (t === 'email_autoreply') return 'success'
   if (t === 'email_autoreply_held' || t === 'email_autoreply_issue') return 'warning'
   if (t === 'email_autoreply_blocked') return 'error'
+  // Autonomous Work: a proposal waits for the owner (Approve / Reject in the
+  // bell); a nudge the agent sent them.
+  if (t === 'autonomy_proposal') return 'warning'
+  if (t === 'autonomy_nudge') return 'info'
   if (t === 'share' || t === 'info') return 'info'
   if (t === 'success' || t === 'warning' || t === 'error') return t
   return 'info'

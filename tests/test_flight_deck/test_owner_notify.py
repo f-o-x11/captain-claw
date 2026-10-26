@@ -1,8 +1,9 @@
 """Nudges and proposals waiting for approval reach the owner on every channel
 they switched on (owner_notify.py): WhatsApp (``nudge_to_whatsapp``), their
 Telegram chat with the deck's bot (``notify_telegram``) and their connected
-devices (``notify_devices``), which beep and show how many proposals wait.
-A device asleep when something came beeps for it once, when it connects; the
+devices (``notify_devices``), which beep and show how many proposals wait —
+and always to the bell, where a proposal is approved or rejected (the kiosk
+has nowhere else). A device asleep when something came beeps for it once, when it connects; the
 count follows the ledger with silent updates; the switches live behind
 /fd/autonomy/notify and survive a whole-config save."""
 
@@ -56,7 +57,7 @@ def store(tmp_path, monkeypatch):
 @pytest.fixture
 def channels(monkeypatch):
     """Stub every channel: ``channels["whatsapp"|"telegram"|"devices"]`` list what went out."""
-    out: dict[str, list] = {"whatsapp": [], "telegram": [], "devices": []}
+    out: dict[str, list] = {"whatsapp": [], "telegram": [], "devices": [], "bell": []}
 
     async def fake_push(waid, text):
         out["whatsapp"].append((waid, text))
@@ -72,7 +73,15 @@ def channels(monkeypatch):
 
     monkeypatch.setattr(whatsapp_bridge, "push_to_waid", fake_push)
     monkeypatch.setattr(fd_scheduler, "_deliver_telegram_owner", fake_telegram)
+    class _DB:
+        async def add_notification(self, user_id, type, title, body="", ref_type="", ref_id=""):
+            out["bell"].append({"user": user_id, "type": type, "title": title, "body": body,
+                                "ref_type": ref_type, "ref_id": ref_id})
+            return "n1"
+
+    from captain_claw.flight_deck import auth
     monkeypatch.setattr(device_bridge, "push_waiting", fake_devices)
+    monkeypatch.setattr(auth, "get_db", lambda: _DB())
     return out
 
 
@@ -109,6 +118,9 @@ def test_a_nudge_reaches_every_channel_switched_on(store, channels, monkeypatch)
     assert channels["telegram"] == [(ALICE, "Your 3pm call is in an hour.")]
     assert channels["devices"][-1] == {"user": ALICE, "count": 0, "beep": True,
                                        "text": "Your 3pm call is in an hour."}
+    assert channels["bell"] == [{"user": ALICE, "type": "autonomy_nudge", "title": "Nudge from a",
+                                 "body": "Your 3pm call is in an hour.",
+                                 "ref_type": "autonomy_nudge", "ref_id": done["id"]}]
     events_ = [r["event"] for r in store.list_log(ALICE)]
     assert {"nudge → whatsapp", "nudge → telegram", "nudge → devices"} <= set(events_)
 
@@ -123,7 +135,8 @@ def test_channels_switched_off_get_nothing(store, channels, monkeypatch):
     _settings(store, ALICE, notify_waid="111", nudge_to_whatsapp=False,
               notify_telegram=False, notify_devices=False)
     _nudge(store, monkeypatch)
-    assert channels == {"whatsapp": [], "telegram": [], "devices": []}
+    assert (channels["whatsapp"], channels["telegram"], channels["devices"]) == ([], [], [])
+    assert len(channels["bell"]) == 1  # the bell is Flight Deck itself: no switch
 
 
 def test_quiet_hours_show_the_count_without_a_beep(store, channels, monkeypatch):
@@ -146,14 +159,17 @@ def test_a_proposal_says_how_many_wait(store, channels, monkeypatch):
     _settings(store, ALICE, notify_waid="111", notify_telegram=True)
     store.add_action(ALICE, kind="nudge", title="Older one", status="awaiting_approval")
     row = store.add_action(ALICE, kind="run_prompt", title="Summarise the Q3 deck",
-                           status="awaiting_approval")
+                           rationale="You asked for it before the board call.", status="awaiting_approval")
     _run_coro(owner_notify.notify_proposal(ALICE, row))
     text = channels["telegram"][0][1]
     assert text == ("Waiting for your approval in Flight Deck (2 waiting): Summarise the Q3 deck"
                     "\nhttps://deck.example")
     assert channels["whatsapp"][0][1] == text
     assert channels["devices"][-1] == {"user": ALICE, "count": 2, "beep": True,
-                                       "text": "Approve in Flight Deck: Summarise the Q3 deck"}
+                                       "text": "Waiting for your approval: Summarise the Q3 deck"}
+    assert channels["bell"] == [{"user": ALICE, "type": "autonomy_proposal", "title": "Waiting for your approval",
+                                 "body": "Summarise the Q3 deck\nYou asked for it before the board call.",
+                                 "ref_type": "autonomy_action", "ref_id": row["id"]}]
 
 
 @pytest.fixture
@@ -311,7 +327,25 @@ def test_the_test_goes_out_once_a_minute(client, store, channels):
     _settings(store, ALICE, notify_waid="111")
     r = client.post("/fd/autonomy/notify/test", headers=_as(ALICE))
     assert r.status_code == 200 and r.json()["sent"]["devices"] == 1
+    assert channels["bell"] == []  # a test isn't kept
     assert channels["devices"][-1]["text"] == "Test: notifications reach this device"
     assert client.post("/fd/autonomy/notify/test", headers=_as(ALICE)).status_code == 429
     # A test isn't news: a device connecting later doesn't beep for it.
     assert owner_notify.device_connected(ALICE, "watch-9")["beep"] is False
+
+
+def test_with_sign_in_off_the_bell_is_the_local_users(store, channels):
+    _run_coro(owner_notify.notify_owner("", "nudge", "Hi", bell=("autonomy_nudge", "Nudge", "Hi"),
+                                        action_id="act_1"))
+    assert channels["bell"][0]["user"] == "local"
+
+
+def test_a_failing_bell_never_stops_the_other_channels(store, channels, monkeypatch):
+    from captain_claw.flight_deck import auth
+
+    def _no_db():
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr(auth, "get_db", _no_db)
+    res = _run_coro(owner_notify.notify_owner(ALICE, "nudge", "Hi", bell=("autonomy_nudge", "Nudge", "Hi")))
+    assert res["bell"] is False and res["devices"] == 1

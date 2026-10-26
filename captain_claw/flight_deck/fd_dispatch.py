@@ -391,7 +391,9 @@ async def _execute_and_judge(
             # switched on (the agent turn already surfaces it in web chat).
             if output:
                 from captain_claw.flight_deck.owner_notify import notify_owner
-                await notify_owner(user_id, "nudge", output, cfg=cfg)
+                name = str(agent.get("name") or agent.get("slug") or "").strip()
+                await notify_owner(user_id, "nudge", output, cfg=cfg, action_id=str(aid),
+                                   bell=("autonomy_nudge", f"Nudge from {name}" if name else "Nudge", output))
             # If this nudge was reminding about a tracked follow-up, re-arm it
             # (escalate: sooner each time) — or retire it after enough nudges.
             fu_id = str((action.get("payload") or {}).get("follow_up_id") or "")

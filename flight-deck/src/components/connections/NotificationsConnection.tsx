@@ -55,7 +55,7 @@ async function _detail(res: Response): Promise<string> {
 const CHANNELS: { id: ChannelId; label: string; what: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: 'whatsapp', label: 'WhatsApp', what: 'the message, to your number', icon: MessageCircle },
   { id: 'telegram', label: 'Telegram', what: "the message, to your chat with the deck's bot", icon: Send },
-  { id: 'devices', label: 'Devices', what: 'a beep and how many proposals wait — read them here', icon: Watch },
+  { id: 'devices', label: 'Devices', what: 'a beep, a banner and how many proposals wait', icon: Watch },
 ]
 
 // Where Autonomous Work's nudges, and proposals waiting for your approval,
@@ -236,8 +236,9 @@ export default function NotificationsConnection({ kiosk = false }: { kiosk?: boo
           </div>
 
           <p className="text-[11px] text-zinc-500">
-            Devices: a sleeping one beeps when it next wakes. In quiet hours they show the count
-            without a beep. The WhatsApp number is set on the WhatsApp tab.
+            Everything also lands in the bell (top left), where you read it and approve or reject
+            proposals. Devices: a sleeping one beeps when it next wakes; in quiet hours they show
+            the count without a beep. The WhatsApp number is set on the WhatsApp tab.
           </p>
 
           <div className="flex items-center gap-3">
