@@ -11,8 +11,8 @@ import type { TraceSpan } from '../types'
 import { sanitizeAgentContent } from '../utils/sanitizeAgentContent'
 import { scrubUserText } from '../utils/cardScrub'
 import { SHARED_PREFIX, sharedContainerId, sharedSliceId } from '../utils/sharedAgent'
-import { clampLevel, parseProfile, type ReasoningProfile } from '../utils/reasoningEffort'
-import { effortFor } from './reasoningStore'
+import { clampLevel, parsePick, parseProfile, type ReasoningProfile } from '../utils/reasoningEffort'
+import { effortFor, useReasoningStore } from './reasoningStore'
 
 // ── Chat persistence helpers ──
 
@@ -1935,6 +1935,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         })
       }
       if (data.title) applyTopicTitle(key, id, String(data.title))
+    })
+
+    // The agent changed its web chat reasoning effort (its reasoning_effort
+    // tool) — as you would in the chat box, so the picker follows.
+    ws.on('reasoning_effort', (data) => {
+      const pick = parsePick(data.level)
+      if (!shared && pick) useReasoningStore.getState().setEffort(containerId, pick)
     })
 
     // The agent named a session it was asked to leave (a short title from

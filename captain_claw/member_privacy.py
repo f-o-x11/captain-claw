@@ -102,6 +102,8 @@ CONTENT_TURN_TOOLS: dict[str, frozenset[str] | None] = {
     "vfs": frozenset({"info", "list_projects", "ls", "tree", "stat"}),
     "typesense": frozenset({"search"}),
     "docx": frozenset({"read", "changes", "comments"}),
+    # How hard the owner's agent thinks: no member data goes anywhere.
+    "reasoning_effort": None,
 }
 
 # Internal: the session length when the carry-over cache was last filled. A

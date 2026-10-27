@@ -30,11 +30,15 @@ Turns from anywhere but the web chat (WhatsApp, Telegram, the app, a device,
 a scheduled task …) take the agent's own settings instead — a default and a
 level per source, kept in ``~/.captain-claw/reasoning_effort.json`` and read
 afresh when it changes (:func:`configured_effort`).
+
+The agent changes them too, with its ``reasoning_effort`` tool: the same
+settings, so what it sets is what a person sees (and could set) in Flight Deck.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -154,22 +158,45 @@ def load_settings(path: Path | None = None) -> dict[str, Any]:
     return value
 
 
-def configured_effort(source: str, settings: dict[str, Any] | None = None) -> str | None:
-    """The level the agent's settings give a turn from *source*, or None
-    (send nothing). The web chat has the chat box's picker instead; an
-    unknown source takes the default."""
+def save_settings(settings: Any, path: Path | None = None) -> dict[str, Any]:
+    """Write *settings* (cleaned, as Flight Deck's Settings write them); the
+    next lookup sees them. Returns what was written."""
+    target = path or SETTINGS_PATH
+    cleaned = clean_settings(settings)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps(cleaned, indent=2, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, target)
+    if path is None:
+        _settings_cache.update(mtime=target.stat().st_mtime, value=cleaned)
+    return cleaned
+
+
+def governing_key(source: str, settings: dict[str, Any] | None = None) -> str:
+    """Which setting decides a turn from *source*: "web" (the chat box's
+    picker), the source's own key, its channel's, else "default"."""
     from captain_claw import turn_source
 
     if turn_source.channel_of(source) == "web":
-        return None
+        return "web"
     cfg = settings if settings is not None else load_settings()
     channels = cfg.get("channels") or {}
     for key in (source, turn_source.channel_of(source)):
         if key and key in channels:
-            value = channels[key]
-            return None if value == AUTO else value
-    default = cfg.get("default")
-    return None if default in (None, "", AUTO) else default
+            return key
+    return "default"
+
+
+def configured_effort(source: str, settings: dict[str, Any] | None = None) -> str | None:
+    """The level the agent's settings give a turn from *source*, or None
+    (send nothing). The web chat has the chat box's picker instead; an
+    unknown source takes the default."""
+    cfg = settings if settings is not None else load_settings()
+    key = governing_key(source, cfg)
+    if key == "web":
+        return None
+    value = cfg.get("default") if key == "default" else (cfg.get("channels") or {}).get(key)
+    return None if value in (None, "", AUTO) else value
 
 
 # ── Profiles ──────────────────────────────────────────────────────────
@@ -960,6 +987,10 @@ def remember_refused(model: str) -> None:
     key = model_key(model)
     if key:
         _REFUSED.add(key)
+
+
+def was_refused(model: str) -> bool:
+    return model_key(model) in _REFUSED
 
 
 def _model_for(model: str) -> _Model | None:

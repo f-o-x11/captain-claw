@@ -44,6 +44,7 @@ _TOOL_RISK: dict[str, str] = {
     "personality": "write", "facts": "write", "intentions": "write", "project_memory": "write",
     "vfs": "write", "docx": "write", "topics": "write", "image_gen": "write",
     "synthesize_flow": "write", "pocket_tts": "write", "clipboard": "write",
+    "reasoning_effort": "write",
     # run
     "shell": "exec", "terminal": "exec", "desktop_action": "exec", "scripts": "exec",
     "app_runner": "exec", "code": "exec", "termux": "exec", "pinchtab": "exec", "browser": "exec",
