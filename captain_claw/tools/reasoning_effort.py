@@ -121,11 +121,14 @@ def _report(agent: Any, here: str, profile: reasoning.Profile | None) -> str:
         why = (f"your setting for {_where(key)}" if now
                else "no setting for it — the model's default")
     lines.append(f"This message ({origin}): {_level_text(now, profile)} — {why}.")
-    lines.append("Settings for every source but the web chat (Flight Deck → Settings → Reasoning effort):")
+    lines.append("Levels by channel (the web chat's is the chat box's picker):")
     lines.append(f"- Default: {_level_text(settings.get('default'), profile) if settings.get('default') else 'Auto (not set)'}")
     for src, value in sorted(settings["channels"].items()):
         lines.append(f"- {_where(src)} ({src}): {_level_text(value, profile)}")
-    lines.append("The web chat's level is the chat box's picker in Flight Deck.")
+    lines.append("You can change any of them from any channel, this one included: reasoning_effort "
+                 "set with a level (and a source for another channel: web, default, whatsapp, "
+                 "device:sticks3 …). Flight Deck shows the same levels in the chat box and under "
+                 "Settings → Reasoning effort.")
     if reasoning.was_refused(model):
         lines.append("The model's server refused reasoning fields earlier in this run, so it runs "
                      "at its default whatever is set, until the agent restarts.")
@@ -140,14 +143,16 @@ class ReasoningEffortTool(Tool):
     description = (
         "Read or change your reasoning effort: how hard your model thinks before answering "
         "(off · minimal · low · medium · high · xhigh · max, or on; auto = the model's own "
-        "default). It changes the same setting the user changes in Flight Deck: for a web chat "
-        "message the chat box's picker, for any other source (WhatsApp, Telegram, the app, "
-        "glasses, a device, scheduled tasks …) that source's level in your Settings. The change "
-        "applies at once (the rest of this turn) and to later messages. Use it when the user asks "
-        "you to think harder or faster, or names a level; and on your own when a task needs much "
-        "deeper thinking than you have now (a hard proof, tricky debugging, a long plan) or much "
-        "less — then use scope 'turn' and tell the user. 'get' shows the current level, the "
-        "levels your model offers and the settings."
+        "default). It works from EVERY channel — the web chat, WhatsApp, Telegram, Messenger, "
+        "the app, glasses, voice devices: when the user asks you to set, raise or lower it, to "
+        "think harder or less, or to turn thinking off or on, call set from wherever they asked. "
+        "Never tell them it can only be changed in Flight Deck. Without a source it changes the "
+        "level for where this message came from (the web chat: the chat box's picker; anywhere "
+        "else: that channel's level) — what the user would change in Flight Deck — at once (the "
+        "rest of this turn) and for later messages. On your own, when a task needs much deeper "
+        "thinking than you have now (a hard proof, tricky debugging, a long plan) or much less, "
+        "use scope 'turn' and tell the user. 'get' shows the current level, the levels your "
+        "model offers and every channel's level."
     )
     parameters = {
         "type": "object",
