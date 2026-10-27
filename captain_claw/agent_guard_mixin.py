@@ -691,6 +691,18 @@ class AgentGuardMixin:
         except Exception:
             pass  # Never fail the main flow
 
+    def _audit_refused_tool(self, name: str, arguments: dict[str, Any], reason: str,
+                            session_id_override: str | None) -> None:
+        """A guard refused the call before the registry saw it: still record
+        it in Flight Deck's tool-call register (tool_audit.py)."""
+        from captain_claw import tool_audit
+
+        tool_audit.refused(
+            name, {**(arguments or {}), "_agent": self}, reason,
+            session_id=str(session_id_override or "").strip() or self._current_session_slug(),
+            member=getattr(self, "_speaker_scoped", False) is True,
+        )
+
     async def _execute_tool_with_guard(
         self,
         name: str,
@@ -719,12 +731,14 @@ class AgentGuardMixin:
             turn_usage=turn_usage,
         )
         if not allowed:
+            self._audit_refused_tool(name, arguments, f"Guard: {guard_error}", session_id_override)
             raise GuardBlockedError("script_tool", guard_error)
         # R5: deterministic blast-radius gate — layered alongside the LLM guard
         # above (never replacing it). Default-disabled via config.guards.
         # blast_radius, so this is a no-op unless a human opts in.
         br_ok, br_error = self._enforce_blast_radius(name, arguments, interaction_label)
         if not br_ok:
+            self._audit_refused_tool(name, arguments, f"Blast radius: {br_error}", session_id_override)
             raise GuardBlockedError("blast_radius", br_error)
         # Inject session object and peer-consult approval callback into
         # arguments for tools that need them (e.g. consult_peer).
