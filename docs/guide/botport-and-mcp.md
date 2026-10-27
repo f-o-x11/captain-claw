@@ -1,8 +1,8 @@
-# BotPort and MCP — decks, agents and Claude, connected
+# BotPort, MCP and agent links — decks, agents, Claude and your systems, connected
 
 [← README](../../README.md) · [All guides](README.md)
 
-**On this page:** [BotPort](#botport--flight-decks-that-work-together) · [MCP server](#mcp-server--claude-drives-your-fleet) · [MCP client](#mcp-client--your-agents-use-mcp-servers)
+**On this page:** [BotPort](#botport--flight-decks-that-work-together) · [MCP server](#mcp-server--claude-drives-your-fleet) · [MCP client](#mcp-client--your-agents-use-mcp-servers) · [Agent links](#agent-links--connect-any-system-to-an-agent)
 
 ## BotPort — Flight Decks that work together
 
@@ -74,3 +74,21 @@ The other direction: agents in your fleet call into MCP servers. Add a server on
 - **Streaming calls** — `POST /fd/mcp/<name>/call_stream` emits `progress` / `result` / `error` SSE frames for UIs that want live indicators while a long-running tool runs.
 
 See **USAGE.md → Flight Deck → Connections → MCP servers** for the full endpoint reference and config schema.
+
+## Agent links — connect any system to an agent
+
+New in 0.8.3. Give an outside system, such as your CRM, shop or monitoring, its own key to one of your agents, and they talk directly.
+
+```
+ Your system (CRM, shop, monitor)        Flight Deck                    Agent
+ WebSocket   /link/ws          ──▶   cc_link_… key → the link's  ──▶   a 🔗 session of its own
+ HTTP  POST  /link/messages    ──▶   queue, events, files               linked_system tool
+ signed webhook                ◀──   answers, files, messages     ◀──   (writes on its own)
+```
+
+- **Connections → Systems** (in the kiosk too) adds a link to one of your agents. The system gets its own `cc_link_…` key, shown once.
+- **Three ways in:** a WebSocket at `/link/ws`; HTTP with `POST /link/messages` (add `?wait=` to get the answer in the same call), `GET /link/events` and `GET /link/files/<id>`; or a webhook Flight Deck signs with HMAC-SHA256. Files go both ways.
+- **Or Flight Deck dials out.** A link can name an orchestrator's `wss://` address and the key it issued; Flight Deck keeps the connection open while the agent runs, so an agent behind a home router needs no public address.
+- **The agent can write first** with the `linked_system` tool (`list`, `send`), if the link allows it (*the agent can message it*, on by default).
+- **Kept apart.** A link's turns run in a session of their own, are never mirrored into your chat, and may write email only if the link's own instructions ask for it. Keys are stored only as a hash; the webhook secret and an outbound link's remote key are sealed. Shared-agent members can't use `linked_system`.
+- Webhooks and outbound links go only to public `https://` and `wss://` addresses unless `FD_LINK_PRIVATE_ADDRESSES=1`.

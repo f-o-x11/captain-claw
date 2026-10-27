@@ -18,9 +18,20 @@ Mix providers freely — each session independently selects its model.
 | LiteRT (on-device) | `.litertlm` Gemma models running locally via an isolated subprocess worker |
 | OpenRouter | 200+ models via meta-router |
 
-## 57 built-in tools
+## 63 built-in tools
 
 Shell, file I/O, web fetch/search, browser automation, PDF/DOCX/XLSX/PPTX extraction, image generation (DALL-E), OCR, vision, TTS, STT, email (SMTP/Mailgun/SendGrid), Google Workspace (Drive, Docs, Sheets, Slides, Gmail, Calendar), Microsoft 365 (Outlook mail, Calendar, OneDrive), Jev calibrated judgments (TypeSafe AI), Soniox speech in and out (`audio`), public file links, topic switching by asking (`sessions`), a read-only Telegram inbox, the StopWatch's background picture, bill payments (opt-in), WhatsApp file delivery, intentions (proactive future actions), desktop automation, screen capture with voice commands, persistent cross-session memory (todos, contacts, scripts, APIs, playbooks), datastore (SQLite tables with protection rules), deep memory (Typesense), Basna (read and start multi-agent ensemble runs), personality system, cron scheduling, BotPort fleet discovery, and Termux (Android).
+
+New in 0.8.3:
+
+| Tool | What it does |
+|---|---|
+| `docx` | Creates Word files from Markdown, reads them, and edits them as **real Word tracked changes**; lists, accepts and rejects changes and comments. A user's upload is never changed: the redline is a new file. Shared-agent members can use it, and their changes carry their own name. `write` and `edit` refuse `.docx` and point here. |
+| `self_check` | Tests the agent's live connections and models and reports its server. Read-only. |
+| `reasoning_effort` | Reads or changes the agent's own reasoning effort when you ask, from any channel; it changes the same setting you would. Owner-only. |
+| `activity` | The agent's own tool calls, read back from the [tool-call register](flight-deck.md#activity-and-audit): "what did you do overnight?" Only its own calls from its owner's turns; never members' calls or file and mail bodies. |
+| `linked_system` | Messages a system linked to the agent; see [agent links](botport-and-mcp.md#agent-links--connect-any-system-to-an-agent). |
+| `whatsapp_web` | Reads, and with your consent sends to, your own WhatsApp; see [WhatsApp Web](devices-and-channels.md#whatsapp-web--your-own-whatsapp). Hidden until you link it. |
 
 See [USAGE.md](../../USAGE.md#tools-reference) for the full reference.
 
@@ -32,6 +43,7 @@ Three layers of protection that run before, during, and after agent operations:
 - **Script guards** — AST-level analysis of generated code before execution
 - **Output guards** — Validate tool results for hallucinations and safety
 - **Action honesty** (0.8.0) — a fabrication guard rejects replies that claim an email was sent or a calendar event changed when no tool did it, and automated turns may write email only when their own instructions ask for it
+- **Every call on the record** (0.8.3) — each tool call lands in the deck's append-only, HMAC-chained [tool-call register](flight-deck.md#activity-and-audit), refused calls included; self-reflection reads a digest of repeated failures and repeated calls from it
 
 Guards support two modes: `stop_suspicious` (block automatically) or `ask_for_approval` (prompt the user).
 

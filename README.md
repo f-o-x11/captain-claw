@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENCE)
-[![Version](https://img.shields.io/badge/version-0.8.2-purple)](release-notes/RELEASE_NOTES_0.8.2.md)
+[![Version](https://img.shields.io/badge/version-0.8.3-purple)](release-notes/RELEASE_NOTES_0.8.3.md)
 [![Interface](https://img.shields.io/badge/interface-terminal%20%7C%20web%20UI%20%7C%20desktop-black)](docs/guide/getting-started.md)
 [![Models](https://img.shields.io/badge/models-OpenAI%20%7C%20Claude%20%7C%20Gemini%20%7C%20DeepSeek%20%7C%20Ollama%20%7C%20OpenRouter-orange)](docs/guide/agents.md#multi-model-support)
 
@@ -16,7 +16,9 @@
 
 **[🌐 Website](https://captain-claw.com)** · **[🚀 Live Demo](https://cohort001.captain-claw.com/)** · **[📖 Docs](https://captain-claw.com/docs)** · **[📦 PyPI](https://pypi.org/project/captain-claw/)** · **[🧭 Guides](docs/guide/README.md)** · **[📝 What's new](docs/guide/whats-new.md)**
 
-<p align="center"><strong>Flight Decks that work together</strong> &nbsp;·&nbsp; <strong>7 orchestration modes</strong> &nbsp;·&nbsp; <strong>57 built-in tools</strong> per agent &nbsp;·&nbsp; <strong>6 shared memory layers</strong> &nbsp;·&nbsp; <strong>31 ready-made specialists</strong> &nbsp;·&nbsp; <strong>a full coding pipeline</strong> &nbsp;·&nbsp; <strong>a team-safe deck and kiosk</strong> &nbsp;·&nbsp; <strong>three M5Stack voice devices</strong> &nbsp;·&nbsp; <strong>living beings you raise</strong> &nbsp;·&nbsp; <strong>small models that do real work</strong></p>
+**New in 0.8.3 — Plugged In, On the Record:** connect any system to an agent, let agents read your own WhatsApp, and see every tool call they make. **[Release notes](release-notes/RELEASE_NOTES_0.8.3.md)**
+
+<p align="center"><strong>Flight Decks that work together</strong> &nbsp;·&nbsp; <strong>7 orchestration modes</strong> &nbsp;·&nbsp; <strong>63 built-in tools</strong> per agent &nbsp;·&nbsp; <strong>6 shared memory layers</strong> &nbsp;·&nbsp; <strong>31 ready-made specialists</strong> &nbsp;·&nbsp; <strong>a full coding pipeline</strong> &nbsp;·&nbsp; <strong>a team-safe deck and kiosk</strong> &nbsp;·&nbsp; <strong>three M5Stack voice devices</strong> &nbsp;·&nbsp; <strong>living beings you raise</strong> &nbsp;·&nbsp; <strong>small models that do real work</strong></p>
 
 ## Why Captain Claw
 
@@ -25,9 +27,10 @@
 - **🛰️ Decks that work together.** Flight Decks on a VPS, a laptop and a Raspberry Pi behind home NAT lend each other their agents over **BotPort**, and you watch every request cross a live map.
 - **💻 An engineering department.** Plan → your approval → build → three independent reviewers → fix, every phase a git commit in your own repo.
 - **👥 Ready for a team.** A kiosk your non-admins live in, an admin console, invitations by email, per-user Google and Microsoft accounts, shared agents and daily plan limits.
-- **📡 Wherever you are.** Web, WhatsApp, Telegram, a HUD for Meta Ray-Ban Display, three push-to-talk M5Stack devices, and Claude itself over MCP, all one conversation.
+- **🔌 Plugs into anything.** Give your CRM, shop or monitoring its own key and it talks to an agent over a WebSocket, HTTP or signed webhooks, or Flight Deck dials out to it. MCP works both ways: Claude drives your fleet, and your agents use any MCP server.
+- **📡 Wherever you are.** Web, WhatsApp (the Cloud API, or your own number), Telegram, a HUD for Meta Ray-Ban Display, three push-to-talk M5Stack devices, and Claude itself over MCP, all one conversation.
 - **🧬 Memory that keeps thinking.** Six memory layers shared across sessions and agents, and dream cycles that surface connections you didn't ask for.
-- **🛡️ Agents that don't make things up.** Guards before, during and after every action, and a fabrication guard that catches a claimed send or calendar change no tool made.
+- **🛡️ Agents you can check on.** Every tool call lands in a tamper-evident register you and your admins can read, guards run before, during and after every action, and a fabrication guard catches a claimed send or calendar change no tool made.
 - **🔓 Yours, end to end.** Self-hosted, MIT, bring your own keys or run 100% local with Ollama. No lock-in.
 
 ## Quick start
@@ -39,7 +42,17 @@ flight-deck          # the multi-agent dashboard: http://localhost:25080
 
 First run starts onboarding. For a single agent in the terminal or the browser, Docker, a deck for your team or a voice device, see **[Getting started](docs/guide/getting-started.md)**.
 
-## 🛰️ BotPort — Flight Decks that work together `NEW in 0.8.2`
+## 🔌 New in 0.8.3 — plugged in, on the record
+
+- **Agent links.** Connections → **Systems** gives an outside system its own key to one of your agents: a WebSocket, plain HTTP or signed webhooks, files both ways. Or Flight Deck dials out to an orchestrator, so an agent behind a router needs no public address.
+- **Your own WhatsApp** *(experimental, opt-in)*. Link your number as a linked device; agents read your chats, files and voice notes, send only to chats you whitelist, and answer in the chats you pick when someone calls them by name.
+- **Every tool call, on the record.** An append-only, HMAC-chained register of every call every agent makes: **Activity** for you, **Audit** for admins, and an `activity` tool so an agent can tell you what it really did overnight.
+- **Nothing waits unseen.** Nudges and proposals that need your approval reach WhatsApp, Telegram, your devices and the bell, with Approve and Reject right there.
+- **And:** idle agents sleep and wake when needed, Shared folders with OneDrive in the kiosk, Word documents with real tracked changes, and six new tools.
+
+**→ [Release notes](release-notes/RELEASE_NOTES_0.8.3.md)** · **[Agent links](docs/guide/botport-and-mcp.md#agent-links--connect-any-system-to-an-agent)** · **[WhatsApp Web](docs/guide/devices-and-channels.md#whatsapp-web--your-own-whatsapp)** · **[Activity and Audit](docs/guide/flight-deck.md#activity-and-audit)**
+
+## 🛰️ BotPort — Flight Decks that work together `since 0.8.2`
 
 <p align="center">
   <img src="docs/screenshots/botport-live.webp" width="100%" alt="The BotPort hub's live network map: five Flight Decks around the hub, each with the agents it shares, requests and answers flying between them">
@@ -68,7 +81,7 @@ Every Flight Deck used to be an island. Now any number of them join one network 
   <img src="docs/screenshots/kiosk-0.8.2.webp" width="100%" alt="The kiosk: an agent greets you with skill cards, the Share on network dialog, and the kiosk on a phone">
 </p>
 
-The chat-first view your non-admins live in is a complete place to work: one-click **"What can I do?" skill cards**, a **File library** and a **Data library** that summarise everything the agents keep, **Scheduled tasks** that deliver to chat, email or Telegram, one **timeline** per agent with named topics, and a **⋯** menu that shares an agent on the network. Admins get an **Admin console**, invitations by email, a waitlist, branding and daily plan limits.
+The chat-first view your non-admins live in is a complete place to work: one-click **"What can I do?" skill cards**, a **File library** and a **Data library** that summarise everything the agents keep, **Shared folders** with Google Drive and OneDrive beside them, **Scheduled tasks** that deliver to chat, email or Telegram, one **timeline** per agent with named topics, and a **⋯** menu that shares an agent on the network. Admins get an **Admin console**, invitations by email, a waitlist, branding and daily plan limits.
 
 **→ [The kiosk and simple layout](docs/guide/flight-deck.md#the-kiosk-and-simple-layout)** · **[Running a deck for a team](docs/team-deployment.md)**
 
@@ -134,11 +147,11 @@ The fifth mode is **💻 Code** (above). The sixth is **Flight Deck** itself —
 | Guide | What's inside |
 |---|---|
 | **[Getting started](docs/guide/getting-started.md)** | Install and the launchers, a deck for a team, a voice device on your desk, Docker, configuration |
-| **[Flight Deck](docs/guide/flight-deck.md)** | The command center: seven orchestration modes, Code, Plan and Deep mode, Flows, the kiosk, running a deck for a team |
-| **[BotPort and MCP](docs/guide/botport-and-mcp.md)** | Flight Decks that work together, Flight Deck as an MCP server for Claude, MCP servers for your agents |
-| **[Devices and channels](docs/guide/devices-and-channels.md)** | StopWatch, PaperColor and StickS3, the smart-glasses HUD, WhatsApp, Telegram, agents in your inbox |
+| **[Flight Deck](docs/guide/flight-deck.md)** | The command center: seven orchestration modes, Code, Plan and Deep mode, Flows, the kiosk, activity and audit, running a deck for a team |
+| **[BotPort, MCP and agent links](docs/guide/botport-and-mcp.md)** | Flight Decks that work together, Flight Deck as an MCP server for Claude, MCP servers for your agents, connecting your own systems |
+| **[Devices and channels](docs/guide/devices-and-channels.md)** | StopWatch, PaperColor and StickS3, the smart-glasses HUD, WhatsApp (and your own WhatsApp), Telegram, notifications, agents in your inbox |
 | **[Memory and cognition](docs/guide/memory.md)** | Six memory layers, the context engine, dreaming, the Brain Graph |
-| **[Inside an agent](docs/guide/agents.md)** | Every supported model, the 57 built-in tools, safety guards, the agent web UI |
+| **[Inside an agent](docs/guide/agents.md)** | Every supported model, the 63 built-in tools, safety guards, the agent web UI |
 | **[Architecture](docs/guide/architecture.md)** | Where each component lives in the code |
 | **[What's new](docs/guide/whats-new.md)** | Every release, newest first |
 
