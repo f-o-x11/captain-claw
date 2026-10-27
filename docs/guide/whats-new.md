@@ -2,9 +2,36 @@
 
 [← README](../../README.md) · [All guides](README.md)
 
-Every release from the newest back to 0.4.29, as it appeared in the README. The full notes for each, with upgrade steps, are in [release-notes/](../../release-notes/).
+Every release from the newest back to 0.4.29. The full notes for each, with upgrade steps, are in [release-notes/](../../release-notes/).
 
-**Jump to:** [0.8.2](#whats-new-in-082) · [0.8.1](#whats-new-in-081) · [0.8.0](#whats-new-in-080) · [0.7.8](#whats-new-in-078) · [0.7.6](#whats-new-in-076) · [0.7.5](#whats-new-in-075) · [0.7.4](#whats-new-in-074) · [0.7.3](#whats-new-in-073) · [0.7.2](#whats-new-in-072) · [0.7.1](#whats-new-in-071) · [0.7.0](#whats-new-in-070) · [0.6.5](#whats-new-in-065) · [0.6.4](#whats-new-in-064) · [0.6.3](#whats-new-in-063) · [0.6.2](#whats-new-in-062) · [0.6.1](#whats-new-in-061) · [0.6.0](#whats-new-in-060) · [0.5.7](#whats-new-in-057) · [0.5.6](#whats-new-in-056) · [0.5.5](#whats-new-in-055) · [0.5.4](#whats-new-in-054) · [0.5.3](#whats-new-in-053) · [0.5.2](#whats-new-in-052) · [0.5.1](#whats-new-in-051) · [0.5.0](#whats-new-in-050) · [0.4.33](#whats-new-in-0433) · [0.4.32](#whats-new-in-0432) · [0.4.31](#whats-new-in-0431) · [0.4.30](#whats-new-in-0430) · [0.4.29](#whats-new-in-0429)
+**Jump to:** [0.8.3](#whats-new-in-083) · [0.8.2](#whats-new-in-082) · [0.8.1](#whats-new-in-081) · [0.8.0](#whats-new-in-080) · [0.7.8](#whats-new-in-078) · [0.7.6](#whats-new-in-076) · [0.7.5](#whats-new-in-075) · [0.7.4](#whats-new-in-074) · [0.7.3](#whats-new-in-073) · [0.7.2](#whats-new-in-072) · [0.7.1](#whats-new-in-071) · [0.7.0](#whats-new-in-070) · [0.6.5](#whats-new-in-065) · [0.6.4](#whats-new-in-064) · [0.6.3](#whats-new-in-063) · [0.6.2](#whats-new-in-062) · [0.6.1](#whats-new-in-061) · [0.6.0](#whats-new-in-060) · [0.5.7](#whats-new-in-057) · [0.5.6](#whats-new-in-056) · [0.5.5](#whats-new-in-055) · [0.5.4](#whats-new-in-054) · [0.5.3](#whats-new-in-053) · [0.5.2](#whats-new-in-052) · [0.5.1](#whats-new-in-051) · [0.5.0](#whats-new-in-050) · [0.4.33](#whats-new-in-0433) · [0.4.32](#whats-new-in-0432) · [0.4.31](#whats-new-in-0431) · [0.4.30](#whats-new-in-0430) · [0.4.29](#whats-new-in-0429)
+
+## What's New in 0.8.3
+
+**Plugged In, On the Record.** Any system can talk to an agent, agents can read your own WhatsApp, and every tool call they make is written down. **Restart Flight Deck, then every agent** — see the [upgrade steps](../../release-notes/RELEASE_NOTES_0.8.3.md#upgrading).
+
+- **Agent links.**
+  - Connections → **Systems** gives a CRM, shop or monitor its own `cc_link_…` key to one of your agents.
+  - It talks over a WebSocket (`/link/ws`), plain HTTP (`POST /link/messages`, `?wait=` for the answer) or signed webhooks, with files both ways.
+  - Or Flight Deck dials out to an orchestrator's `wss://` address, so an agent behind a router needs no public address.
+  - The agent writes first with the new `linked_system` tool; link turns run in a session of their own.
+- **WhatsApp Web (experimental, opt-in).**
+  - Link *your own* WhatsApp as a linked device; your agents read chats, files and voice notes with the new `whatsapp_web` tool.
+  - Sending is off until you turn it on: whitelisted existing chats only, daily and per-chat limits, your signature on every message.
+  - Auto-replies in the chats you tick, when someone calls the agent by name, with an activity log of every decision.
+  - It uses an unofficial client, which is against WhatsApp's terms; an admin must allow it.
+- **The tool-call register.**
+  - Every agent tool call is recorded (tool, masked parameters, what started it, outcome) in an append-only, HMAC-chained log; refused calls too.
+  - **Activity** for users, **Admin console → Audit** for admins, with CSV/JSON-lines export and 90-day retention by default.
+  - Agents read their own calls back with the new `activity` tool, and self-reflection gets a digest of repeated failures.
+- **Nudges and proposals reach you** on WhatsApp, Telegram, your devices and the bell, with **Approve / Reject** in the bell and a ⤢ bigger view; a **Notifications** card picks the channels.
+- **Idle agents sleep** (admin, off by default) and wake five minutes before their scheduled work, or when anything needs them.
+- **The kiosk** gets **Shared folders** (the VFS beside Library and Data), **OneDrive** mounts beside Google Drive, fullscreen library dialogs, and **⌘/Ctrl+Enter** to queue a message. The tab icon follows the deck's Branding logo.
+- **Six new tools** — `docx` (Word files with **real tracked changes**, checked in Microsoft Word), `self_check`, `reasoning_effort` (from any channel), `activity`, `linked_system` and `whatsapp_web`: **63 built-in tools** in all.
+- **Devices** — firmware **0.19.1** / PaperColor B **1.0.21**: a beep, a banner and a count badge when something waits, and a link to the deck that renews itself.
+- **Fixes** — a removed agent's kept folder never passes to another user's new agent; the WhatsApp Cloud API logs Meta's error code for a refused send; the mail repeat check tells a recurring report to date its subject.
+
+See [RELEASE_NOTES_0.8.3.md](../../release-notes/RELEASE_NOTES_0.8.3.md).
 
 ## What's New in 0.8.2
 

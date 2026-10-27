@@ -4,7 +4,7 @@
 
 The same agents, the same conversation, from wherever you are.
 
-**On this page:** [Voice devices](#voice-devices) · [Three devices, one firmware](#three-devices-one-firmware) · [Smart glasses](#smart-glasses) · [Chat channels](#chat-channels) · [Agents in your inbox](#agents-in-your-inbox)
+**On this page:** [Voice devices](#voice-devices) · [Three devices, one firmware](#three-devices-one-firmware) · [Smart glasses](#smart-glasses) · [Chat channels](#chat-channels) · [WhatsApp Web](#whatsapp-web--your-own-whatsapp) · [Notifications](#notifications) · [Agents in your inbox](#agents-in-your-inbox)
 
 ## Voice devices
 
@@ -45,6 +45,8 @@ One firmware tree: `cd firmware/device && pio run -e stopwatch -t upload` (or `-
 - **Offline voice notes** (ADPCM in flash, or on the PaperColor's microSD) sent as one turn once the deck is back, and a **note-taking mode** for a run of notes.
 - **Context with every question** — battery and time left, Wi-Fi, motion, room temperature and humidity, local time, as a `[Context: …]` line the model reads.
 - **"Volume up", "beep off"** handled by the deck, never sent to the agent; a turn survives a dropped link.
+- **Something waiting?** (0.8.3, firmware 0.19.1 / PaperColor B 1.0.21) — a beep, a banner on the StopWatch and StickS3, and a magenta count badge on every screen when a proposal or nudge waits for you in Flight Deck. Quiet hours keep the count and skip the beep. The text stays in Flight Deck.
+- **A link that renews itself** (0.8.3) — 30 seconds after its agent goes missing (backing off to every 10 minutes) and after 20 minutes idle, never in the middle of something.
 
 ## Smart glasses
 
@@ -57,6 +59,31 @@ One firmware tree: `cd firmware/device && pio run -e stopwatch -t upload` (or `-
 - **One conversation** (0.8.1) — every message records where it came from; the model reads `[via WhatsApp] …`, the kiosk shows *via M5Stack StickS3 (desk)*.
 - **Claude** — Flight Deck is an MCP server at `/fd/mcp-server` (OAuth 2.1 for claude.ai and Claude Desktop, a personal access token for Claude Code): `list_agents`, `send_task`, `get_result`, `cancel_task`, `jev_ask`.
 - **Slack, Discord, Twitter/X** — message and thread handling, channels and DMs, and an OAuth 2.0 `twitter` tool.
+- **WhatsApp Web** (0.8.3, experimental) — your own WhatsApp as a linked device; see [below](#whatsapp-web--your-own-whatsapp).
+
+A refused WhatsApp Cloud API send logs Meta's error code (0.8.3), and a de-registered number is an error that names the fix (`POST /<phone-number-id>/register`); the Connections test button says so too.
+
+## WhatsApp Web — your own WhatsApp
+
+New in 0.8.3, **experimental and opt-in**.
+
+> WhatsApp Web support uses an unofficial client ([neonize](https://github.com/krypton-byte/neonize)). That is against WhatsApp's terms of service, and WhatsApp can ban an account that uses one. It is off until an admin allows it (*Allow WhatsApp Web*) and each user consents, and it isn't available in the desktop app. Install it with `pip install 'captain-claw[whatsapp-web]'`.
+
+- **Link your own number** in **Connections → WhatsApp Web** by scanning a QR code or typing a pairing code, like any linked device. Flight Deck keeps the history, sealed at rest, for as long as you choose (7, 30, 90, 365 days, or everything).
+- **Your agents read it** with the `whatsapp_web` tool (`status`, `chats`, `read`, `recent`, `search`, `contact`, `attachment`, `send`): chats, messages, contacts and attachments, with voice notes transcribed when Soniox is set up. Each turn starts with a line on what came in since the agent's last turn. Only the owner's agents read it; shared-agent members never do.
+- **Sending is off by default.** When on, an agent sends only to existing chats you whitelisted (it never starts a conversation), within a daily limit (30, up to 200), 6 a minute per chat, and never the same text to the same chat twice in 24 hours. Every message carries your signature. It never reacts, marks messages read or changes your presence. The fabrication guard catches a claimed WhatsApp send that didn't happen.
+- **Auto-replies in chats you choose.** Tick *auto-reply* on a whitelisted chat, pick one of your agents and its trigger words. The agent answers when it's named, called by a trigger word or `@word`, or replied to, and may keep talking for 15 minutes after its last message. It sees only that chat's last 30 messages and may run one web search; never your mail, files, calendar, memory or other chats. At most 10 answers an hour per chat; messages older than 10 minutes and other assistants are ignored; nobody in the chat can change its rules.
+- **Auto-reply activity** shows each decision: a one-line reason, the reply or the reason for silence, the model's reasoning, the search, tokens and time.
+- Kill switches: `FD_WHATSAPP_WEB=off`, `FD_WHATSAPP_WEB_SEND=off`, `FD_WHATSAPP_WEB_AUTOREPLY=off`.
+
+## Notifications
+
+Since 0.8.3, Autonomous Work's nudges and the proposals waiting for your approval reach you wherever you choose on the **Notifications** card in Connections (also in the kiosk's Settings and the admin console):
+
+- **WhatsApp** (on), **Telegram** (off until you turn it on) and **your devices** (on: a beep, a banner and a count);
+- **the bell** in Flight Deck, always, with **Approve / Reject** on each proposal and a ⤢ bigger view. Nudges and proposals render as Markdown, with pictures dropped and links shown as text.
+
+Quiet hours send the count without the beep. A channel that fails never stops the others.
 
 ## Agents in your inbox
 

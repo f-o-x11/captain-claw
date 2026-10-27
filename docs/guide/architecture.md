@@ -8,7 +8,7 @@ Where each part of Captain Claw lives in the code.
 |---|---|
 | Agent (14-mixin composition) | `captain_claw/agent.py` |
 | LLM providers | `captain_claw/llm/` |
-| 57 tools + registry | `captain_claw/tools/` |
+| 63 tools + registry | `captain_claw/tools/` |
 | Flight Deck (FastAPI + React) | `captain_claw/flight_deck/` |
 | Device bridge (StickS3 / StopWatch / PaperColor, `/device/ws`) + OTA store + backgrounds | `captain_claw/flight_deck/device_bridge.py`, `device_firmware.py`, `device_backgrounds.py` |
 | Device firmware (PlatformIO, all three devices) | `firmware/device/` |
@@ -18,6 +18,13 @@ Where each part of Captain Claw lives in the code.
 | Reasoning effort per vendor | `captain_claw/llm/reasoning.py` |
 | Payments (opt-in) | `captain_claw/payments/` |
 | HUD for smart glasses (`/hud/`) | `flight-deck/src/hud/` |
+| Agent links (inbound `/link/ws` + HTTP + webhooks, outbound connector) | `captain_claw/flight_deck/agent_link.py`, `agent_link_http.py`, `agent_link_out.py` |
+| WhatsApp Web (linked-device service, supervisor, routes, auto-replies) | `captain_claw/flight_deck/whatsapp_web/`, `whatsapp_web_supervisor.py`, `whatsapp_web_routes.py`, `whatsapp_web_autoreply.py` |
+| Owner notifications (WhatsApp, Telegram, devices, the bell) | `captain_claw/flight_deck/owner_notify.py` |
+| Idle-agent sleep and pre-wake | `captain_claw/flight_deck/agent_idle.py` |
+| Tool-call register (store, routes; agent-side recorder and digest) | `captain_claw/flight_deck/tool_audit_store.py`, `tool_audit_routes.py`; `captain_claw/tool_audit.py`, `tool_audit_digest.py` |
+| Word tracked changes (`docx` tool) | `captain_claw/docx_ops.py` |
+| OneDrive VFS mounts | `captain_claw/onedrive_client.py` |
 | Bat (plan, loop, judge, store) | `captain_claw/flight_deck/bat_*.py` |
 | Fabrication guard | `captain_claw/fabrication_guard.py` |
 | Lupa research desk (on the Flight Deck API) | `lupa/` |

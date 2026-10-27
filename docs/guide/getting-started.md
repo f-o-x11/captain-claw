@@ -27,6 +27,8 @@ botport                   # Agent-to-agent routing hub
 
 First run starts onboarding automatically. For Ollama, no key needed — set `provider: ollama` in `config.yaml`.
 
+**Optional extras:** `pip install 'captain-claw[cv]'` for local OpenCV vision, `pip install 'captain-claw[whatsapp-web]'` to let users link their own WhatsApp (experimental; see [WhatsApp Web](devices-and-channels.md#whatsapp-web--your-own-whatsapp)).
+
 ## A deck for a team
 
 Before the second person logs in, turn on auth, fix the JWT secret and tell the deck its public address:
@@ -98,4 +100,4 @@ Full reference: [USAGE.md](../../USAGE.md#configuration-reference) (23 config se
 
 - [Flight Deck](flight-deck.md) — what to do once the dashboard is open
 - [BotPort and MCP](botport-and-mcp.md) — connect your decks to each other and to Claude
-- [Inside an agent](agents.md) — every supported model and the 57 built-in tools
+- [Inside an agent](agents.md) — every supported model and the 63 built-in tools
