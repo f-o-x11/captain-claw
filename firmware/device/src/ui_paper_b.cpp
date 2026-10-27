@@ -777,7 +777,10 @@ static bool dashDue() {
 
 // ── chrome ─────────────────────────────────────────────────────────────
 
-static uint16_t healthInk(Health h) { return h == Up ? kGreen : h == Partial ? kYellow : kRed; }
+static uint16_t healthInk(Health h) { return h == Up ? kGreen : h == Partial ? kYellow : h == Asleep ? kBlue : kRed; }
+
+// The agent's name: blue while it's asleep, red while it's switched off.
+static uint16_t agentInk() { return hAgent == Asleep ? kBlue : hAgent == Off ? kRed : kInk; }
 
 static int batteryPct(bool* charging) {
   static int pct = -1;
@@ -826,9 +829,9 @@ static void drawHeader(const String& title = "", bool dots = true) {
   font(vlw::Small);
   int y = kHeadH / 2;
   char clock[16];
-  String name = title.length() ? title
-                : clockText(clock, sizeof(clock), "%H:%M", time(nullptr)) ? String(clock)
-                : barAgent.length() ? barAgent : String("Captain Claw");
+  const bool hasClock = !title.length() && clockText(clock, sizeof(clock), "%H:%M", time(nullptr));
+  const bool agent = !title.length() && !hasClock && barAgent.length();
+  String name = title.length() ? title : hasClock ? String(clock) : agent ? barAgent : String("Captain Claw");
   bool chg = false;
   int pct = batteryPct(&chg);
   drawBattery(W - PAD, y, pct, chg);
@@ -839,7 +842,7 @@ static void drawHeader(const String& title = "", bool dots = true) {
     right = W / 2 - 24;
   }
   font(vlw::Title);
-  text(fit(name, right - PAD), PAD, y + 2, kInk, middle_left);
+  text(fit(name, right - PAD), PAD, y + 2, agent ? agentInk() : kInk, middle_left);
   canvas.fillRect(0, kHeadH - 3, W, 3, kInk);
 }
 
@@ -1079,7 +1082,8 @@ static void drawDashboard(bool asleep) {
     if (!haveHome || lastHome.rows.size() < 2) {
       text(hWifi == Up ? "Wi-Fi up" : hWifi == Partial ? "Wi-Fi connecting…" : "no Wi-Fi", x, y,
            hWifi == Up ? kGreen : hWifi == Partial ? kYellow : kRed);
-      text(hAgent == Up ? "agent linked" : "no agent yet", x, y + 26, hAgent == Up ? kGreen : kYellow);
+      text(hAgent == Up ? "agent linked" : hAgent == Asleep ? "agent asleep" : hAgent == Off ? "agent stopped" : "no agent yet",
+           x, y + 26, hAgent == Up ? kGreen : hAgent == Asleep || hAgent == Off ? agentInk() : kYellow);
     }
   }
   drawFooter({{board::kTalkKey, lastHome.noteMode ? "note" : "talk"}, {board::kSideKey, "options"},

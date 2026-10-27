@@ -31,10 +31,11 @@ System → Flight Deck
                                                  after a reconnect
 
 Flight Deck → system
-  text  {"type":"bound","agent":name,"slug":slug,"linked":bool}
+  text  {"type":"bound","agent":name,"slug":slug,"linked":bool,"power":"running|asleep|stopped"}
   text  {"type":"accepted","id":…,"queued":n}    n = messages ahead of it; "duplicate":true for an id
                                                  seen before (its answer comes again if it is the last)
-  text  {"type":"state","re":…,"state":"thinking|ready"}   ("connected" / "agent_offline": the agent)
+  text  {"type":"state","re":…,"state":"thinking|ready"}   ("connected" / "agent_offline": the agent,
+                                                 with "power" as in "bound")
   text  {"type":"reply","re":…,"text":"…"}        the answer
   text  {"type":"error","re":…,"text":"…"}        that message didn't run, or failed ("re": null:
                                                  a frame that wasn't understood)

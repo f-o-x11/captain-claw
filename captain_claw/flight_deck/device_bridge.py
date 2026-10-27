@@ -52,8 +52,12 @@ Device → Flight Deck
   and changes it itself (sound_command()).
 
 Flight Deck → device
-  text  {"type":"bound","agent":name,"slug":slug,"linked":bool} | {"type":"agents","items":[…],"current":slug}
+  text  {"type":"bound","agent":name,"slug":slug,"linked":bool,"power":p} | {"type":"agents","items":[…],"current":slug}
   text  {"type":"state","state":"connected|agent_offline|transcribing|thinking|ready"}
+        connected / agent_offline carry "power": running | asleep (put to sleep for being idle:
+        the next word wakes it) | stopped (switched off, or none to bind: then before the error);
+        while the link is down agent_offline comes again when that changes. No "power": Flight
+        Deck can't tell.
   text  {"type":"transcript","text":"…"}         what it heard
   text  {"type":"status","text":"…"}             progress narration
   text  {"type":"activity","text":"…","tool":"…"} what the agent is doing (tools, LLM calls)
@@ -574,6 +578,11 @@ class _DeviceConn(BusClient):
 
     def pick_agent(self, selector: str) -> dict | None:
         return _pick_agent(self.user_id, selector)
+
+    async def _no_agent(self) -> None:
+        # None running or asleep: the device shows its agent switched off.
+        self._power = "stopped"
+        await self.send_json({"type": "state", "state": "agent_offline", "power": "stopped"})
 
     # ── agent bus → device ──
     def _command_answer(self, command: str, text: str) -> tuple[str | None, bool]:

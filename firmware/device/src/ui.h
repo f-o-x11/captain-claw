@@ -21,8 +21,10 @@ constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
   return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
 }
 
-// Health of a link, shown as a colour block (stick) or dot (round).
-enum Health : uint8_t { Down = 0, Partial = 1, Up = 2 };
+// Health of a link, shown as a colour block (stick) or dot (round, paper).
+// The agent's link also reads Asleep (blue: Flight Deck put it to sleep for
+// being idle, the next word wakes it) or Off (red as Down: it's switched off).
+enum Health : uint8_t { Down = 0, Partial = 1, Up = 2, Asleep = 3, Off = 4 };
 
 void begin();
 void brightness(uint8_t level);
@@ -97,6 +99,7 @@ struct Status {
   int rttMs = -1;
   String agent;
   bool agentLinked = false;
+  bool agentAsleep = false, agentOff = false;  // its link down: asleep (wakes for a word) / switched off
   int batteryPct = -1, batteryMv = 0;
   bool charging = false, usb = false;
   int minutesLeft = -1, minutesToFull = -1;  // from the level over the clock (-1: not known yet; 0 to full: full)
@@ -119,15 +122,16 @@ int showStatus(const Status& s, int page);  // returns the page count
 
 inline std::vector<Row> statusRows(const Status& s) {
   const uint16_t green = rgb(40, 200, 90), yellow = rgb(250, 200, 40), red = rgb(230, 50, 50),
-                 text = rgb(230, 230, 230), cyan = rgb(60, 210, 240);
+                 text = rgb(230, 230, 230), cyan = rgb(60, 210, 240), blue = rgb(70, 150, 255);
   std::vector<Row> rows;
   rows.push_back({"Wi-Fi", s.wifi ? s.ssid + "  " + String(s.rssi) + " dBm" : String("not connected"),
                   s.wifi ? (s.rssi < -80 ? yellow : green) : red});
   rows.push_back({"IP", s.wifi ? s.ip : String("-"), text});
   rows.push_back({"Deck", s.deckHost + (s.deck ? (s.rttMs >= 0 ? "  " + String(s.rttMs) + " ms" : String("  ok")) : String("  offline")),
                   s.deck ? green : red});
-  rows.push_back({"Agent", (s.agent.length() ? s.agent : String("none")) + (s.agentLinked ? "" : "  (waiting)"),
-                  s.agentLinked ? green : (s.deck ? yellow : red)});
+  rows.push_back({"Agent", (s.agent.length() ? s.agent : String("none")) +
+                               (s.agentLinked ? "" : s.agentAsleep ? "  (asleep)" : s.agentOff ? "  (stopped)" : "  (waiting)"),
+                  s.agentLinked ? green : s.agentAsleep ? blue : s.agentOff ? red : (s.deck ? yellow : red)});
   char volts[16];
   snprintf(volts, sizeof(volts), "%.2f V", s.batteryMv / 1000.0f);
   String time = s.charging ? (s.minutesToFull == 0 ? String("  full") : s.minutesToFull > 0 ? "  full in ~" + timeSpan(s.minutesToFull) : String(""))

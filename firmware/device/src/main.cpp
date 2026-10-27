@@ -49,9 +49,9 @@
 #endif
 
 #if defined(PAPER_B)
-#define FW_VERSION "1.0.21"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
+#define FW_VERSION "1.0.22"  // the PaperColor the "B" way (ui_paper_b.cpp): its own line of versions
 #else
-#define FW_VERSION "0.19.1"
+#define FW_VERSION "0.19.2"
 #endif
 
 // The loop task's stack (Arduino's default is 8 KB). The smooth fonts on the
@@ -124,6 +124,11 @@ static WebSocketsClient ws;
 static WiFiMulti wifiMulti;
 static bool wsUp = false;
 static bool agentLinked = false;  // Flight Deck's link to the agent is up
+// What Flight Deck says of the agent (its "power"): with the link down, it's
+// asleep — put to sleep for being idle, the next word wakes it — or switched
+// off. Unknown from a deck that doesn't say.
+enum class AgentPower : uint8_t { Unknown, Running, Asleep, Off };
+static AgentPower agentPower = AgentPower::Unknown;
 static ota::Offer offer;           // a newer build Flight Deck offers (docs/device-ota-plan.md)
 static String offerAnnounced;      // version the user has been told about
 static bool offerAutoTried = false;
@@ -273,6 +278,7 @@ static constexpr uint16_t kGreen = ui::rgb(40, 200, 90), kRed = ui::rgb(230, 50,
 static constexpr uint16_t kYellow = ui::rgb(250, 200, 40), kCyan = ui::rgb(60, 210, 240);
 static constexpr uint16_t kMagenta = ui::rgb(235, 40, 170);  // what waits in Flight Deck
 static constexpr uint16_t kOrange = ui::rgb(255, 150, 40), kText = ui::rgb(230, 230, 230);
+static constexpr uint16_t kBlue = ui::rgb(70, 150, 255);  // the agent asleep (blue ink on the paper)
 static constexpr size_t kMaxImage = 256 * 1024;
 static constexpr uint64_t kButtonPins = (1ULL << board::kTalkPin) | (1ULL << board::kSidePin) |
                                         (board::kBackPin >= 0 ? (1ULL << board::kBackPin) : 0);
@@ -383,9 +389,15 @@ static ui::Health wifiHealth() {
   return WiFi.RSSI() < -80 ? ui::Partial : ui::Up;
 }
 
+static bool agentAsleep() { return wsUp && !agentLinked && agentPower == AgentPower::Asleep; }
+static bool agentOff() { return wsUp && !agentLinked && agentPower == AgentPower::Off; }
+// The agent takes a word: linked, or asleep (Flight Deck wakes it for it).
+static bool agentReachable() { return wsUp && (agentLinked || agentPower == AgentPower::Asleep); }
+
 static ui::Health agentHealth() {
   if (!wsUp) return ui::Down;
-  return agentLinked ? ui::Up : ui::Partial;
+  if (agentLinked) return ui::Up;
+  return agentAsleep() ? ui::Asleep : agentOff() ? ui::Off : ui::Partial;
 }
 
 // "12s · 3 steps" while the agent runs.
@@ -434,6 +446,10 @@ static void setBarState() {
     if (statusPages > 1) snprintf(buf, sizeof(buf), "status %d/%d", statusPage + 1, statusPages);
     else snprintf(buf, sizeof(buf), "status");
     st = buf, col = kText;
+  } else if (agentAsleep()) {
+    st = "asleep", col = kBlue;
+  } else if (agentOff()) {
+    st = "stopped", col = kRed;
   } else {
     st = agentLinked ? "ready" : "no agent", col = agentLinked ? kGreen : kYellow;
   }
@@ -496,6 +512,8 @@ static ui::Status statusNow() {
   s.rttMs = wsUp ? rttMs : -1;
   s.agent = agentName;
   s.agentLinked = agentLinked;
+  s.agentAsleep = agentAsleep();
+  s.agentOff = agentOff();
   s.batteryPct = M5.Power.getBatteryLevel();
   s.batteryMv = M5.Power.getBatteryVoltage();
   s.charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
@@ -528,34 +546,43 @@ static ui::Home homeNow();
 
 static void showIdle() {
   if (settings.iconMode && !board::kPaperB) {
-    ui::showFace(settings.character, agentLinked ? face::Pose::Idle : face::Pose::Sad, 0);
+    ui::showFace(settings.character, agentReachable() ? face::Pose::Idle : face::Pose::Sad, 0);
     return;
   }
   ui::showHome(homeNow());
 }
 
+// The agent's row: its name in the ink of its state — green linked, blue
+// asleep, red switched off — or, while its link comes up, `waiting` in yellow.
+static ui::Row agentRow(const char* label, const char* waiting) {
+  if (agentLinked) return {label, agentName, kGreen};
+  if (agentAsleep()) return {label, agentName.length() ? agentName + " · asleep" : String("asleep"), kBlue};
+  if (agentOff()) return {label, agentName.length() ? agentName + " · stopped" : String("stopped"), kRed};
+  return {label, wsUp ? String(waiting) : String("-"), kYellow};
+}
+
 // What the home screen says about the device and its links.
 static ui::Home homeNow() {
   bool wifiOk = WiFi.status() == WL_CONNECTED;
-  bool ok = wsUp && agentLinked && wifiOk;
+  bool ok = agentReachable() && wifiOk;  // (asleep: talking wakes it)
   ui::Home home;
   home.ready = ok;
   home.title = ok ? "All good" : "Getting ready";
-  home.color = ok ? kGreen : kYellow;
+  home.color = ok ? kGreen : agentOff() ? kRed : kYellow;
   // Offline, a device that keeps notes still takes one.
   const bool keeps = board::kOfflineNotes && notes::ready();
-  home.hint = ok        ? (settings.talks < kHintTurns ? String(board::kTalkHint) : String(""))
-              : !wifiOk ? (keeps ? String("Offline · talk to keep a note") : String("No Wi-Fi"))
-              : !wsUp   ? String("Connecting to Flight Deck…")
-                        : String("Waiting for the agent");
+  home.hint = ok           ? (settings.talks < kHintTurns ? String(board::kTalkHint) : String(""))
+              : !wifiOk    ? (keeps ? String("Offline · talk to keep a note") : String("No Wi-Fi"))
+              : !wsUp      ? String("Connecting to Flight Deck…")
+              : agentOff() ? String("The agent is stopped")
+                           : String("Waiting for the agent");
   String noun = board::kNoun;
   noun.setCharAt(0, toupper(noun[0]));
   home.rows.push_back({noun, ok ? String(board::kTalkToggles ? "ready — press " : "ready — hold ") + board::kTalkButton
                                : String("not ready"), ok ? kGreen : kYellow});
   home.rows.push_back({"Wi-Fi", wifiOk ? WiFi.SSID() : String("not connected"), wifiOk ? kGreen : kRed});
   home.rows.push_back({"Deck", wsUp ? serverHost() : String("connecting…"), wsUp ? kGreen : kRed});
-  home.rows.push_back({"Agent", agentLinked ? agentName : (wsUp ? String("waiting for agent") : String("-")),
-                       agentLinked ? kGreen : kYellow});
+  home.rows.push_back(agentRow("Agent", "waiting for agent"));
   // What waits in Flight Deck: right after the device's row (the B paper's
   // dashboard lists the rows after it as its links), and in place of the hint.
   // (Red on the paper: its inks have no cyan, and that came out white.)
@@ -880,8 +907,7 @@ static std::vector<ui::Row> infoRows() {
   rows.push_back({"Wi-Fi", wifiOk ? WiFi.SSID() + " · " + String(WiFi.RSSI()) + " dBm" : String("not connected"),
                   wifiOk ? kGreen : kRed});
   rows.push_back({"Flight Deck", wsUp ? serverHost() : String("not connected"), wsUp ? kGreen : kRed});
-  rows.push_back({"agent", agentLinked ? agentName : wsUp ? String("waiting for the agent") : String("-"),
-                  agentLinked ? kGreen : kYellow});
+  rows.push_back(agentRow("agent", "waiting for the agent"));
   return rows;
 }
 #endif
@@ -1929,6 +1955,15 @@ static void waitingCuePoll() {
   if (waitingCuePending && canCueNow()) waitingCue();
 }
 
+// "power" on bound / connected / agent_offline (none from an older deck).
+static void readPower(const JsonDocument& doc) {
+  String p = doc["power"] | "";
+  agentPower = p == "running"   ? AgentPower::Running
+               : p == "asleep"  ? AgentPower::Asleep
+               : p == "stopped" ? AgentPower::Off
+                                : AgentPower::Unknown;
+}
+
 static void onText(const char* payload, size_t len) {
   JsonDocument doc;
   if (deserializeJson(doc, payload, len)) return;
@@ -1939,6 +1974,7 @@ static void onText(const char* payload, size_t len) {
     strlcpy(rtcAgent, agentName.c_str(), sizeof(rtcAgent));
     agentSlug = doc["slug"] | "";
     agentLinked = doc["linked"] | true;
+    readPower(doc);
     if (mode == Mode::Agents || mode == Mode::Idle || mode == Mode::Notice) backToMain();
     else redraw();
   } else if (type == "agents") {
@@ -1964,8 +2000,10 @@ static void onText(const char* payload, size_t len) {
     String st = doc["state"] | "";
     if (st == "connected") {
       agentLinked = true;
+      readPower(doc);
     } else if (st == "agent_offline") {
       agentLinked = false;
+      readPower(doc);
     } else if (st == "transcribing") {
       statusLine = "Transcribing…";
       leds::action(leds::Step::Model);  // speech to text
@@ -2279,6 +2317,7 @@ static void onWs(WStype_t type, uint8_t* payload, size_t length) {
         Serial.println("[claw] flight deck disconnected");
         wsUp = false;
         agentLinked = false;
+        agentPower = AgentPower::Unknown;
         if (audio::micActive()) audio::micStop([](const int16_t*, size_t) {});
         audio::playStop();
         dropImagePart();
@@ -2717,7 +2756,8 @@ static uint32_t onlineSinceMs = 0;   // all up since
 // when it isn't. The B paper is redrawn once it has been down 30 s (the
 // dashboard's LINKS rows, the dots), and again once it's been back 10 s.
 static void trackLinks() {
-  const bool linked = (WiFi.status() == WL_CONNECTED && wsUp && agentLinked) || quietRelinking();
+  // (An agent asleep isn't lost: the next word wakes it.)
+  const bool linked = (WiFi.status() == WL_CONNECTED && agentReachable()) || quietRelinking();
   if (linked) {
     offlineSinceMs = 0;
     if (!onlineSinceMs) onlineSinceMs = millis() ? millis() : 1;
@@ -2786,7 +2826,7 @@ static void updateLeds() {
   // the agent a few seconds once the deck is reached.
   using L = leds::Link;
   const L wifi = WiFi.status() == WL_CONNECTED ? L::Up : millis() > 30000 ? L::Down : L::Trying;
-  const L agent = wsUp && agentLinked ? L::Up
+  const L agent = agentReachable() ? L::Up
                   : wifi == L::Down || millis() > 60000 || (wsUp && millis() - linkChangeMs > 8000) ? L::Down
                                                                                                    : L::Trying;
   leds::links(wifi, agent);
@@ -3355,7 +3395,7 @@ static void keepAgentLink() {
     linkUsedMs = now;
     return;
   }
-  if (agentLinked) {
+  if (agentReachable()) {  // (asleep: its link comes back when it's woken)
     noAgentSince = 0;
     noAgentWait = kNoAgentRelinkMs;
   } else if (!noAgentSince) {

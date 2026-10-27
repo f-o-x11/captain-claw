@@ -509,6 +509,95 @@ async def test_agent_link_drops_are_a_state():
     await conn.on_bus({"type": "status", "status": "agent_connected"})
     states = [m["state"] for m in conn.ws.sent if m["type"] == "state"]
     assert states == ["agent_offline", "connected"]
+    assert conn.ws.sent[-1]["power"] == "running"
+
+
+# ── the agent asleep or switched off ───────────────────────────────────
+
+@pytest.fixture
+def processes(monkeypatch):
+    """The process registry in memory; agents "alive" by slug."""
+    import captain_claw.flight_deck.server as srv
+    from captain_claw.flight_deck import glasses_bridge as gb
+
+    registry: dict[str, dict] = {}
+    alive: set[str] = set()
+    monkeypatch.setattr(srv, "_load_process_registry", lambda: registry)
+    monkeypatch.setattr(srv, "_process_is_alive", lambda slug: slug in alive)
+    monkeypatch.setattr(gb, "_channels", {})
+    return registry, alive
+
+
+def test_agent_power_reads_the_process_registry(processes):
+    from captain_claw.flight_deck.bus_client import agent_power
+
+    registry, alive = processes
+    registry.update({"on": {}, "nap": {"asleep": True}, "dying": {"asleep": True}, "off": {"stopped": True}})
+    alive.update({"on", "dying"})
+    assert agent_power({"slug": "on"}) == "running"
+    assert agent_power({"slug": "nap"}) == "asleep"
+    assert agent_power({"slug": "dying"}) == "asleep"  # marked asleep before it's stopped
+    assert agent_power({"slug": "off"}) == "stopped"
+    assert agent_power({"slug": "gone"}) == "stopped"
+    assert agent_power({"slug": "on", "kind": "docker"}) == ""
+    assert agent_power(None) == ""
+
+
+@pytest.mark.asyncio
+async def test_a_device_hears_its_agent_asleep_then_switched_off(processes, monkeypatch):
+    from captain_claw.flight_deck import bus_client
+    from captain_claw.flight_deck import glasses_bridge as gb
+
+    registry, _alive = processes
+    registry["nap"] = {"asleep": True}
+    monkeypatch.setattr(bus_client, "POWER_CHECK_S", 0.01)
+
+    async def _no_link(ch, host, port):
+        pass
+
+    monkeypatch.setattr(gb, "_ensure_agent_binding", _no_link)
+    monkeypatch.setattr(db, "_pick_agent", lambda user_id, selector: {"name": "Nap", "slug": "nap", "port": 1})
+    conn = _conn()
+    assert await conn.bind("")
+    assert conn.ws.sent == [{"type": "bound", "agent": "Nap", "slug": "nap", "linked": False, "power": "asleep"}]
+    registry["nap"] = {"stopped": True}  # its owner switched it off
+    for _ in range(200):
+        if len(conn.ws.sent) > 1:
+            break
+        await asyncio.sleep(0.01)
+    assert conn.ws.sent[1:] == [{"type": "state", "state": "agent_offline", "power": "stopped"}]
+    await asyncio.sleep(0.05)
+    assert len(conn.ws.sent) == 2  # said once
+    conn.ch.agent_ws = object()  # started again: the link is back
+    await conn.on_bus({"type": "status", "status": "agent_connected"})
+    await asyncio.sleep(0.05)
+    assert conn._power_watch.done()
+    assert conn.ws.sent[2:] == [{"type": "state", "state": "connected", "power": "running"}]
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_link_says_whether_the_agent_fell_asleep(processes, monkeypatch):
+    from captain_claw.flight_deck import bus_client
+
+    registry, _alive = processes
+    registry["nap"] = {"asleep": True}
+    monkeypatch.setattr(bus_client, "POWER_CHECK_S", 3600)
+    conn = _conn()
+    conn.ch = await db.gb._get_or_create_channel(conn.channel_id)
+    conn.agent = {"name": "Nap", "slug": "nap", "port": 1}
+    await conn.on_bus({"type": "status", "status": "agent_reconnecting"})
+    assert conn.ws.sent[0] == {"type": "state", "state": "agent_offline", "power": "asleep"}
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_no_agent_to_bind_reads_switched_off(processes, monkeypatch):
+    monkeypatch.setattr(db, "_pick_agent", lambda user_id, selector: None)
+    conn = _conn()
+    assert not await conn.bind("")
+    assert conn.ws.sent[0] == {"type": "state", "state": "agent_offline", "power": "stopped"}
+    assert conn.ws.sent[1]["type"] == "error"
 
 
 # ── device readings with each turn ─────────────────────────────────────

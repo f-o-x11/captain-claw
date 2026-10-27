@@ -604,7 +604,7 @@ void flush() {
 
 // ── chrome ─────────────────────────────────────────────────────────────
 
-static uint16_t healthInk(Health h) { return h == Up ? kGreen : h == Partial ? kYellow : kRed; }
+static uint16_t healthInk(Health h) { return h == Up ? kGreen : h == Partial ? kYellow : h == Asleep ? kBlue : kRed; }
 
 static int batteryPct(bool* charging) {
   static int pct = -1;
@@ -662,6 +662,11 @@ static void drawHeader(const String& title = "", bool dots = true) {
   font(vlw::Small);
   int y = kHeadH / 2;
   String name = title.length() ? title : (barAgent.length() ? barAgent : String("Captain Claw"));
+  // The agent's name: blue while it's asleep, red while it's switched off.
+  const uint16_t nameInk = title.length() || !barAgent.length() ? kInk
+                           : hAgent == Asleep                   ? kBlue
+                           : hAgent == Off                      ? kRed
+                                                                : kInk;
   bool chg = false;
   int pct = batteryPct(&chg);
   int right = W - PAD;
@@ -673,7 +678,7 @@ static void drawHeader(const String& title = "", bool dots = true) {
     right -= 34;
   }
   font(vlw::Title);
-  text(fit(name, right - PAD), PAD, y + 2, kInk, middle_left);
+  text(fit(name, right - PAD), PAD, y + 2, nameInk, middle_left);
   canvas.fillRect(0, kHeadH - 3, W, 3, kInk);
 }
 

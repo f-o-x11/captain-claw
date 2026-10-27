@@ -26,6 +26,7 @@ from captain_claw.flight_deck import usage_quota
 
 TURN_KEEP_S = 600.0              # a turn (its answer) waits this long for its client to come back
 HEARD_AFTER_S = 2.0              # a client message this long after an answer: it got there
+POWER_CHECK_S = 5.0              # the agent's link down: how often its client hears asleep / stopped again
 
 _conn_serials = itertools.count(1)
 
@@ -54,6 +55,28 @@ def running_agents(user_id: str) -> list[dict]:
     ]
 
 
+def agent_power(agent: dict | None) -> str:
+    """Whether a process agent is "running", "asleep" (put to sleep for being
+    idle: the next word wakes it) or "stopped" (switched off, or gone); ""
+    for one Flight Deck can't tell about (a container)."""
+    slug = str((agent or {}).get("slug") or "")
+    if not slug or (agent or {}).get("kind") == "docker":
+        return ""
+    from captain_claw.flight_deck import server as srv
+
+    try:
+        entry = srv._load_process_registry().get(slug)
+        if entry is None:
+            return "stopped"
+        # Marked asleep before it's stopped (agent_idle): the link that drops
+        # as it goes down already reads asleep.
+        if entry.get("asleep") and not entry.get("stopped"):
+            return "asleep"
+        return "running" if srv._process_is_alive(slug) else "stopped"
+    except Exception:
+        return ""
+
+
 class BusClient:
     """One client socket on a channel of its own (``channel_id``), bound to
     one of its owner's agents. A turn is open from the send until the agent
@@ -78,6 +101,10 @@ class BusClient:
         self.last_reply_at = 0.0
         self._last_activity = ""
         self._bg: set[asyncio.Task] = set()
+        # The agent's power as last told ("running" / "asleep" / "stopped"),
+        # looked at again while its link is down.
+        self._power = ""
+        self._power_watch: asyncio.Task | None = None
 
     # ── what each kind of client says for itself ──
     @property
@@ -93,6 +120,9 @@ class BusClient:
 
     def no_agent_text(self, selector: str) -> str:
         return "No running agent. Start one in Flight Deck."
+
+    async def _no_agent(self) -> None:
+        """There's no agent to bind (before no_agent_text goes)."""
 
     def chat_fields(self, ch: Any, text: str, ctx: Any, extra_notes: list[str] | None) -> dict:
         """The chat frame's fields besides its type and id: content, surface, source, notes."""
@@ -149,15 +179,45 @@ class BusClient:
         async with self._send_lock:
             await self.ws.send_bytes(bytes([kind]) + payload)
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        return task
+
+    # ── the agent's power ──
+    async def _send_offline(self) -> None:
+        """The agent's link is down: that, with whether it's asleep or stopped."""
+        self._power = agent_power(self.agent)
+        frame = {"type": "state", "state": "agent_offline"}
+        if self._power:
+            frame["power"] = self._power
+        await self.send_json(frame)
+        self._start_power_watch()
+
+    def _start_power_watch(self) -> None:
+        if self.ch is not None and self.agent is not None and (
+                self._power_watch is None or self._power_watch.done()):
+            self._power_watch = self._spawn(self._watch_power())
+
+    async def _watch_power(self) -> None:
+        """While the link is down: an agent that falls asleep, is switched off
+        or goes is told as it happens (its link coming back says "connected")."""
+        while not self.closed:
+            await asyncio.sleep(POWER_CHECK_S)
+            ch = self.ch
+            if self.closed or ch is None or ch.agent_ws is not None or self.agent is None:
+                return
+            power = agent_power(self.agent)
+            if power and power != self._power:
+                self._power = power
+                await self.send_json({"type": "state", "state": "agent_offline", "power": power})
 
     # ── binding ──
     async def bind(self, selector: str) -> bool:
         agent = self.pick_agent(selector)
         if agent is None:
+            await self._no_agent()
             await self.send_json({"type": "error", "text": self.no_agent_text(selector)})
             return False
         ch = await gb._get_or_create_channel(self.channel_id)
@@ -172,8 +232,14 @@ class BusClient:
         ch.callback_subscribers.append(self.on_bus)
         await gb._ensure_agent_binding(ch, str(agent.get("host") or "localhost"), int(agent["port"]))
         self.agent = agent
-        await self.send_json({"type": "bound", "agent": agent.get("name", ""), "slug": agent.get("slug", ""),
-                              "linked": ch.agent_ws is not None})
+        linked = ch.agent_ws is not None
+        frame = {"type": "bound", "agent": agent.get("name", ""), "slug": agent.get("slug", ""), "linked": linked}
+        self._power = "running" if linked else agent_power(agent)
+        if self._power:
+            frame["power"] = self._power
+        await self.send_json(frame)
+        if not linked:
+            self._start_power_watch()  # (a pump already backing off says nothing new)
         return True
 
     def unbind(self) -> None:
@@ -223,9 +289,10 @@ class BusClient:
                 self._end_turn()
                 await self.send_json({"type": "state", "state": "ready"})
             elif status == "agent_connected":
-                await self.send_json({"type": "state", "state": "connected"})
+                self._power = "running"
+                await self.send_json({"type": "state", "state": "connected", "power": "running"})
             elif status == "agent_reconnecting":
-                await self.send_json({"type": "state", "state": "agent_offline"})
+                await self._send_offline()
                 await self.send_json({"type": "status", "text": "Reconnecting to agent…"})
         elif etype == "error":
             if self.pending:

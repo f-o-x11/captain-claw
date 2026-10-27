@@ -47,6 +47,7 @@ One firmware tree: `cd firmware/device && pio run -e stopwatch -t upload` (or `-
 - **"Volume up", "beep off"** handled by the deck, never sent to the agent; a turn survives a dropped link.
 - **Something waiting?** (0.8.3, firmware 0.19.1 / PaperColor B 1.0.21) — a beep, a banner on the StopWatch and StickS3, and a magenta count badge on every screen when a proposal or nudge waits for you in Flight Deck. Quiet hours keep the count and skip the beep. The text stays in Flight Deck.
 - **A link that renews itself** (0.8.3) — 30 seconds after its agent goes missing (backing off to every 10 minutes) and after 20 minutes idle, never in the middle of something.
+- **Asleep or switched off** (firmware 0.19.2 / PaperColor B 1.0.22) — the agent's dot turns blue while Flight Deck has put it to sleep for being idle (talking wakes it), red while it's stopped; the PaperColor writes the agent's name in the same colour.
 
 ## Smart glasses
 
