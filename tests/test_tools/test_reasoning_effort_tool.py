@@ -244,3 +244,56 @@ def test_registered_everywhere():
     assert member_privacy.CONTENT_TURN_TOOLS["reasoning_effort"] is None
     assert risk_for("reasoning_effort", {"action": "get"}) == "read"
     assert risk_for("reasoning_effort", {"action": "set"}) == "write"
+
+
+# ── any channel: the model is told it can ────────────────────────────
+
+
+def _context_agent(text, *, earlier=(), tool=True, channel="whatsapp"):
+    from captain_claw.agent_context_mixin import AgentContextMixin
+
+    class _A(AgentContextMixin):
+        pass
+
+    obj = object.__new__(_A)
+    msg_origin.hint_turn_provenance(obj, channel=channel)
+    Agent._set_turn_origin(obj, text, None, None, None)
+    obj._turn_user_text = text
+    obj.session = types.SimpleNamespace(messages=[
+        {"role": "user", "content": e, "turn_input": True} for e in (*earlier, text)])
+    obj.tools = types.SimpleNamespace(has_tool=lambda name: tool and name == "reasoning_effort")
+    return obj
+
+
+@pytest.mark.parametrize("text,earlier", [
+    ("set your reasoning to off", ()),
+    ("think harder about this", ()),
+    ("postavi razinu razmišljanja na high", ()),
+    ("set it to off here", ("what is your reasoning level?",)),  # the follow-up
+])
+def test_turn_note_says_it_can_be_changed_from_here(text, earlier):
+    line = _context_agent(text, earlier=earlier)._turn_source_line()
+    assert "This message came from: WhatsApp." in line
+    assert "call reasoning_effort set — it works from WhatsApp" in line
+    assert "never tell the user it can only be changed in Flight Deck" in line
+
+
+@pytest.mark.parametrize("text,tool", [
+    ("I think on Monday works", True),
+    ("for some reason it failed", True),
+    ("set your reasoning to off", False),  # no tool, no hint
+])
+def test_turn_note_stays_plain_otherwise(text, tool):
+    line = _context_agent(text, tool=tool)._turn_source_line()
+    assert line.startswith("This message came from: WhatsApp.") and "reasoning_effort" not in line
+
+
+async def test_texts_say_any_channel(_settings):
+    from captain_claw.agent_context_mixin import _TOOL_PROMPT_DESCRIPTIONS
+
+    assert "EVERY channel" in ReasoningEffortTool.description
+    assert "only be changed in Flight Deck" in ReasoningEffortTool.description
+    assert "EVERY channel" in _TOOL_PROMPT_DESCRIPTIONS["reasoning_effort"]
+    report = (await _run(_agent(channel="whatsapp"), action="get")).content
+    assert "You can change any of them from any channel, this one included" in report
+    assert "Settings for every source" not in report

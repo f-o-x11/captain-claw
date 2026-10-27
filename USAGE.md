@@ -1287,6 +1287,7 @@ Read or change how hard the agent's model thinks — the same [reasoning effort]
 - **A web chat message** — the chat box's picker moves to the new level in every Flight Deck chat open on the agent (a `reasoning_effort` frame), so later messages carry it as if the user had picked it. With no chat open the picker can't move; the tool says so and the level still holds for the rest of the turn.
 - **Any other source** — the agent writes that source's row of `~/.captain-claw/reasoning_effort.json` (the row **Settings → Reasoning effort** shows: `app:android` → `app`, `glasses:meta-display` → `glasses`, `device:sticks3` stays itself).
 - **At once** — the rest of the turn's conversation calls use the new level; `scope: "turn"` ends with the turn.
+- **From any channel** — the user can ask from the web chat, WhatsApp, Telegram, the app, the glasses or a voice device. A message about reasoning effort or thinking level (English or Croatian, or a follow-up like "set it to off") adds a line to the turn's note telling the model to call the tool from there, not to send the user to Flight Deck.
 - **Owner only** — public-link visitors, shared-agent members and agent links can neither read nor change it.
 
 ### basna

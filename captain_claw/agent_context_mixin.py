@@ -46,6 +46,13 @@ _RULED_SURFACES = frozenset({"glasses", "whatsapp", "messenger", "device"})
 # default), and a member's or a public visitor's session, where every message
 # comes the same way.
 _UNMARKED_SOURCES = frozenset({"web", "member", "public"})
+# A message about how hard the agent thinks (EN / HR): "reasoning", "effort",
+# "think harder", "thinking off", "razmišljaj više", "razina razmišljanja" …
+_REASONING_TALK_RE = re.compile(
+    r"\breasoning\b|\beffort\b|\bthink\s+(?:harder|more|less|deeper|longer|faster)\b"
+    r"|\bthinking\s+(?:harder|more|less|level|mode|budget|off|on)\b|razmi[šs]lj\w*|rezonir\w*",
+    re.I,
+)
 # "[Flight Deck] Agent '<name>' has <event> the fleet …" (anywhere in a notice).
 _FLEET_NOTICE_RE = re.compile(
     r"\[Flight Deck\] Agent '(?P<name>[^']*)' has (?P<event>\w+) the fleet"
@@ -104,7 +111,7 @@ _TOOL_PROMPT_DESCRIPTIONS: dict[str, str] = {
     "docx_extract": "Extract a single .docx file into markdown. ONLY for .docx files — never use on .pdf/.xlsx/.pptx. For multiple files in a folder use summarize_files instead.",
     "docx": "Word documents: create a .docx from Markdown (optional template), read it as numbered paragraphs with tracked changes and comments, edit it as Word tracked changes (replace/delete/insert/insert_paragraphs/format/set_style/comment), list changes and comments, accept/reject only when asked. NEVER make or change a .docx with a script, write or edit.",
     "self_check": "Self-assessment and status: live tests of your models, Flight Deck, Google, Microsoft 365, Jev, Soniox, deep memory, MCP, mail, web search and inboxes, plus server details (host, load, memory, disk, process) and why any tool is hidden. Read-only.",
-    "reasoning_effort": "Read or change how hard you think (off…max, auto = model default) — the same setting the user changes in Flight Deck (web chat: the chat box picker; other sources: Settings). Applies at once. When the user asks to think harder/faster or names a level; on your own for a task needing much more or less thinking (scope 'turn', and say so).",
+    "reasoning_effort": "Read or change how hard you think (off…max, auto = model default). Works from EVERY channel — web chat, WhatsApp, Telegram, the app, glasses, devices: when the user asks to set, raise or lower it (or to think harder/less), call set from wherever they asked; never say only Flight Deck can change it. Applies at once and to later messages from that channel. On your own, for a task needing much more or less thinking, use scope 'turn' and say so.",
     "xlsx_extract": "Extract a single .xlsx file into markdown tables. ONLY for .xlsx files — never use on .pdf/.docx/.pptx. For multiple files in a folder use summarize_files instead.",
     "pptx_extract": "Extract a single .pptx file into markdown. ONLY for .pptx files — never use on .pdf/.docx/.xlsx. For multiple files in a folder use summarize_files instead.",
     "pocket_tts": "Convert text to local speech audio and save as MP3",
@@ -146,7 +153,7 @@ _TOOL_PROMPT_DESCRIPTIONS_NANO: dict[str, str] = {
     "docx_extract": "docx→md",
     "docx": "word docs",
     "self_check": "status",
-    "reasoning_effort": "think harder/less",
+    "reasoning_effort": "think harder/less (any channel)",
     "xlsx_extract": "xlsx→md",
     "pptx_extract": "pptx→md",
     "datastore": "tables",
@@ -170,7 +177,7 @@ _TOOL_PROMPT_DESCRIPTIONS_MICRO: dict[str, str] = {
     "docx_extract": "single .docx → markdown (ONLY .docx, never .pdf; for multiple files use summarize_files)",
     "docx": "Word .docx: create from Markdown, read numbered paragraphs, edit as tracked changes, accept/reject when asked; never via scripts",
     "self_check": "test your connections (models, Flight Deck, Google, Microsoft, mail, search, MCP…) + server status; read-only",
-    "reasoning_effort": "get/set how hard you think (off…max, auto); as the user would in Flight Deck; scope 'turn' = this turn only",
+    "reasoning_effort": "get/set how hard you think (off…max, auto) from any channel — user asks → set, never 'only Flight Deck'; scope 'turn' = this turn only",
     "xlsx_extract": "single .xlsx → markdown (ONLY .xlsx, never .pdf; for multiple files use summarize_files)",
     "pptx_extract": "single .pptx → markdown (ONLY .pptx, never .pdf; for multiple files use summarize_files)",
     "pocket_tts": "text-to-speech MP3",
@@ -4348,15 +4355,38 @@ class AgentContextMixin:
         return {**msg, "content": f"[via {label}] {content}"}
 
     def _turn_source_line(self) -> str:
-        """Where the message being answered came from, for the turn's note."""
+        """Where the message being answered came from, for the turn's note —
+        and, when it talks about how hard the agent thinks, that it can change
+        that from here (models otherwise send the user to Flight Deck)."""
         src = getattr(self, "_turn_source", None)
         source, label = src if isinstance(src, tuple) and len(src) == 2 else ("", "")
         if not source or not label:
             return ""
-        return (
+        line = (
             f"This message came from: {label}. Earlier user messages from other channels "
             "start with [via …] (none: the web chat) — that mark is never part of your reply."
         )
+        try:
+            has_tool = self.tools.has_tool("reasoning_effort")
+        except Exception:
+            has_tool = False
+        if has_tool and _REASONING_TALK_RE.search(self._recent_user_text()):
+            line += (
+                f" To change your reasoning effort as asked, call reasoning_effort set — it works "
+                f"from {label} and changes the level for {label} (or the source named); never "
+                "tell the user it can only be changed in Flight Deck."
+            )
+        return line
+
+    def _recent_user_text(self) -> str:
+        """This turn's message and the one before it ("what's your reasoning
+        level?" … "set it to off")."""
+        texts = [str(getattr(self, "_turn_user_text", "") or "")]
+        session = getattr(self, "session", None)
+        openers = [m for m in getattr(session, "messages", None) or []
+                   if m.get("role") == "user" and m.get("turn_input")]
+        texts += [str(m.get("content") or "") for m in openers[-2:]]
+        return "\n".join(texts)
 
     @staticmethod
     def _provenance_hidden_messages(
