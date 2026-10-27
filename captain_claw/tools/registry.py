@@ -27,6 +27,10 @@ _SHELL_WRAPPER_TOKENS = {"sudo", "command", "builtin", "nohup", "time"}
 
 _LOGGED_ARG_CHARS = 300
 
+# The two ToolExecutionError messages the tool-call register reads as an outcome.
+_ABORTED_MARK = "Execution aborted"
+_TIMED_OUT_MARK = "Execution timed out after"
+
 
 def _loggable_args(arguments: dict[str, Any]) -> dict[str, Any]:
     """The call's own arguments, each cut short, for the "Executing tool" line.
@@ -727,6 +731,66 @@ class ToolRegistry:
         file_registry: Any | None = None,
         stream_callback: Callable[[str], None] | None = None,
     ) -> ToolResult:
+        """Execute a tool by name, recorded in Flight Deck's tool-call register.
+
+        The call is recorded before any check (tool_audit.py), so a refused
+        call is in the register too, then its outcome: ``ok`` / ``error`` (the
+        tool said it failed, or raised), ``blocked`` (a policy refused it, or
+        no such tool), ``timeout`` or ``aborted``.
+        """
+        from captain_claw import tool_audit
+
+        try:
+            member = self._is_speaker_call(session_id, arguments)
+        except Exception:
+            member = False
+        audit = tool_audit.start(name, arguments, session_id=session_id, member=member)
+        try:
+            result = await self._execute_call(
+                name, arguments, confirm=confirm, session_id=session_id,
+                session_policy=session_policy, task_policy=task_policy,
+                abort_event=abort_event, runtime_base_path=runtime_base_path,
+                approval_callback=approval_callback, file_registry=file_registry,
+                stream_callback=stream_callback,
+            )
+        except ToolBlockedError as exc:
+            tool_audit.finish(audit, "blocked", exc.reason)
+            raise
+        except ToolNotFoundError as exc:
+            tool_audit.finish(audit, "blocked", str(exc))
+            raise
+        except ToolExecutionError as exc:
+            text = str(exc)
+            outcome = ("timeout" if _TIMED_OUT_MARK in text
+                       else "aborted" if text.endswith(_ABORTED_MARK) else "error")
+            tool_audit.finish(audit, outcome, text)
+            raise
+        except asyncio.CancelledError:
+            tool_audit.finish(audit, "aborted", "Cancelled")
+            raise
+        except Exception as exc:
+            tool_audit.finish(audit, "error", f"{type(exc).__name__}: {exc}")
+            raise
+        if getattr(result, "success", True):
+            tool_audit.finish(audit, "ok")
+        else:
+            tool_audit.finish(audit, "error", str(getattr(result, "error", "") or ""))
+        return result
+
+    async def _execute_call(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        confirm: bool = False,
+        session_id: str | None = None,
+        session_policy: ToolPolicy | dict[str, Any] | None = None,
+        task_policy: ToolPolicy | dict[str, Any] | None = None,
+        abort_event: asyncio.Event | None = None,
+        runtime_base_path: Path | None = None,
+        approval_callback: Callable[[str], bool] | None = None,
+        file_registry: Any | None = None,
+        stream_callback: Callable[[str], None] | None = None,
+    ) -> ToolResult:
         """Execute a tool by name.
 
         Args:
@@ -968,12 +1032,12 @@ class ToolRegistry:
 
             if abort_wait_task in done:
                 await self._cancel_task(execute_task)
-                raise ToolExecutionError(name, "Execution aborted")
+                raise ToolExecutionError(name, _ABORTED_MARK)
 
             tool_abort_event.set()
             await self._cancel_task(execute_task)
             timeout_label = int(timeout_seconds) if timeout_seconds.is_integer() else timeout_seconds
-            raise ToolExecutionError(name, f"Execution timed out after {timeout_label}s")
+            raise ToolExecutionError(name, f"{_TIMED_OUT_MARK} {timeout_label}s")
         except asyncio.CancelledError:
             tool_abort_event.set()
             await self._cancel_task(execute_task)

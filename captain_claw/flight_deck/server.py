@@ -983,6 +983,10 @@ async def lifespan(app: FastAPI):
     _idle_stop = asyncio.Event()
     app.state.agent_idle_stop = _idle_stop
     app.state.agent_idle_task = asyncio.create_task(agent_idle.controller_loop(_idle_stop))
+    # ── Tool-call register: rows past the retention are pruned (6-hourly). ──
+    _audit_stop = asyncio.Event()
+    app.state.tool_audit_stop = _audit_stop
+    app.state.tool_audit_task = asyncio.create_task(tool_audit_routes.retention_loop(_audit_stop))
     # ── Payments loop (FD_PAYMENTS): expiry, bank statement syncs (Phase 4). ──
     if payments_routes.enabled():
         from captain_claw.flight_deck.payments_jobs import payments_loop as _pay_loop
@@ -1278,6 +1282,16 @@ async def lifespan(app: FastAPI):
         await payments_routes.close()
     except Exception:
         pass
+    if hasattr(app.state, "tool_audit_stop"):
+        app.state.tool_audit_stop.set()
+        try:
+            await asyncio.wait_for(app.state.tool_audit_task, timeout=5.0)
+        except (TimeoutError, asyncio.CancelledError, Exception):
+            pass
+    try:
+        await tool_audit_routes.close()
+    except Exception:
+        pass
     # Shutdown: stop all managed process agents
     print("Flight Deck: stopping managed process agents...")
     _stop_all_processes()
@@ -1555,6 +1569,7 @@ from captain_claw.flight_deck.system_routes import router as system_router
 from captain_claw.flight_deck.share_routes import router as share_router
 from captain_claw.flight_deck import public_file_shares
 from captain_claw.flight_deck import payments_routes
+from captain_claw.flight_deck import tool_audit_routes
 from captain_claw.flight_deck.agent_sharing_routes import router as agent_sharing_router
 from captain_claw.flight_deck.context_pack_routes import router as context_pack_router
 from captain_claw.flight_deck.shared_workspace_routes import router as shared_workspace_router
@@ -1672,6 +1687,9 @@ app.include_router(payment_reminders.router)
 app.include_router(payment_reminders.public_router)
 app.include_router(payments_routes.router)
 app.include_router(payments_routes.public_router)
+# Tool-call register: every tool call the agents make (tool_audit_routes.py).
+tool_audit_routes.configure(data_dir=DATA_DIR)
+app.include_router(tool_audit_routes.router)
 app.include_router(agent_sharing_router)
 app.include_router(context_pack_router)
 app.include_router(shared_workspace_router)

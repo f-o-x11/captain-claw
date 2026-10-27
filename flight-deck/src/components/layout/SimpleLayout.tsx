@@ -34,6 +34,7 @@ import {
   BookOpen,
   ShieldCheck,
   Smartphone,
+  Activity,
 } from 'lucide-react'
 import { useUIStore } from '../../stores/uiStore'
 import { openConsole, leaveKioskView, selectConsoleAdmin } from '../../stores/consoleStore'
@@ -55,6 +56,8 @@ import { useFileLibraryStore } from '../../stores/fileLibraryStore'
 import { FileLibrary } from '../library/FileLibrary'
 import { useDataLibraryStore } from '../../stores/dataLibraryStore'
 import { DataLibrary } from '../library/DataLibrary'
+import { useActivityStore } from '../../stores/activityStore'
+import { ToolCallRegister } from '../audit/ToolCallRegister'
 import { SharedFolders } from '../vfs/SharedFolders'
 import { DialogFullscreen } from '../library/dialogFullscreen'
 import { isManagedAgent } from '../../utils/managedAgents'
@@ -288,6 +291,12 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
   const dataAgent = useDataLibraryStore((s) => s.agentFilter)
   const openData = useDataLibraryStore((s) => s.openData)
   const closeData = useDataLibraryStore((s) => s.close)
+  // Activity: the tool-call register for the user's own agents.
+  const activityOpen = useActivityStore((s) => s.open)
+  const activitySlug = useActivityStore((s) => s.agentSlug)
+  const activityRef = useActivityStore((s) => s.agentRef)
+  const openActivity = useActivityStore((s) => s.openActivity)
+  const closeActivity = useActivityStore((s) => s.close)
   // Shared folders: the files the agents keep together (vfs:<folder>/…).
   const [foldersOpen, setFoldersOpen] = useState(false)
   const openFolders = () => setFoldersOpen(true)
@@ -588,6 +597,12 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
         onSelect: () => setFilesDataId(a.id), disabled: !up,
       })
     }
+    if (a.kind === 'docker' || a.kind === 'process') {
+      items.push({
+        icon: Activity, label: 'Activity', hint: 'Every tool it used, and with what',
+        onSelect: () => openActivity(a.kind === 'process' ? { slug: a.startKey } : { ref: a.startKey }),
+      })
+    }
     if ((a.kind === 'docker' || a.kind === 'process') && !a.managed) {
       items.push(
         { icon: BookOpen, label: 'Instructions', hint: 'What it should always keep in mind', onSelect: () => setAgentInstructionsId(a.id) },
@@ -663,8 +678,8 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
     return !!a && a.reachable && !a.asleep && !booting.has(a.id) && !switching.has(a.id)
   }
   // What a phone's Back closes before it leaves a chat (or Flight Deck).
-  const phoneOverlayOpen = libraryOpen || dataOpen || foldersOpen || !!filesData
-  const closePhoneOverlays = () => { closeLibrary(); closeData(); setFoldersOpen(false); setFilesDataId(null) }
+  const phoneOverlayOpen = libraryOpen || dataOpen || foldersOpen || activityOpen || !!filesData
+  const closePhoneOverlays = () => { closeLibrary(); closeData(); closeActivity(); setFoldersOpen(false); setFilesDataId(null) }
   // Drive and OneDrive folders want the user's Google or Microsoft account:
   // Connections, on that tab.
   const foldersConnections = (service: 'google' | 'microsoft') => {
@@ -758,6 +773,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
           onLibrary={() => { setSettingsOpen(false); openLibrary() }}
           onData={() => { setSettingsOpen(false); openData() }}
           onFolders={() => { setSettingsOpen(false); openFolders() }}
+          onActivity={() => { setSettingsOpen(false); openActivity() }}
         />
       )}
       {locked && infoOpen && (
@@ -800,6 +816,18 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
       {dataOpen && (
         <KioskWideDialog label="Data library" phone={isMobile} onClose={closeData} widest>
           <DataLibrary phone={isMobile} initialAgent={dataAgent} onClose={closeData} onOpenAgent={openLibraryAgent} />
+        </KioskWideDialog>
+      )}
+      {activityOpen && (
+        <KioskWideDialog label="Activity" phone={isMobile} onClose={closeActivity} widest>
+          <ToolCallRegister
+            key={`${activitySlug}|${activityRef}`}
+            scope="mine"
+            phone={isMobile}
+            initialAgent={activitySlug}
+            initialRef={activityRef}
+            onClose={closeActivity}
+          />
         </KioskWideDialog>
       )}
       {foldersOpen && (
@@ -948,7 +976,7 @@ export function SimpleLayout({ locked = false, adminSwitch = false }: { locked?:
 // the Getting started guide, and sign-out (how a shared kiosk hands the
 // screen to the next person).
 
-function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onProfile, onGuide, onScheduled, onLibrary, onData, onFolders }: {
+function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onProfile, onGuide, onScheduled, onLibrary, onData, onFolders, onActivity }: {
   /** The desktop app's admin in the users' kiosk: back to the Admin console. */
   onAdmin?: () => void
   onClose: () => void
@@ -960,6 +988,7 @@ function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onPro
   onLibrary: () => void
   onData: () => void
   onFolders: () => void
+  onActivity: () => void
 }) {
   const { theme, toggle: toggleTheme } = useThemeStore()
   const authEnabled = useAuthStore((s) => s.authEnabled)
@@ -981,6 +1010,7 @@ function KioskSettingsDialog({ onAdmin, onClose, onRefresh, onConnections, onPro
     { icon: LibraryBig, title: 'File library', detail: 'Every file your agents made, summarised and searchable', onClick: onLibrary },
     { icon: Database, title: 'Data library', detail: 'Every table your agents keep, summarised and easy to read', onClick: onData },
     { icon: Folders, title: 'Shared folders', detail: 'The folders your agents work in together — open, search, add files', onClick: onFolders },
+    { icon: Activity, title: 'Activity', detail: 'Every tool your agents used — when, with what, how it went', onClick: onActivity },
     { icon: IdCard, title: 'Profile', detail: 'About you, your company, your preferences', onClick: onProfile },
     // The Android app: back to its start screen — the saved decks and accounts.
     ...(hasAndroidAppSettings() ? [{ icon: Smartphone, title: 'Switch deck', detail: 'Your Flight Decks and accounts on this phone', onClick: openAndroidAppSettings }] : []),

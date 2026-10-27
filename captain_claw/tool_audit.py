@@ -1,0 +1,535 @@
+"""Every tool call this agent makes, reported to Flight Deck's tool-call register.
+
+Flight Deck keeps a register of agents' tool calls (agent, time, tool,
+parameters, what started the call and how it ended) that the owner and the
+deck's admins read (``flight_deck/tool_audit_routes.py``). Only the agent sees
+every call: a Telegram turn, a scheduled job or a Bat worker never passes
+through Flight Deck. So :class:`~captain_claw.tools.registry.ToolRegistry`
+records each call here — at its start, before any policy check, so a refused
+call is recorded too — and this module ships the records.
+
+* **Masked first.** Parameters are masked before they touch disk
+  (:func:`mask_params`): secret-named fields, key- and token-shaped values,
+  card numbers and the password in a URL are replaced; a long value keeps its
+  start, its length and its sha256, never the rest.
+* **Spooled.** Each record goes to a small SQLite file next to the agent's
+  sessions (``tool_audit_spool.db``) before it is sent, so a Flight Deck
+  restart or a crash loses nothing; a call that never finished is reported as
+  ``interrupted`` by the next process.
+* **Numbered.** Records carry this process's ``boot`` id and a ``seq`` counted
+  from 1, so Flight Deck can tell a missing record from a quiet agent.
+* **Never in the way.** Recording and shipping never raise into a tool call;
+  a record that can't be written is logged and dropped (and shows up as a gap).
+
+Active only in an agent Flight Deck spawned (``FD_URL``, ``FD_AGENT_SLUG`` and
+the agent's own auth token): Flight Deck identifies the caller by that token,
+never by anything in the records.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import re
+import secrets
+import sqlite3
+import threading
+import time
+import weakref
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from captain_claw.logging import get_logger
+
+log = get_logger(__name__)
+
+INGEST_PATH = "/fd/tool-audit/agent/calls"
+
+OUTCOMES = ("ok", "error", "blocked", "timeout", "aborted", "interrupted")
+MASK = "[masked]"
+INTERRUPTED_REASON = "The agent stopped before this call finished"
+
+_MAX_STR = 2000           # longer strings keep their start, length and hash
+_HEAD = 300
+_MAX_ITEMS = 50           # list items / dict keys kept per level
+_MAX_DEPTH = 6
+_MAX_PARAMS_BYTES = 16_000
+_MAX_REASON = 500
+
+_FLUSH_S = 2.0
+_START_GRACE_S = 15.0     # a call still running this long is reported as started
+_BATCH = 200
+_SPOOL_CAP = 50_000
+_BACKOFF_MAX_S = 300.0
+
+# ── Masking ───────────────────────────────────────────────────────────
+
+# A key whose name says it holds a secret. Matched on the key's words
+# (snake_case, kebab-case and camelCase split), so "author" or "tokens_used"
+# don't count but "api_key", "accessToken" and "client-secret" do.
+_SECRET_WORDS = frozenset({
+    "password", "passwd", "pwd", "passphrase", "secret", "token", "apikey",
+    "authorization", "auth", "cookie", "cookies", "credential", "credentials",
+    "otp", "totp", "pin", "cvv", "cvc", "privatekey", "pan",
+})
+_SECRET_PAIRS = frozenset({("api", "key"), ("private", "key"), ("access", "key"),
+                           ("card", "number"), ("session", "key"), ("client", "secret")})
+_NOT_SECRET_KEYS = frozenset({"max_tokens", "tokens", "token_count", "page_token", "next_page_token"})
+
+_SECRET_VALUE_RES = [
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S),
+    re.compile(r"\b(?:sk|pk|rk)-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_\-]{16,}"),
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),
+    re.compile(r"\bya29\.[0-9A-Za-z_\-]{20,}"),
+    re.compile(r"\b(?:cc_pat|cc_link)_[A-Za-z0-9_\-]{20,}"),
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=\-]{12,}"),
+]
+_URL_PASSWORD_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^/\s:@]+):([^@\s/]+)@")
+_QUERY_SECRET_RE = re.compile(
+    r"(?i)([?&](?:access_token|token|api_key|apikey|key|secret|password|pwd|sig|signature|auth)=)[^&#\s]+")
+
+
+def _key_words(key: str) -> list[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(key))
+    return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
+
+
+def secret_key(key: str) -> bool:
+    """Does a parameter's name say it holds a secret?"""
+    if str(key).lower() in _NOT_SECRET_KEYS:
+        return False
+    words = _key_words(key)
+    if any(w in _SECRET_WORDS for w in words):
+        return True
+    if "".join(words) in _SECRET_WORDS:
+        return True
+    return any((a, b) in _SECRET_PAIRS for a, b in zip(words, words[1:]))
+
+
+def mask_text(text: str) -> str:
+    """*text* with key- and token-shaped values, URL passwords, secret query
+    parameters and card numbers replaced."""
+    out = str(text)
+    for rx in _SECRET_VALUE_RES:
+        out = rx.sub(MASK, out)
+    out = _URL_PASSWORD_RE.sub(lambda m: f"{m.group(1)}:{MASK}@", out)
+    out = _QUERY_SECRET_RE.sub(lambda m: f"{m.group(1)}{MASK}", out)
+    if any(ch.isdigit() for ch in out):
+        try:
+            from captain_claw import card_scrub
+
+            out, _found = card_scrub.scrub(out)
+        except Exception:
+            pass
+    return out
+
+
+def _mask_value(value: Any, depth: int) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        return {"_bytes": len(value), "_sha256": hashlib.sha256(bytes(value)).hexdigest()}
+    if isinstance(value, str):
+        if len(value) > _MAX_STR:
+            return {
+                "_head": mask_text(value[:_HEAD]),
+                "_len": len(value),
+                "_sha256": hashlib.sha256(value.encode("utf-8", "replace")).hexdigest(),
+            }
+        return mask_text(value)
+    if depth >= _MAX_DEPTH:
+        return "[…]"
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for i, (k, v) in enumerate(value.items()):
+            if i >= _MAX_ITEMS:
+                out["_more_keys"] = len(value) - _MAX_ITEMS
+                break
+            key = str(k)
+            out[key] = MASK if secret_key(key) and v not in (None, "") else _mask_value(v, depth + 1)
+        return out
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+        out_list = [_mask_value(v, depth + 1) for v in items[:_MAX_ITEMS]]
+        if len(items) > _MAX_ITEMS:
+            out_list.append(f"[… {len(items) - _MAX_ITEMS} more]")
+        return out_list
+    return mask_text(repr(value)[:_HEAD])
+
+
+def mask_params(arguments: dict[str, Any] | None) -> dict[str, Any]:
+    """A tool call's own arguments, safe to store: the runtime's ``_``-keys
+    (``_agent``, ``_session`` …) dropped, then :func:`mask_tree`."""
+    if not isinstance(arguments, dict):
+        return {}
+    return mask_tree({k: v for k, v in arguments.items() if not str(k).startswith("_")})
+
+
+def mask_tree(params: dict[str, Any] | None) -> dict[str, Any]:
+    """*params* with secrets masked, long values cut and the whole capped at
+    16 KB. Idempotent: Flight Deck runs it again on what an agent sends."""
+    if not isinstance(params, dict):
+        return {}
+    out = _mask_value(params, 0)
+    if not isinstance(out, dict):
+        return {}
+    raw = json.dumps(out, ensure_ascii=False, default=str)
+    if len(raw.encode("utf-8")) > _MAX_PARAMS_BYTES:
+        return {"_truncated": True, "_len": len(raw),
+                "_sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                "_head": raw[:_HEAD * 4]}
+    return out
+
+
+# ── What started the call ─────────────────────────────────────────────
+
+
+def _call_context(arguments: dict[str, Any], member: bool) -> dict[str, str]:
+    """Where the turn came from (its source) and who was speaking.
+
+    An automation bound to this task (a scheduled job, a flow, Autonomous
+    Work's ``run_tool`` …) says it first: the agent's ``_turn_source`` is the
+    last *turn's*, and a call made outside a turn would otherwise carry it."""
+    agent = arguments.get("_agent") if isinstance(arguments, dict) else None
+    source, label = "", ""
+    try:
+        from captain_claw import mail_authority, turn_source
+
+        bound = mail_authority.bound_authority()
+        if bound is not None and bound.mode == "automated":
+            source = turn_source.from_automation(bound.kind) or "agent"
+            label = turn_source.label_for(source)
+    except Exception:
+        pass
+    turn = getattr(agent, "_turn_source", None) if agent is not None else None
+    if not source and isinstance(turn, tuple) and len(turn) == 2:
+        source, label = str(turn[0] or ""), str(turn[1] or "")
+    if not source:
+        try:
+            from captain_claw import mail_authority, turn_source
+
+            auth = mail_authority.current()
+            if auth.mode == "automated":
+                source = turn_source.from_automation(auth.kind) or "agent"
+                label = turn_source.label_for(source)
+        except Exception:
+            pass
+    ctx = {"source": source[:64], "source_label": label[:80],
+           "speaker_id": "", "speaker_name": "", "speaker_ref": ""}
+    try:
+        from captain_claw import speaker
+
+        p = speaker.principal_for(agent)
+    except Exception:
+        p = None
+    if p is not None:
+        ctx.update(speaker_id=str(p.speaker_id or "")[:128],
+                   speaker_name=str(p.display_name or "")[:80],
+                   speaker_ref=str(p.agent_ref or "")[:160])
+    elif member:
+        ctx["speaker_name"] = "Member"
+    if (p is not None or member) and not ctx["source"]:
+        ctx["source"], ctx["source_label"] = "member", "Shared-agent members"
+    return ctx
+
+
+# ── Spool ─────────────────────────────────────────────────────────────
+
+_SPOOL_DDL = """
+CREATE TABLE IF NOT EXISTS calls (
+    boot        TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    started_at  REAL NOT NULL,
+    body        TEXT NOT NULL,
+    ended       INTEGER NOT NULL DEFAULT 0,
+    outcome     TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    duration_ms INTEGER,
+    ended_at    REAL,
+    sent_start  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (boot, seq)
+);
+"""
+
+
+class Spool:
+    """The records not yet accepted by Flight Deck, in a SQLite file."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._conn: sqlite3.Connection | None = None
+        self._inserts = 0
+
+    def _db(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(self.path), check_same_thread=False, timeout=5.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.executescript(_SPOOL_DDL)
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:
+                pass
+            self._conn = conn
+        return self._conn
+
+    def add(self, boot: str, seq: int, started_at: float, body: dict[str, Any]) -> None:
+        with self._lock:
+            db = self._db()
+            db.execute("INSERT OR REPLACE INTO calls (boot, seq, started_at, body) VALUES (?, ?, ?, ?)",
+                       (boot, seq, started_at, json.dumps(body, ensure_ascii=False, default=str)))
+            db.commit()
+            self._inserts += 1
+            if self._inserts % 500 == 0:
+                self._cap(db)
+
+    def _cap(self, db: sqlite3.Connection) -> None:
+        (n,) = db.execute("SELECT count(*) FROM calls").fetchone()
+        if n > _SPOOL_CAP:
+            db.execute("DELETE FROM calls WHERE rowid IN (SELECT rowid FROM calls "
+                       "ORDER BY started_at LIMIT ?)", (n - _SPOOL_CAP,))
+            db.commit()
+            log.warning("Tool-call register spool full: dropped the oldest records",
+                        dropped=n - _SPOOL_CAP)
+
+    def end(self, boot: str, seq: int, outcome: str, reason: str, duration_ms: int, ended_at: float) -> None:
+        with self._lock:
+            db = self._db()
+            db.execute("UPDATE calls SET ended=1, outcome=?, reason=?, duration_ms=?, ended_at=? "
+                       "WHERE boot=? AND seq=?", (outcome, reason, duration_ms, ended_at, boot, seq))
+            db.commit()
+
+    def pending(self) -> bool:
+        with self._lock:
+            return self._db().execute("SELECT 1 FROM calls LIMIT 1").fetchone() is not None
+
+    def batch(self, boot: str, now: float) -> tuple[list[dict[str, Any]], list[tuple[str, int]], list[tuple[str, int]]]:
+        """``(records to send, keys to delete once sent, keys sent as started)``."""
+        with self._lock:
+            rows = self._db().execute(
+                "SELECT boot, seq, started_at, body, ended, outcome, reason, duration_ms, ended_at, sent_start "
+                "FROM calls WHERE ended=1 OR boot != ? OR (started_at < ? AND sent_start=0) "
+                "ORDER BY started_at, seq LIMIT ?",
+                (boot, now - _START_GRACE_S, _BATCH)).fetchall()
+        records: list[dict[str, Any]] = []
+        done: list[tuple[str, int]] = []
+        started: list[tuple[str, int]] = []
+        for r_boot, seq, started_at, body, ended, outcome, reason, duration_ms, ended_at, sent_start in rows:
+            key = (r_boot, int(seq))
+            rec: dict[str, Any] = {"boot": r_boot, "seq": int(seq), "started_at": float(started_at)}
+            if not ended and r_boot != boot:
+                ended, outcome, reason, duration_ms, ended_at = 1, "interrupted", INTERRUPTED_REASON, None, None
+            if ended:
+                rec.update(phase="end" if sent_start else "full", outcome=outcome or "error",
+                           reason=reason or "", duration_ms=duration_ms, ended_at=ended_at)
+                done.append(key)
+            else:
+                rec["phase"] = "start"
+                started.append(key)
+            if rec["phase"] != "end":
+                try:
+                    rec.update(json.loads(body))
+                except ValueError:
+                    rec.update(tool="?", params={})
+            records.append(rec)
+        return records, done, started
+
+    def settle(self, done: list[tuple[str, int]], started: list[tuple[str, int]]) -> None:
+        with self._lock:
+            db = self._db()
+            db.executemany("DELETE FROM calls WHERE boot=? AND seq=?", done)
+            db.executemany("UPDATE calls SET sent_start=1 WHERE boot=? AND seq=?", started)
+            db.commit()
+
+
+# ── Recording ─────────────────────────────────────────────────────────
+
+
+@dataclass
+class Handle:
+    boot: str
+    seq: int
+    t0: float
+    finished: bool = False
+
+
+_BOOT = secrets.token_hex(8)
+_SEQ = 0
+_SEQ_LOCK = threading.Lock()
+_SPOOL: Spool | None = None
+_SPOOL_FAILED = False
+_SHIPPERS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Task] = weakref.WeakKeyDictionary()
+
+
+def enabled() -> bool:
+    """Only an agent Flight Deck spawned, that can prove which one it is."""
+    if (os.environ.get("CLAW_TOOL_AUDIT") or "").strip().lower() in ("0", "off", "false", "no"):
+        return False
+    from captain_claw.fd_client import _agent_web_auth_token, flight_deck_base, flight_deck_slug
+
+    return bool(flight_deck_base() and flight_deck_slug() and _agent_web_auth_token())
+
+
+def _spool_path() -> Path:
+    override = (os.environ.get("CLAW_TOOL_AUDIT_SPOOL") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    from captain_claw.config import get_config
+
+    return Path(get_config().session.path).expanduser().parent / "tool_audit_spool.db"
+
+
+def _spool() -> Spool | None:
+    global _SPOOL, _SPOOL_FAILED
+    if _SPOOL is None and not _SPOOL_FAILED:
+        try:
+            _SPOOL = Spool(_spool_path())
+        except Exception as exc:
+            _SPOOL_FAILED = True
+            log.warning("Tool-call register disabled: no spool", error=str(exc))
+    return _SPOOL
+
+
+def _next_seq() -> int:
+    global _SEQ
+    with _SEQ_LOCK:
+        _SEQ += 1
+        return _SEQ
+
+
+def start(name: str, arguments: dict[str, Any] | None, *, session_id: str | None = None,
+          member: bool = False) -> Handle | None:
+    """Record that *name* is being called; None when recording is off.
+    Never raises."""
+    try:
+        if not enabled():
+            return None
+        spool = _spool()
+        if spool is None:
+            return None
+        args = arguments if isinstance(arguments, dict) else {}
+        now = time.time()
+        handle = Handle(_BOOT, _next_seq(), time.monotonic())
+        body = {"tool": str(name or "")[:128], "params": mask_params(args),
+                "session_id": str(session_id or "")[:128], **_call_context(args, member)}
+        spool.add(handle.boot, handle.seq, now, body)
+        _ensure_shipper()
+        return handle
+    except Exception as exc:
+        log.warning("Tool call not recorded", tool=name, error=str(exc))
+        return None
+
+
+def finish(handle: Handle | None, outcome: str, reason: str = "") -> None:
+    """Record how a started call ended. Never raises; a second finish is ignored."""
+    if handle is None or handle.finished:
+        return
+    handle.finished = True
+    try:
+        spool = _spool()
+        if spool is None:
+            return
+        outcome = outcome if outcome in OUTCOMES else "error"
+        duration_ms = int(max(0.0, time.monotonic() - handle.t0) * 1000)
+        spool.end(handle.boot, handle.seq, outcome, mask_text(str(reason or ""))[:_MAX_REASON],
+                  duration_ms, time.time())
+        _ensure_shipper()
+    except Exception as exc:
+        log.warning("Tool call end not recorded", error=str(exc))
+
+
+def refused(name: str, arguments: dict[str, Any] | None, reason: str, *,
+            session_id: str | None = None, member: bool = False) -> None:
+    """A call stopped before it reached the registry (the agent's guards)."""
+    finish(start(name, arguments, session_id=session_id, member=member), "blocked", reason)
+
+
+# ── Shipping ──────────────────────────────────────────────────────────
+
+
+def _ensure_shipper() -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop here: the next call made on one ships these
+    task = _SHIPPERS.get(loop)
+    if task is None or task.done():
+        _SHIPPERS[loop] = loop.create_task(_ship_loop())
+
+
+async def _post(client: Any, records: list[dict[str, Any]]) -> int:
+    resp = await client.post(INGEST_PATH, json={"records": records})
+    return int(resp.status_code)
+
+
+async def _ship_loop() -> None:
+    from captain_claw.fd_client import FDClient
+
+    client = FDClient(timeout=10.0)
+    backoff = _FLUSH_S
+    try:
+        while True:
+            await asyncio.sleep(backoff)
+            spool = _spool()
+            if spool is None:
+                return
+            try:
+                records, done, started = spool.batch(_BOOT, time.time())
+            except Exception as exc:
+                log.warning("Tool-call register spool unreadable", error=str(exc))
+                return
+            if not records:
+                if not spool.pending():
+                    return
+                backoff = _FLUSH_S
+                continue
+            try:
+                status = await _post(client, records)
+            except Exception as exc:
+                log.debug("Tool-call register: Flight Deck unreachable", error=type(exc).__name__)
+                backoff = min(_BACKOFF_MAX_S, backoff * 2)
+                continue
+            if status == 200:
+                spool.settle(done, started)
+                backoff = _FLUSH_S if len(records) < _BATCH else 0.05
+            elif status in (400, 413, 422):
+                # Flight Deck can't read these: drop them (they show as a gap there).
+                log.warning("Tool-call register refused a batch", status=status, records=len(records))
+                spool.settle(done + started, [])
+                backoff = _FLUSH_S
+            else:
+                log.debug("Tool-call register: report refused", status=status)
+                backoff = min(_BACKOFF_MAX_S, max(backoff * 2, 30.0))
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+async def flush_now() -> None:
+    """Ship whatever is ready (tests, shutdown)."""
+    from captain_claw.fd_client import FDClient
+
+    spool = _spool()
+    if spool is None:
+        return
+    records, done, started = spool.batch(_BOOT, time.time())
+    if not records:
+        return
+    client = FDClient(timeout=10.0)
+    try:
+        if await _post(client, records) == 200:
+            spool.settle(done, started)
+    finally:
+        await client.close()
