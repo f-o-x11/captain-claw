@@ -84,6 +84,7 @@ from captain_claw.tools.cv import CvTool
 from captain_claw.tools.docx_tool import DocxTool
 from captain_claw.tools.self_check import SelfCheckTool
 from captain_claw.tools.reasoning_effort import ReasoningEffortTool
+from captain_claw.tools.activity import ActivityTool
 
 __all__ = [
     "Tool",
@@ -170,4 +171,5 @@ __all__ = [
     "CvTool",
     "SelfCheckTool",
     "ReasoningEffortTool",
+    "ActivityTool",
 ]

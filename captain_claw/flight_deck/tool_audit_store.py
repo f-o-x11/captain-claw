@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     prev_hash     TEXT NOT NULL,
     hash          TEXT NOT NULL,
     end_mac       TEXT NOT NULL DEFAULT '',
+    private       INTEGER NOT NULL DEFAULT 0,
     UNIQUE (agent_slug, boot, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_owner ON tool_calls(owner_id, id);
@@ -91,11 +92,16 @@ CREATE TABLE IF NOT EXISTS audit_events (
 _CHAIN_FIELDS = ("owner_id", "member", "speaker_id", "speaker_label", "agent_slug", "agent_name",
                  "agent_ref", "boot", "seq", "started_at", "received_at", "tool", "risk", "params",
                  "session_id", "source", "source_label")
+# Fields added later: chained only when set, so rows recorded before they
+# existed still verify (a flag set or cleared afterwards still shows).
+# ``private``: made while the agent's turn held members' private data — the
+# agent never reads it back (tool_audit_digest).
+_LATE_CHAIN_FIELDS = ("private",)
 _END_FIELDS = ("outcome", "reason", "duration_ms", "ended_at")
-_COLUMNS = ("id",) + _CHAIN_FIELDS + _END_FIELDS + ("prev_hash", "hash", "end_mac")
+_COLUMNS = ("id",) + _CHAIN_FIELDS + _LATE_CHAIN_FIELDS + _END_FIELDS + ("prev_hash", "hash", "end_mac")
 
 
-_INT_FIELDS = frozenset({"member", "seq", "duration_ms"})
+_INT_FIELDS = frozenset({"member", "seq", "duration_ms", "private"})
 _FLOAT_FIELDS = frozenset({"started_at", "received_at", "ended_at"})
 _NULLABLE = frozenset({"duration_ms", "ended_at"})
 
@@ -148,6 +154,11 @@ class ToolAuditStore:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.executescript(_DDL)
+        async with db.execute("PRAGMA table_info(tool_calls)") as cur:
+            have = {str(r[1]) for r in await cur.fetchall()}
+        for col in _LATE_CHAIN_FIELDS:
+            if col not in have:
+                await db.execute(f"ALTER TABLE tool_calls ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
         await db.commit()
         try:
             os.chmod(self.db_path, 0o600)
@@ -166,7 +177,9 @@ class ToolAuditStore:
 
     def _row_mac(self, prev_hash: str, row: dict[str, Any]) -> str:
         assert self._key is not None
-        msg = prev_hash.encode("ascii") + b"\n" + _canon([row.get(f) for f in _CHAIN_FIELDS])
+        values = [row.get(f) for f in _CHAIN_FIELDS]
+        values += [[f, row[f]] for f in _LATE_CHAIN_FIELDS if row.get(f)]
+        msg = prev_hash.encode("ascii") + b"\n" + _canon(values)
         return hmac.new(self._key, msg, hashlib.sha256).hexdigest()
 
     def _end_mac(self, row_hash: str, row: dict[str, Any]) -> str:
@@ -263,7 +276,7 @@ class ToolAuditStore:
                         )
                         written += 1
                     continue
-                row = {f: _norm(f, rec.get(f)) for f in _CHAIN_FIELDS}
+                row = {f: _norm(f, rec.get(f)) for f in _CHAIN_FIELDS + _LATE_CHAIN_FIELDS}
                 row["received_at"] = now
                 row_hash = self._row_mac(prev, row)
                 if ended:
@@ -272,8 +285,9 @@ class ToolAuditStore:
                 else:
                     end = {"outcome": "running", "reason": "", "duration_ms": None, "ended_at": None}
                     end_mac = ""
-                cols = _CHAIN_FIELDS + _END_FIELDS + ("prev_hash", "hash", "end_mac")
-                values = [row[f] for f in _CHAIN_FIELDS] + [end[f] for f in _END_FIELDS] + [prev, row_hash, end_mac]
+                cols = _CHAIN_FIELDS + _LATE_CHAIN_FIELDS + _END_FIELDS + ("prev_hash", "hash", "end_mac")
+                values = ([row[f] for f in _CHAIN_FIELDS + _LATE_CHAIN_FIELDS] + [end[f] for f in _END_FIELDS]
+                          + [prev, row_hash, end_mac])
                 await db.execute(
                     f"INSERT INTO tool_calls ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
                     values,
@@ -320,10 +334,14 @@ class ToolAuditStore:
         if f.get("user"):
             clauses.append("(owner_id = ? OR speaker_id = ?)")
             args += [f["user"], f["user"]]
-        for col in ("agent_slug", "agent_ref", "tool", "outcome", "risk", "source", "session_id"):
+        for col in ("owner_id", "agent_slug", "agent_ref", "tool", "outcome", "risk", "source", "session_id"):
             if f.get(col):
                 clauses.append(f"{col} = ?")
                 args.append(f[col])
+        for col in ("member", "private"):
+            if f.get(col) is not None:
+                clauses.append(f"{col} = ?")
+                args.append(1 if f[col] else 0)
         if f.get("since"):
             clauses.append("started_at >= ?")
             args.append(float(f["since"]))
@@ -335,9 +353,11 @@ class ToolAuditStore:
             args.append(int(f["before_id"]))
         if f.get("q"):
             like = "%" + str(f["q"]).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-            clauses.append("(params LIKE ? ESCAPE '\\' OR tool LIKE ? ESCAPE '\\' OR reason LIKE ? ESCAPE '\\' "
-                           "OR agent_name LIKE ? ESCAPE '\\')")
-            args += [like, like, like, like]
+            # An agent searching its own calls doesn't search their reasons: it
+            # isn't shown every reason (tool_audit_digest.agent_reason).
+            cols = ("params", "tool") if f.get("q_skip_reason") else ("params", "tool", "reason", "agent_name")
+            clauses.append("(" + " OR ".join(f"{c} LIKE ? ESCAPE '\\'" for c in cols) + ")")
+            args += [like] * len(cols)
         return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
 
     async def list(self, filters: dict[str, Any], limit: int = 100) -> list[dict]:

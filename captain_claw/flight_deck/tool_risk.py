@@ -34,7 +34,7 @@ _TOOL_RISK: dict[str, str] = {
     "pptx_extract": "read", "xlsx_extract": "read", "image_ocr": "read", "image_vision": "read",
     "video_vision": "read", "summarize_files": "read", "history": "read", "sessions": "read",
     "workspace_read": "read", "codemap": "read", "cv": "read", "screen_capture": "read",
-    "telegram_inbox": "read", "self_check": "read", "researchmap": "read", "watch_background": "read",
+    "telegram_inbox": "read", "self_check": "read", "activity": "read", "researchmap": "read", "watch_background": "read",
     "audio": "read",
     # keep
     "write": "write", "edit": "write", "workspace_write": "write", "datastore": "write",

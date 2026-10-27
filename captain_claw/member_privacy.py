@@ -104,6 +104,8 @@ CONTENT_TURN_TOOLS: dict[str, frozenset[str] | None] = {
     "docx": frozenset({"read", "changes", "comments"}),
     # How hard the owner's agent thinks: no member data goes anywhere.
     "reasoning_effort": None,
+    # The agent's own calls in its owner's turns: read-only, no member data.
+    "activity": None,
 }
 
 # Internal: the session length when the carry-over cache was last filled. A

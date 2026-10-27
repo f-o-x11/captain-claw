@@ -1,6 +1,7 @@
 """The tool-call register: every tool call this deck's agents make.
 
   agent  POST /fd/tool-audit/agent/calls    an agent's batch of records (tool_audit.py)
+         GET  /fd/tool-audit/agent/{mine,digest}   its own calls (the activity tool, reflections)
   user   GET  /fd/tool-audit/{calls,facets,summary,export}
   admin  GET  /fd/admin/tool-audit/{calls,facets,summary,export,verify,events}
          GET/PUT /fd/admin/tool-audit/settings   (retention)
@@ -13,6 +14,11 @@ Who sees what:
   time, the tool and the outcome — not its parameters or its error text, which
   can hold the member's own data. The member and the admins see all of it.
 * Admins see every user's calls.
+* An agent reads only its own calls made in its owner's turns — never another
+  agent's, never a member's, never one made while its turn held members'
+  private data (``private``) — shaped by ``tool_audit_digest`` (no parameter
+  values beyond what identifies a call, no guard reasons). It can't write,
+  change or delete anything here.
 
 Identity comes from Flight Deck's own records: the calling agent is the one
 that holds the ``X-Agent-Auth`` token, its owner the one recorded at spawn. A
@@ -127,6 +133,7 @@ class CallRecord(BaseModel):
     reason: str = Field("", max_length=1000)
     duration_ms: int | None = Field(None, ge=0)
     ended_at: float | None = None
+    private: bool = False
 
 
 class CallBatch(BaseModel):
@@ -217,10 +224,63 @@ async def agent_calls(body: CallBatch, request: Request) -> dict:
             "params": json.dumps(params, ensure_ascii=False, separators=(",", ":"), default=str),
             "session_id": rec.session_id, "source": rec.source, "source_label": rec.source_label,
             "outcome": outcome, "reason": mask_text(rec.reason)[:1000],
-            "duration_ms": rec.duration_ms, "ended_at": rec.ended_at,
+            "duration_ms": rec.duration_ms, "ended_at": rec.ended_at, "private": 1 if rec.private else 0,
         })
     written = await store().record(rows)
     return {"ok": True, "accepted": len(rows), "written": written}
+
+
+# ── The agent's own record (tools/activity.py, reflections) ───────────
+
+AGENT_PAGE_MAX = 50
+DIGEST_DEFAULT_S = 7 * 86400
+DIGEST_MAX_S = 30 * 86400
+DIGEST_ROWS = 5000
+
+
+def _agent_scope(who: dict[str, str]) -> dict[str, Any]:
+    """This agent's calls in its owner's turns, none made while the turn held
+    members' private data (their parameters may restate it, and what the
+    agent reads here reaches its reflections). The owner too: a slug reused
+    after an agent was removed doesn't inherit the old agent's record."""
+    return {"agent_slug": who["slug"], "owner_id": who["owner"], "member": 0, "private": 0}
+
+
+@router.get("/fd/tool-audit/agent/mine")
+async def agent_mine(
+    request: Request, tool: str = "", outcome: str = "", source: str = "", session: str = "",
+    q: str = "", since: float | None = None, until: float | None = None,
+    before_id: int | None = Query(None, ge=1), limit: int = Query(20, ge=1, le=AGENT_PAGE_MAX),
+) -> dict:
+    """An agent's own calls, newest first, the way it may read them."""
+    from captain_claw import tool_audit_digest
+
+    who = await _identify(request)
+    scope = _agent_scope(who)
+    f = {**_filters("", "", tool, outcome, "", source, session, q, since, until), **scope,
+         "q_skip_reason": True}
+    rows = await store().list({**f, "before_id": before_id}, limit=limit)
+    counts = await store().summary(f)
+    window = {"since": since, "until": until}
+    members = await store().summary({**scope, **window, "member": 1, "private": None})
+    private = await store().summary({**scope, **window, "private": 1})
+    return {"calls": [tool_audit_digest.agent_row(r) for r in rows],
+            "next_before": rows[-1]["id"] if len(rows) == limit else None,
+            "total": counts["total"], "outcomes": counts["outcomes"],
+            "member_calls": members["total"], "private_calls": private["total"]}
+
+
+@router.get("/fd/tool-audit/agent/digest")
+async def agent_digest(request: Request, since: float | None = None) -> dict:
+    """Counts and patterns over an agent's own calls since *since* (default a
+    week, at most 30 days back)."""
+    from captain_claw import tool_audit_digest
+
+    who = await _identify(request)
+    now = time.time()
+    start = max(float(since) if since else now - DIGEST_DEFAULT_S, now - DIGEST_MAX_S)
+    rows = await store().list({**_agent_scope(who), "since": start}, limit=DIGEST_ROWS)
+    return tool_audit_digest.digest(rows, since=start, until=now, capped=len(rows) == DIGEST_ROWS)
 
 
 # ── Reading ───────────────────────────────────────────────────────────
@@ -271,7 +331,7 @@ def _shape(row: dict[str, Any], viewer: str, full: bool, names: dict[str, str]) 
         "session_id": row["session_id"], "source": row["source"], "source_label": row["source_label"],
         "outcome": row["outcome"], "reason": HIDDEN_NOTE if hidden and row["reason"] else row["reason"],
         "duration_ms": row["duration_ms"], "ended_at": row["ended_at"],
-        "seq": row["seq"], "boot": row["boot"], "hash": row["hash"],
+        "seq": row["seq"], "boot": row["boot"], "hash": row["hash"], "private": bool(row.get("private")),
     }
 
 

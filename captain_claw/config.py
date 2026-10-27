@@ -715,6 +715,9 @@ class ToolsConfig(BaseModel):
         # Every agent can change how hard it thinks, as the user would in
         # Flight Deck (the chat box picker, Settings → Reasoning effort).
         "reasoning_effort",
+        # Every agent can read its own tool calls back from Flight Deck's
+        # register: what it did, whether it really happened, what keeps failing.
+        "activity",
         # Deep memory is reached through Flight Deck, which owns the Typesense
         # connection and the credentials — so from an agent's side the archive
         # is simply always there. A per-agent opt-in would mean an agent could
