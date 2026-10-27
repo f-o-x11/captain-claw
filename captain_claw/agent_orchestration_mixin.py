@@ -227,6 +227,11 @@ _ECO_INTENT_PATTERNS: list[tuple[_re.Pattern[str], frozenset[str]]] = [
     (_re.compile(r"\bstatus\b|\bhealth\b|self[\s-]?check|diagnos\w*|\bconnect\w*|\bserver\b"
                  r"|\bstanj\w*|\bspoj\w*|\bveze?\b|\bpovezan\w*|\bdijagnost\w*|radi\s+li", _re.I),
      frozenset({"self_check"})),
+    # Its own tool calls (EN / HR): what it did, did it really happen.
+    (_re.compile(r"\bwhat\s+(?:did|have)\s+you\s+(?:do|done)\b|\bdid\s+(?:it|you)\s+(?:really|actually)\b"
+                 r"|\bactivity\b|\btool\s+calls?\b|\bovernight\b|\bkeeps?\s+failing\b"
+                 r"|\b[šs]t[ao]\s+si\s+(?:radi|naprav|posla)\w*|\bjesi\s+li\s+(?:stvarno|zaista|posla)\w*", _re.I),
+     frozenset({"activity"})),
     (_re.compile(r"\.xlsx?\b|spreadsheet|excel", _re.I),
      frozenset({"xlsx_extract", "summarize_files"})),
     (_re.compile(r"\.pptx?\b|presentation|powerpoint|slides", _re.I),

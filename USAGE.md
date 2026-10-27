@@ -1290,6 +1290,29 @@ Read or change how hard the agent's model thinks — the same [reasoning effort]
 - **From any channel** — the user can ask from the web chat, WhatsApp, Telegram, the app, the glasses or a voice device. A message about reasoning effort or thinking level (English or Croatian, or a follow-up like "set it to off") adds a line to the turn's note telling the model to call the tool from there, not to send the user to Flight Deck.
 - **Owner only** — public-link visitors, shared-agent members and agent links can neither read nor change it.
 
+### activity
+
+The agent reads its own tool calls back from Flight Deck's tool-call register: every call it made, when, what it was about, how it ended and how long it took. It uses it to answer "what did you do overnight?" or "why did the morning task fail?" from what actually ran, to check that an action really happened before saying so, and to see which tools keep failing. Always available; needs Flight Deck (the register lives there). Read-only.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | no | `list` (default): the calls, newest first. `summary`: counts per tool, the same failure 3+ times, the same call 3+ times within 30 minutes in one conversation, guard refusals, channels |
+| `since` / `until` | string | no | `30m`, `24h`, `7d`, `today`, `yesterday` or an ISO date/time (local when it has no zone). Default: 24 hours for `list`, 7 days for `summary` (at most 30 days back) |
+| `tool`, `outcome` | string | no | Only one tool; only calls that ended `ok`, `error`, `timeout`, `blocked`, `aborted`, `interrupted` or `running` |
+| `search` | string | no | Text in the call's parameters (an address, a file name) |
+| `this_conversation` | boolean | no | Only calls made in this conversation |
+| `limit`, `before_id` | integer | no | Page size (20, at most 50) and the id to page back from |
+
+What the agent gets back is less than people see in **Activity** and the console's **Audit** page:
+
+- **Its own calls, in its owner's turns.** Never another agent's. Calls made in a shared-agent member's turn are private to that member, and so are calls made while the owner's turn held members' private conversations (the register marks them; their parameters may restate what the agent read). The agent is told only how many there were.
+- **What identifies a call, not its content.** Up to three of `action`, `path`, host and path of a `url`, `query`, `command`, `to`, `subject`, `table`, … (80 characters each). Never the start of a written file or an email body. Errors keep the first line of their reason.
+- **No reasons for safety refusals.** A call the safety guard, the blast-radius check or a blocked shell pattern refused reads "Blocked by the safety guard"; the reason stays in the register for people, and the agent's search doesn't look in reasons.
+
+**Reflections use it too.** Each self-reflection gets the patterns among the agent's calls since the previous reflection — tools that failed three or more times, the same failure three or more times, the same call repeated — from the same calls the tool reads, with the rule never to write an instruction from one failure or about getting past the guard. When nothing repeats, it is told nothing calls for a change.
+
+Routes (the agent's own auth token, identified by Flight Deck): `GET /fd/tool-audit/agent/mine` and `GET /fd/tool-audit/agent/digest`.
+
 ### basna
 
 Read and start **Basna** runs — a parallel ensemble of specialist agents that researches/analyses a task and merges their work into one answer. Always available when running under Flight Deck; scoped to the calling agent's owner (resolved by the agent's auth token).
@@ -1983,7 +2006,7 @@ tools:
     stt_model: ""                   # explicit STT model ID; empty = auto-detect
 ```
 
-**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — and now `docx` (Word documents with tracked changes), `self_check` (connection tests and server status) and `reasoning_effort` (how hard the agent thinks), beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`, `whatsapp_web`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
+**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — and now `docx` (Word documents with tracked changes), `self_check` (connection tests and server status), `reasoning_effort` (how hard the agent thinks) and `activity` (its own tool calls, from Flight Deck's register), beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`, `whatsapp_web`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
 
 ### skills
 

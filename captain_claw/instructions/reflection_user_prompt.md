@@ -16,6 +16,10 @@ Perform a self-reflection based on the following context.
 
 {tasks_summary}
 
+## Your Tool Calls Since the Last Reflection (Flight Deck's Record)
+
+{tool_record}
+
 ---
 
 Based on the above, produce your self-improvement instructions. Focus on what you can do better in future interactions and what patterns you should continue. Be specific and actionable.

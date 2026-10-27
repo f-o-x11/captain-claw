@@ -506,6 +506,25 @@ async def generate_reflection(agent: Agent) -> Reflection:
     except Exception:
         pass
 
+    # 4b. What the agent's tool calls did since then, counted by Flight Deck's
+    # register: per tool, repeated failures, repeated calls. Owner turns only —
+    # members' calls are theirs, as their messages are (step 2).
+    tool_record_text = ""
+    try:
+        from captain_claw import tool_audit
+
+        since_ts: float | None = None
+        if prev and prev.timestamp:
+            try:
+                since_ts = datetime.fromisoformat(prev.timestamp).timestamp()
+            except (ValueError, TypeError):
+                since_ts = None
+        tool_record_text = await tool_audit.reflection_digest(since_ts)
+        if tool_record_text:
+            topics.append("tool-call record")
+    except Exception:
+        pass
+
     if not topics:
         topics.append("general self-assessment")
 
@@ -517,6 +536,7 @@ async def generate_reflection(agent: Agent) -> Reflection:
         recent_messages=recent_messages_text or "(No recent messages available.)",
         memory_facts=memory_text or "(No memory facts available.)",
         tasks_summary=tasks_text or "(No task history available.)",
+        tool_record=tool_record_text or "(No tool-call record available.)",
     )
 
     messages = [

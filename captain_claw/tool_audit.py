@@ -24,6 +24,10 @@ call is recorded too — and this module ships the records.
 Active only in an agent Flight Deck spawned (``FD_URL``, ``FD_AGENT_SLUG`` and
 the agent's own auth token): Flight Deck identifies the caller by that token,
 never by anything in the records.
+
+The agent reads its own calls back (:func:`read_own`, the ``activity`` tool and
+:func:`reflection_digest`) the way ``tool_audit_digest`` shapes them: its
+owner's turns only, read-only.
 """
 
 from __future__ import annotations
@@ -238,6 +242,15 @@ def _call_context(arguments: dict[str, Any], member: bool) -> dict[str, str]:
         ctx["speaker_name"] = "Member"
     if (p is not None or member) and not ctx["source"]:
         ctx["source"], ctx["source_label"] = "member", "Shared-agent members"
+    # Made while the turn holds members' private data (it read it, or the
+    # conversation still carries it): its parameters may restate that data,
+    # so the agent never reads this call back (tool_audit_digest).
+    try:
+        from captain_claw import member_privacy
+
+        ctx["private"] = 1 if agent is not None and member_privacy.output_level(agent) else 0
+    except Exception:
+        ctx["private"] = 1
     return ctx
 
 
@@ -533,3 +546,54 @@ async def flush_now() -> None:
             spool.settle(done, started)
     finally:
         await client.close()
+
+
+# ── Reading back ──────────────────────────────────────────────────────
+
+MINE_PATH = "/fd/tool-audit/agent/mine"
+DIGEST_PATH = "/fd/tool-audit/agent/digest"
+
+
+class ReadError(RuntimeError):
+    """Flight Deck's register couldn't be read."""
+
+
+async def read_own(path: str, params: dict[str, Any]) -> dict[str, Any]:
+    """GET one of Flight Deck's routes for this agent's own calls. What is
+    ready to ship goes first, so a call that just ended is in the answer."""
+    from captain_claw.fd_client import FDClient
+
+    if not enabled():
+        raise ReadError("This agent's tool calls are recorded only when Flight Deck runs it.")
+    try:
+        await flush_now()
+    except Exception:
+        pass
+    client = FDClient(timeout=15.0)
+    try:
+        resp = await client.get(path, params={k: v for k, v in params.items() if v not in (None, "")})
+    except Exception as exc:
+        raise ReadError(f"Flight Deck is unreachable ({type(exc).__name__}).") from exc
+    finally:
+        await client.close()
+    if resp.status_code != 200:
+        raise ReadError(f"Flight Deck refused the request (HTTP {resp.status_code}).")
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise ReadError("Flight Deck sent something unreadable.") from exc
+
+
+async def reflection_digest(since: float | None) -> str:
+    """The digest of this agent's calls since *since* as text, for a
+    reflection; empty when there is none to give."""
+    from captain_claw import tool_audit_digest
+
+    if not enabled():
+        return ""
+    try:
+        d = await read_own(DIGEST_PATH, {"since": since})
+    except ReadError as exc:
+        log.debug("Tool-call digest unavailable", error=str(exc))
+        return ""
+    return tool_audit_digest.format_digest(d, patterns_only=True) if d.get("total") else ""
