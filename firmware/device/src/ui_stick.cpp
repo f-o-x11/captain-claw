@@ -95,7 +95,10 @@ void setRotation(uint8_t) {}
 static void push() { canvas.pushSprite(0, 0); }
 
 static uint16_t healthColor(Health h) {
-  return h == Up ? rgb(40, 200, 90) : h == Partial ? rgb(250, 200, 40) : rgb(230, 50, 50);
+  return h == Up        ? rgb(40, 200, 90)
+         : h == Partial ? rgb(250, 200, 40)
+         : h == Asleep  ? rgb(70, 150, 255)
+                        : rgb(230, 50, 50);
 }
 
 // Battery: green ≥75 %, blue 40–74 %, yellow 20–39 %, red <20 %.
@@ -120,7 +123,8 @@ static int batteryPct(bool* charging) {
   return pct;
 }
 
-// Two colour blocks: W = Wi-Fi, A = agent (green up, yellow partial, red down).
+// Two colour blocks: W = Wi-Fi, A = agent (green up, yellow partial, blue
+// the agent asleep, red down or the agent switched off).
 static int drawHealth(int x, int y) {
   canvas.setFont(kSmall);
   canvas.setTextDatum(middle_center);

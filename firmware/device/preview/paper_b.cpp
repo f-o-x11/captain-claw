@@ -187,6 +187,23 @@ int main(int argc, char** argv) {
   ui::showHome(home);
   save("11_dashboard_waiting");
 
+  // The agent asleep (Flight Deck put it to sleep for being idle): its dot
+  // and name blue — talking wakes it. Switched off: red.
+  static constexpr uint16_t kBlue = ui::rgb(70, 150, 255);
+  home.rows.erase(home.rows.begin() + 1);
+  ui::setWaiting(0);
+  ui::setHealth(ui::Up, ui::Asleep);
+  home.rows.back() = {"Agent", "Captain Claw · asleep", kBlue};
+  ui::drawNow();
+  ui::showHome(home);
+  save("12_dashboard_agent_asleep");
+  ui::setHealth(ui::Up, ui::Off);
+  home.rows.front() = {"Paper", "not ready", kYellow};
+  home.rows.back() = {"Agent", "Captain Claw · stopped", kRed};
+  ui::drawNow();
+  ui::showHome(home);
+  save("13_dashboard_agent_stopped");
+
   // (Asleep: the dashboard goes by the clock's five-minute marks — the Mac's
   // real clock here, so a jump of the stand-in millis() doesn't make it due.)
   return 0;

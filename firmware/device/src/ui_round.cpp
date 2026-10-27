@@ -319,7 +319,10 @@ static void drawLines(const std::vector<String>& lines, int firstTop, int lineH,
 
 // ── chrome: clock, health dots, battery, page dots, chevrons ─────────
 
-static uint16_t healthColor(Health h) { return h == Up ? kGreen : h == Partial ? kAmber : kRed; }
+// The agent's dot is blue while it's asleep (the next word wakes it).
+static uint16_t healthColor(Health h) {
+  return h == Up ? kGreen : h == Partial ? kAmber : h == Asleep ? kBlue : kRed;
+}
 
 // Battery: green ≥75 %, blue 40–74 %, amber 20–39 %, red <20 %.
 static uint16_t batteryColor(int pct) {
@@ -1048,8 +1051,13 @@ static void statusConnection(const Status& s) {
   statusTile(258, s.deck ? kGood : kRed, s.deck ? s.deckHost : String("Deck offline"),
              s.deck ? (s.rttMs >= 0 ? String(s.rttMs) + " ms round trip" : String("connected")) : String("reconnecting…"),
              s.deck ? kDim : kRed);
-  statusTile(322, s.agentLinked ? kGood : s.deck ? kAmber : kRed, s.agent.length() ? s.agent : String("No agent"),
-             s.agentLinked ? String("agent linked") : String(s.deck ? "waiting for the agent" : ""), kDim);
+  statusTile(322, s.agentLinked ? kGood : s.agentAsleep ? kBlue : s.agentOff ? kRed : s.deck ? kAmber : kRed,
+             s.agent.length() ? s.agent : String("No agent"),
+             s.agentLinked  ? String("agent linked")
+             : s.agentAsleep ? String("asleep · talk to wake it")
+             : s.agentOff    ? String("stopped in Flight Deck")
+                             : String(s.deck ? "waiting for the agent" : ""),
+             kDim);
   if (s.wifi) {
     font(vlw::Small);
     text(s.ip, CX, 386, kDim);

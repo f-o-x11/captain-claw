@@ -410,6 +410,24 @@ quarter second later (talk after the blip), and a lower one (A5) when you let
 go and it's sent or kept offline. A tap that only stops speech, or a
 press too short to send, gets no second blip.
 
+## Agent asleep or switched off
+
+From 0.19.2 (paper B 1.0.22) the agent's dot says why its link is down.
+Flight Deck adds `"power"` to `bound` and to the `connected` / `agent_offline`
+states — `running`, `asleep` (Flight Deck put it to sleep for being idle) or
+`stopped` (switched off, or no agent to bind) — and sends `agent_offline`
+again when that changes while the link is down (`bus_client.py`).
+
+- **Asleep: blue.** The agent dot on the paper, the watch and the stick, and
+  the agent's name on the paper (the dashboard's *Agent* row, "· asleep") and
+  on the watch's info page. The device counts as ready: talking wakes the
+  agent, so no offline blink, no offline redraw and no link renewal for it.
+  The paper shows it on its next five-minute dashboard.
+- **Stopped: red.** The same places, "· stopped", and the watch's home says
+  "The agent is stopped"; it counts as offline as before (the offline blink,
+  the paper redrawn after 30 s).
+- A deck that doesn't send `power`: yellow, as before.
+
 ## Waiting in Flight Deck
 
 From 0.19.0 (paper B 1.0.20) the device tells you when something waits for

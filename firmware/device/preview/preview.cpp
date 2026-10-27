@@ -85,6 +85,7 @@ static std::vector<uint8_t> readFile(const std::string& path) {
 static constexpr uint16_t kGreen = ui::rgb(40, 200, 90), kYellow = ui::rgb(250, 200, 40);
 static constexpr uint16_t kRed = ui::rgb(230, 50, 50), kCyan = ui::rgb(60, 210, 240);
 static constexpr uint16_t kOrange = ui::rgb(255, 150, 40), kText = ui::rgb(230, 230, 230);
+static constexpr uint16_t kBlue = ui::rgb(70, 150, 255);
 
 static ui::Item card(const char* title, const String& badge, const char* note, bool on = true,
                      ui::Glyph glyph = ui::Glyph::None) {
@@ -157,6 +158,21 @@ int main(int argc, char** argv) {
   bar("ready", kYellow, ui::Up, ui::Partial);
   ui::showHome({false, "Getting ready", kYellow, "Waiting for the agent", {}});
   save("02_home_waiting");
+
+  // The agent asleep (Flight Deck put it to sleep for being idle): a blue
+  // dot, and ready all the same — talking wakes it. Switched off: red.
+  bar("asleep", kBlue, ui::Up, ui::Asleep);
+  ui::showHome(home);
+  save("02b_home_agent_asleep");
+  ui::showInfo({{"voice notes", "none waiting", kGreen},
+                {"memory", "room for 14 min of notes", kGreen},
+                {"Wi-Fi", "Harbour-5G · -58 dBm", kGreen},
+                {"Flight Deck", "deck.example.com", kGreen},
+                {"agent", "Captain Claw · asleep", kBlue}});
+  save("02c_info_agent_asleep");
+  bar("stopped", kRed, ui::Up, ui::Off);
+  ui::showHome({false, "Getting ready", kRed, "The agent is stopped", {}});
+  save("02d_home_agent_stopped");
 
   bar("listening", kRed);
   int lv[] = {10, 30, 55, 80, 62, 40, 70, 90, 66, 35, 20, 48, 75, 58, 30};
