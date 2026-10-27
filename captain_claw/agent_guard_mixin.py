@@ -436,10 +436,14 @@ class AgentGuardMixin:
         return False, f"Blocked by {guard_type} guard: {reason}"
 
     def _turn_reasoning_effort(self) -> str | None:
-        """The reasoning effort for this turn's main calls: the chat box's
-        pick (a web chat turn), else the agent's setting for where the turn
-        came from (``reasoning_effort.json``: its source, its channel, the
-        default), else None — the model's own."""
+        """The reasoning effort for this turn's main calls: what the agent set
+        for the rest of the turn (its ``reasoning_effort`` tool), else the
+        chat box's pick (a web chat turn), else the agent's setting for where
+        the turn came from (``reasoning_effort.json``: its source, its
+        channel, the default), else None — the model's own."""
+        override = getattr(self, "_turn_effort_override", None)
+        if override is not None:
+            return None if override == reasoning.AUTO else override
         picked = reasoning.current_turn_effort()
         if picked is not None:
             return picked

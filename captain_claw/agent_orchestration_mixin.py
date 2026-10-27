@@ -184,6 +184,9 @@ _ECO_CORE_TOOLS: frozenset[str] = frozenset({
     "telegram_inbox",
     # The owner's own WhatsApp, the same way; hidden unless they linked it.
     "whatsapp_web",
+    # "Think harder" comes in any language, and the agent raises its own
+    # effort mid-task: the schema has to be there to do either.
+    "reasoning_effort",
 })
 
 # ── Nano-mode: barebone tool allowlist for tiny local models. ──

@@ -582,6 +582,8 @@ class Agent(
         hinted, label = source_hint if isinstance(source_hint, tuple) and len(source_hint) == 2 else ("", "")
         source = turn_source.resolve(hinted=hinted, channel=channel, origin=origin, origin_detail=detail)
         self._turn_source = (source, turn_source.label_for(source, label) if source else "")
+        # A level the agent set for one turn only (reasoning_effort tool) ends with it.
+        self._turn_effort_override = None
 
     def _absorb_surface_block(self, user_input: str, surface: str | None = None) -> tuple[str, bool]:
         """Take a chat surface's rules block (prepended by Flight Deck to a

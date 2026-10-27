@@ -712,6 +712,9 @@ class ToolsConfig(BaseModel):
         # changes), never with scripts; and every agent can test what it is
         # connected to and report its server (self_check).
         "docx", "self_check",
+        # Every agent can change how hard it thinks, as the user would in
+        # Flight Deck (the chat box picker, Settings → Reasoning effort).
+        "reasoning_effort",
         # Deep memory is reached through Flight Deck, which owns the Typesense
         # connection and the credentials — so from an agent's side the archive
         # is simply always there. A per-agent opt-in would mean an agent could

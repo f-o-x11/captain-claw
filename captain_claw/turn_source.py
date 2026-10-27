@@ -160,6 +160,23 @@ def resolve(*, hinted: Any = "", channel: Any = "", origin: Any = "", origin_det
     return _ORIGIN_SOURCES.get(str(origin or "").strip().lower(), "")
 
 
+def settings_key(source: str) -> str:
+    """The row of the agent's settings a person changes for *source*: the
+    source itself when the settings list it, else its channel when they list
+    that, else the source; "web" for the web chat (the chat box's picker)
+    and "default" when nothing says where the turn came from."""
+    found = normalize(source)
+    if not found:
+        return "default"
+    channel = channel_of(found)
+    if channel == "web":
+        return "web"
+    listed = {key for _title, keys in SETTINGS_GROUPS for key in keys}
+    if found in listed:
+        return found
+    return channel if channel in listed else found
+
+
 def settings_catalog() -> list[dict[str, Any]]:
     """The sources the agent settings offer, grouped, with their names."""
     return [

@@ -1273,6 +1273,22 @@ What it checks:
 
 Every result is `ok`, `warn`, `fail` (should work and doesn't, with the fix), `off` (not set up — not a failure) or `info`. The report starts with what needs attention. Everything is read-only, and no key or token is printed.
 
+### reasoning_effort
+
+Read or change how hard the agent's model thinks — the same [reasoning effort](#reasoning-effort--new-in-081) setting a person changes in Flight Deck. The agent calls it when the user asks it to think harder or faster (or names a level), and on its own when a task needs much more or much less thinking than it has. Always available.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | yes | `get` (the current level, the levels the model offers, the settings) or `set` |
+| `level` | string | for `set` | `auto` (send nothing: the model's own default), `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `on`. A level the model doesn't offer goes to the nearest one it does |
+| `scope` | string | no | `setting` (default): change the setting — the rest of this turn and later messages. `turn`: only the rest of this turn |
+| `source` | string | no | Which setting to change when it isn't the one for where the message came from: `web` (the chat box), `default`, or a source (`whatsapp`, `telegram`, `app`, `glasses`, `device:sticks3`, `scheduled`, …) |
+
+- **A web chat message** — the chat box's picker moves to the new level in every Flight Deck chat open on the agent (a `reasoning_effort` frame), so later messages carry it as if the user had picked it. With no chat open the picker can't move; the tool says so and the level still holds for the rest of the turn.
+- **Any other source** — the agent writes that source's row of `~/.captain-claw/reasoning_effort.json` (the row **Settings → Reasoning effort** shows: `app:android` → `app`, `glasses:meta-display` → `glasses`, `device:sticks3` stays itself).
+- **At once** — the rest of the turn's conversation calls use the new level; `scope: "turn"` ends with the turn.
+- **Owner only** — public-link visitors, shared-agent members and agent links can neither read nor change it.
+
 ### basna
 
 Read and start **Basna** runs — a parallel ensemble of specialist agents that researches/analyses a task and merges their work into one answer. Always available when running under Flight Deck; scoped to the calling agent's owner (resolved by the agent's auth token).
@@ -1966,7 +1982,7 @@ tools:
     stt_model: ""                   # explicit STT model ID; empty = auto-detect
 ```
 
-**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — and now `docx` (Word documents with tracked changes) and `self_check` (connection tests and server status), beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`, `whatsapp_web`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
+**Always-on tools (0.8.1).** Some tools are added to every agent whatever its `enabled` list, archetype or spawn list says. Since 0.8.1 that includes the everyday working set — `shell`, `glob`, `web_fetch` (with `web_get` and `web_fetch_batch`), `web_search`, `pdf_extract`, `docx_extract`, `xlsx_extract`, `pptx_extract`, `insights`, `contacts`, `apis` and `todo` — and now `docx` (Word documents with tracked changes), `self_check` (connection tests and server status) and `reasoning_effort` (how hard the agent thinks), beside `read`, `write`, `edit`, `datastore`, `image_vision`, `video_vision`, `cv`, `sessions`, `history`, `vfs`, `typesense`, `intentions`, `whatsapp_send_file` and the rest. Before, most archetypes lacked some of them (24 of 31 had no `insights`, so "remember that…" had nowhere to go). Every archetype and the archetype grid now list them too. Account tools (`google_*`, `microsoft_*`, `jev`, `audio`, `telegram_inbox`, `whatsapp_web`) are always registered but stay hidden until their account or key is usable. `require_confirmation` and the shell policy still apply. The `stt` tool is gone; speech is the `audio` tool.
 
 ### skills
 
@@ -6619,6 +6635,7 @@ One scale for every model's "think harder" control: **off · minimal · low · m
   ```
 
   A turn's level is looked up by its source (`device:stopwatch`), then its channel (`device`), then `default`; `auto` sends nothing. The file is read again whenever it changes. Edit it in the kiosk agent **Settings → Reasoning effort**, or with `GET` / `PUT /fd/agent-reasoning/{kind}/{id}` (the levels offered come from the agent's configured model).
+- **The agent can change it too.** Its `reasoning_effort` tool changes the same settings — the chat box's picker for a web chat message, that source's row in Settings for any other — at once, for the rest of the turn and later messages (or with `scope: "turn"` for the rest of this turn only). Asked "think harder" on WhatsApp, it sets WhatsApp's level; asked in the web chat, the chat box's picker moves. See [reasoning_effort](#reasoning_effort).
 - **Only the conversation thinks harder.** The level applies to the main conversation's calls; titles, rephrasing, compaction and reflections keep the model's default. Shared-agent members get no picker.
 - **Self-healing:** a server that refuses a reasoning field gets the request again without it, and the model keeps its default for the rest of the run.
 

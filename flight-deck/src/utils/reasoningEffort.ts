@@ -45,6 +45,11 @@ function isLevel(v: unknown): v is ReasoningLevel {
   return typeof v === 'string' && v in RANK
 }
 
+/** A pick from the wire ("auto" or a level), or null. */
+export function parsePick(raw: unknown): EffortPick | null {
+  return raw === 'auto' || isLevel(raw) ? raw : null
+}
+
 /** The `reasoning` block of the agent's session info, or null (no picker). */
 export function parseProfile(raw: unknown): ReasoningProfile | null {
   if (!raw || typeof raw !== 'object') return null
